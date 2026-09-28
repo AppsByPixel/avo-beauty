@@ -3432,6 +3432,8 @@ a:hover {
   margin-top: 14px;
   padding: 0;
   overflow: hidden;
+  /* The booking popover is positioned against the card. */
+  position: relative;
 }
 
 .apweek__head {
@@ -3796,6 +3798,131 @@ a:hover {
 
 .apweek__chip-sync {
   color: var(--avo-danger-text);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * THE CLICKABLE CHIP. The `<li>` keeps its box and its status shape; a real
+ * `<button>` fills it and carries the content and the accessible name. The
+ * padding moves onto the button so the whole chip is the hit area.
+ * ----------------------------------------------------------------------------
+ */
+.apweek__chip--button {
+  padding: 0;
+}
+
+.apweek__chip-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  box-sizing: border-box;
+  padding: 3px 5px;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: inherit;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.apweek__chip-btn:hover {
+  background: color-mix(in srgb, var(--avo-ink) 5%, transparent);
+}
+
+/*
+ * THE TOKEN RING, DRAWN INSIDE. The chip clips its overflow (a fifteen-minute
+ * box cannot grow), so the shell's outside ring would be cut off by the `<li>`.
+ * Same colour and width; only the offset is turned inward.
+ */
+.apweek__chip-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+.apweek__chip-btn[aria-expanded='true'] {
+  box-shadow: inset 0 0 0 2px var(--avo-brand-deep);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * THE BOOKING POPOVER. `.dash-bell__pop`'s card: white, the 10% ink hairline,
+ * the pop shadow, the card radius. Pinned to the card's top right, under the
+ * week head, and full-width minus the gutter on a phone.
+ * ----------------------------------------------------------------------------
+ */
+.apweek__pop {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  width: min(380px, calc(100% - 32px));
+  max-height: calc(100% - 80px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-ui-ink-10);
+  border-radius: var(--avo-radius-card);
+  box-shadow: var(--avo-ui-shadow-pop);
+  z-index: 30;
+}
+
+.apweek__pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apweek__pop-title {
+  margin: 0;
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--avo-ink);
+}
+
+.apweek__pop-close {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.apweek__pop-close:hover {
+  color: var(--avo-ink);
+}
+
+.apweek__pop-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 12px 0 0;
+}
+
+.apweek__pop-facts dt {
+  font-size: 11px;
+  color: var(--avo-text-muted-label);
+}
+
+.apweek__pop-facts dd {
+  margin: 1px 0 0;
+  font-size: 13px;
+  color: var(--avo-ink);
+}
+
+.apweek__pop-acts {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--avo-hairline-inner);
 }
 
 /* --------------------------------------------------- the week's own states -- */

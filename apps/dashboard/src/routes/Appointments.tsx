@@ -492,6 +492,96 @@ export function Appointments() {
   const loading = salon.isPending || (listOn && bookings.isPending);
   const rows = bookings.data?.items ?? [];
 
+  /**
+   * ONE BOOKING'S CONTROLS, BUILT ONCE FOR BOTH VIEWS. The list's row and the
+   * week grid's popover render the same `BookingActions` from the same object,
+   * so the gates, the one-open-step rule, the scoped errors and the no-show's
+   * armed key are this function's and nobody else's.
+   */
+  const actionsFor = (booking: MerchantBooking): BookingActionsProps => ({
+    booking,
+    controls: {
+      can: {
+        reschedule: canReschedule(booking, session.perms),
+        reassign: canReassign(booking, session.perms),
+        cancel: canCancel(booking, session.perms),
+        complete: canComplete(booking, session.perms),
+      },
+      open: open?.id === booking.id ? open.kind : null,
+      pending: open?.id === booking.id && (active?.isPending ?? false),
+      /*
+        SCOPED TO THE OPEN ROW, for the armed row's reason: one mutation of each
+        kind serves the whole board, so an unscoped error would draw the last
+        failure under every row — including rows the merchant never touched.
+      */
+      error: open?.id === booking.id ? (active?.error ?? null) : null,
+      artists: artists.data?.items ?? [],
+      timezone: salon.data?.timezone ?? null,
+      onOpen: (kind) => {
+        mark.reset();
+        resetWrites();
+        setArmed(null);
+        setOpen({ id: booking.id, kind });
+      },
+      onDismiss: () => {
+        resetWrites();
+        setOpen(null);
+      },
+      /*
+        CLEARED ON SUCCESS ONLY, all four. A failure keeps the step open with what
+        the merchant typed still in it — which is the whole difference between a
+        retry and a re-entry, and `slot_taken` is a refusal she is meant to act on
+        by changing one field and pressing again.
+      */
+      onReschedule: (startsAt) =>
+        reschedule.mutate({ bookingId: booking.id, startsAt }, { onSuccess: () => setOpen(null) }),
+      onReassign: (artistId) =>
+        reassign.mutate({ bookingId: booking.id, artistId }, { onSuccess: () => setOpen(null) }),
+      onCancel: () =>
+        cancelBooking.mutate({ bookingId: booking.id }, { onSuccess: () => setOpen(null) }),
+      onComplete: () =>
+        complete.mutate({ bookingId: booking.id }, { onSuccess: () => setOpen(null) }),
+    },
+    canMark: canMarkNoShow(booking, session.perms, Date.now()),
+    armed: armed?.id === booking.id,
+    marking: mark.isPending && armed?.id === booking.id,
+    /*
+      SCOPED TO THE ARMED ROW. One mutation serves the whole board, so an
+      unscoped `mark.error` would draw the last failure under every row —
+      including rows the merchant never touched.
+    */
+    markError: armed?.id === booking.id ? mark.error : null,
+    onArm: () => {
+      // A previous row's failure is not this row's news.
+      mark.reset();
+      // …and neither is another row's open step. One at a time.
+      resetWrites();
+      setOpen(null);
+      setArmed({ id: booking.id, key: crypto.randomUUID() });
+    },
+    onCancel: () => {
+      mark.reset();
+      setArmed(null);
+    },
+    onConfirm: () => {
+      if (!armed || armed.id !== booking.id) return;
+      mark.mutate(
+        { bookingId: booking.id, idempotencyKey: armed.key },
+        // Cleared on success ONLY. A failure keeps the row armed AND keeps its
+        // key, so the retry is a retry.
+        { onSuccess: () => setArmed(null) },
+      );
+    },
+  });
+
+  /** Closing the week's popover closes whatever step was open in it. */
+  const resetActions = () => {
+    mark.reset();
+    resetWrites();
+    setArmed(null);
+    setOpen(null);
+  };
+
   return (
     <div className="appts">
       {/*
@@ -560,7 +650,11 @@ export function Appointments() {
           <Segmented
             label="Appointments view"
             value={view}
-            onChange={setView}
+            onChange={(next) => {
+              // An open step or an armed no-show belongs to the view it was opened in.
+              resetActions();
+              setView(next);
+            }}
             options={[
               { value: 'list', label: 'List' },
               { value: 'week', label: 'Week' },
@@ -639,7 +733,13 @@ export function Appointments() {
           draw a week it cannot vouch for. `onShowList` is the way back that
           every one of those refusals offers — the list has no preconditions.
         */
-        <AppointmentsWeek onShowList={() => setView('list')} />
+        <AppointmentsWeek
+          onShowList={() => setView('list')}
+          actions={{
+            render: (booking) => <BookingActions {...actionsFor(booking)} />,
+            reset: resetActions,
+          }}
+        />
       ) : view === 'deposits' ? (
         /*
           Owns its own read, its own four states and its own branch scoping. It
@@ -739,97 +839,7 @@ export function Appointments() {
                   </tr>
                 ) : (
                   rows.map((booking) => (
-                    <BookingRow
-                      key={booking.id}
-                      booking={booking}
-                      controls={{
-                        can: {
-                          reschedule: canReschedule(booking, session.perms),
-                          reassign: canReassign(booking, session.perms),
-                          cancel: canCancel(booking, session.perms),
-                          complete: canComplete(booking, session.perms),
-                        },
-                        open: open?.id === booking.id ? open.kind : null,
-                        pending: open?.id === booking.id && (active?.isPending ?? false),
-                        /*
-                          SCOPED TO THE OPEN ROW, for the armed row's reason: one
-                          mutation of each kind serves the whole board, so an
-                          unscoped error would draw the last failure under every
-                          row — including rows the merchant never touched.
-                        */
-                        error: open?.id === booking.id ? (active?.error ?? null) : null,
-                        artists: artists.data?.items ?? [],
-                        timezone: salon.data?.timezone ?? null,
-                        onOpen: (kind) => {
-                          mark.reset();
-                          resetWrites();
-                          setArmed(null);
-                          setOpen({ id: booking.id, kind });
-                        },
-                        onDismiss: () => {
-                          resetWrites();
-                          setOpen(null);
-                        },
-                        /*
-                          CLEARED ON SUCCESS ONLY, all four. A failure keeps the
-                          step open with what the merchant typed still in it —
-                          which is the whole difference between a retry and a
-                          re-entry, and `slot_taken` is a refusal she is meant to
-                          act on by changing one field and pressing again.
-                        */
-                        onReschedule: (startsAt) =>
-                          reschedule.mutate(
-                            { bookingId: booking.id, startsAt },
-                            { onSuccess: () => setOpen(null) },
-                          ),
-                        onReassign: (artistId) =>
-                          reassign.mutate(
-                            { bookingId: booking.id, artistId },
-                            { onSuccess: () => setOpen(null) },
-                          ),
-                        onCancel: () =>
-                          cancelBooking.mutate(
-                            { bookingId: booking.id },
-                            { onSuccess: () => setOpen(null) },
-                          ),
-                        onComplete: () =>
-                          complete.mutate(
-                            { bookingId: booking.id },
-                            { onSuccess: () => setOpen(null) },
-                          ),
-                      }}
-                      canMark={canMarkNoShow(booking, session.perms, Date.now())}
-                      armed={armed?.id === booking.id}
-                      marking={mark.isPending && armed?.id === booking.id}
-                      /*
-                        SCOPED TO THE ARMED ROW. One mutation serves the whole
-                        board, so an unscoped `mark.error` would draw the last
-                        failure under every row — including rows the merchant
-                        never touched.
-                      */
-                      markError={armed?.id === booking.id ? mark.error : null}
-                      onArm={() => {
-                        // A previous row's failure is not this row's news.
-                        mark.reset();
-                        // …and neither is another row's open step. One at a time.
-                        resetWrites();
-                        setOpen(null);
-                        setArmed({ id: booking.id, key: crypto.randomUUID() });
-                      }}
-                      onCancel={() => {
-                        mark.reset();
-                        setArmed(null);
-                      }}
-                      onConfirm={() => {
-                        if (!armed || armed.id !== booking.id) return;
-                        mark.mutate(
-                          { bookingId: booking.id, idempotencyKey: armed.key },
-                          // Cleared on success ONLY. A failure keeps the row
-                          // armed AND keeps its key, so the retry is a retry.
-                          { onSuccess: () => setArmed(null) },
-                        );
-                      }}
-                    />
+                    <BookingRow key={booking.id} {...actionsFor(booking)} />
                   ))
                 )}
               </tbody>
@@ -926,17 +936,7 @@ export function DateFilter({
  * key live in `Appointments` above, because the key is a money concern and a row
  * that minted its own would mint one per mount.
  */
-export function BookingRow({
-  booking,
-  controls,
-  canMark,
-  armed,
-  marking,
-  markError,
-  onArm,
-  onCancel,
-  onConfirm,
-}: {
+export interface BookingActionsProps {
   booking: MerchantBooking;
   controls: RowControls;
   canMark: boolean;
@@ -946,30 +946,10 @@ export function BookingRow({
   onArm: () => void;
   onCancel: () => void;
   onConfirm: () => void;
-}) {
-  /**
-   * ═════════════════════════════════════════════════════════════════════════
-   * `pillFor`, NOT `STATUS_PILL[status]` — AND THE DIFFERENCE IS A CLAIM ABOUT
-   * A CUSTOMER'S MONEY
-   * ═════════════════════════════════════════════════════════════════════════
-   * Two of the four status values name a money event that a hand-written
-   * appointment never had. At `depositFils === 0` the labels are "Booked" and
-   * "No-show"; `appointmentsWeekRules.ts § pillFor` carries the full argument
-   * and the reason the words are lane B's rather than a third vocabulary.
-   *
-   * A DEPOSIT-BEARING ROW IS UNCHANGED, byte for byte. `pillFor` returns
-   * `STATUS_PILL[status]` untouched above zero, which is the property
-   * `zeroDepositRender.test.tsx` pins in both directions.
-   */
-  const pill = pillFor(booking);
+}
 
-  /**
-   * THE ROW'S DEPOSIT, ASKED ONCE. Every sentence in this cell that mentions a
-   * deposit has to agree with it, and the way they drift apart is each one
-   * re-deriving the condition. #1 keeps it an integer comparison and never a
-   * formatted string.
-   */
-  const held = booking.depositFils > 0;
+export function BookingRow(props: BookingActionsProps) {
+  const { booking, controls } = props;
 
   /**
    * A WALK-IN. `GET /salons/{id}/bookings` serves the front desk's own
@@ -1041,358 +1021,413 @@ export function BookingRow({
         <Money amount={parseFils(booking.depositFils)} withUnit />
       </td>
       <td>
-        <div className="appts__status">
-          <Pill tone={pill.tone}>{pill.label}</Pill>
-          {/*
-            The auto-return rule, stated inline against the booking it applies
-            to. The banner states the rule; this states the deadline, and the
-            server computed it — a client doing `startsAt + 1h` would be deciding
-            for itself when a deposit is at risk.
-          */}
-          {/*
-            AND `held` RATHER THAN THE STATUS ALONE, WHICH IS THE PILL'S FIX
-            APPLIED TO THE SENTENCE UNDERNEATH IT.
+        <BookingActions {...props} />
+      </td>
+    </tr>
+  );
+}
 
-            This line said "Returns <date> if missed" on every `deposit_held`
-            row, including a hand-written one where nothing is held and nothing
-            returns. It is the same false claim the pill made, one line lower and
-            with a DATE on it — so it does not merely mislabel a state, it
-            promises a merchant a specific moment at which a customer's money
-            will move. `noShowReturnDueAt` is still served on those rows (the
-            server computes it for every booking), which is exactly why the
-            status was not a sufficient condition: there is a real timestamp
-            sitting there, and it is about nothing.
-          */}
-          {booking.status === 'deposit_held' && held ? (
-            <span className="appts__due">
-              Returns{' '}
-              <time dateTime={booking.noShowReturnDueAt}>
-                {whenLabel(booking.noShowReturnDueAt, controls.timezone)}
-              </time>{' '}
-              if missed
-            </span>
-          ) : null}
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE STATUS CELL, LIFTED OUT SO THE WEEK GRID CAN OPEN THE SAME ONE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Aftab, 2026-09-29: "The calendar view things should be clickable". A chip on
+ * the week grid now opens this component in a popover, and it is THIS
+ * component — the pill, the deadline line, the controls, the in-row steps and
+ * their refusals — not a second rendering of them. Two copies of a destructive
+ * control's gating are two places for one to drift from the server's rule (#7),
+ * and the no-show's idempotency key lives in the one armed-object this reads
+ * from, so a copy would have to either share it or mint its own.
+ *
+ * PRESENTATIONAL, like the row it came out of: every piece of state and every
+ * write is `Appointments`' own, handed in through `BookingActionsProps`.
+ */
+export function BookingActions({
+  booking,
+  controls,
+  canMark,
+  armed,
+  marking,
+  markError,
+  onArm,
+  onCancel,
+  onConfirm,
+}: BookingActionsProps) {
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * `pillFor`, NOT `STATUS_PILL[status]` — AND THE DIFFERENCE IS A CLAIM ABOUT
+   * A CUSTOMER'S MONEY
+   * ═════════════════════════════════════════════════════════════════════════
+   * Two of the four status values name a money event that a hand-written
+   * appointment never had. At `depositFils === 0` the labels are "Booked" and
+   * "No-show"; `appointmentsWeekRules.ts § pillFor` carries the full argument
+   * and the reason the words are lane B's rather than a third vocabulary.
+   *
+   * A DEPOSIT-BEARING ROW IS UNCHANGED, byte for byte. `pillFor` returns
+   * `STATUS_PILL[status]` untouched above zero, which is the property
+   * `zeroDepositRender.test.tsx` pins in both directions.
+   */
+  const pill = pillFor(booking);
 
-          {/*
-            ═══════════════════════════════════════════════════════════════
-            THE FOUR CONTROLS — IN THE SAME SLOT, IN THE SAME REGISTER
-            ═══════════════════════════════════════════════════════════════
-            NOT A SEVENTH COLUMN. The design draws six and
-            `interaction-spec.md §1` says a data table scrolls rather than
-            dropping one; adding a column would push the board past its
-            `min-width` on every screen to hold controls that are blank on most
-            rows. The status cell is already "what state is this in", and what
-            you may do about it is the same question.
+  /**
+   * THE ROW'S DEPOSIT, ASKED ONCE. Every sentence in this cell that mentions a
+   * deposit has to agree with it, and the way they drift apart is each one
+   * re-deriving the condition. #1 keeps it an integer comparison and never a
+   * formatted string.
+   */
+  const held = booking.depositFils > 0;
 
-            THE SHAPE IS THE NO-SHOW LINK'S, WHICH THIS FILE ALREADY ARGUED:
-            a 12px link-styled `<button>`, and the link SWAPS for a short step in
-            the same slot rather than opening a modal. That decision is recorded
-            at § the armed row and it holds for all five controls — an overlay,
-            a focus trap and a title this design draws nowhere, for a form with
-            one or two fields.
+  return (
+    <div className="appts__status">
+      <Pill tone={pill.tone}>{pill.label}</Pill>
+      {/*
+        The auto-return rule, stated inline against the booking it applies
+        to. The banner states the rule; this states the deadline, and the
+        server computed it — a client doing `startsAt + 1h` would be deciding
+        for itself when a deposit is at risk.
+      */}
+      {/*
+        AND `held` RATHER THAN THE STATUS ALONE, WHICH IS THE PILL'S FIX
+        APPLIED TO THE SENTENCE UNDERNEATH IT.
 
-            ONE STEP AT A TIME ACROSS THE BOARD, so the links disappear while any
-            step is open on this row. Four half-filled steps in a table whose
-            rows shift under a refetch is four chances to complete a control
-            against the wrong appointment.
+        This line said "Returns <date> if missed" on every `deposit_held`
+        row, including a hand-written one where nothing is held and nothing
+        returns. It is the same false claim the pill made, one line lower and
+        with a DATE on it — so it does not merely mislabel a state, it
+        promises a merchant a specific moment at which a customer's money
+        will move. `noShowReturnDueAt` is still served on those rows (the
+        server computes it for every booking), which is exactly why the
+        status was not a sufficient condition: there is a real timestamp
+        sitting there, and it is about nothing.
+      */}
+      {booking.status === 'deposit_held' && held ? (
+        <span className="appts__due">
+          Returns{' '}
+          <time dateTime={booking.noShowReturnDueAt}>
+            {whenLabel(booking.noShowReturnDueAt, controls.timezone)}
+          </time>{' '}
+          if missed
+        </span>
+      ) : null}
 
-            EVERY ONE OF THESE IS A COURTESY (#7). The predicates above mirror
-            server gates that refuse independently, and the refusal is rendered
-            below rather than assumed unreachable.
-          */}
-          {controls.open === null && !armed ? (
-            <span className="appts__acts">
-              {controls.can.reschedule && controls.timezone !== null ? (
-                <button
-                  type="button"
-                  className="appts__mark"
-                  aria-label={`Change the date or time for ${booking.memberName}`}
-                  onClick={() => controls.onOpen('reschedule')}
-                >
-                  Change time
-                </button>
-              ) : null}
-              {controls.can.reassign ? (
-                <button
-                  type="button"
-                  className="appts__mark"
-                  aria-label={`Reassign ${booking.memberName} to another artist`}
-                  onClick={() => controls.onOpen('reassign')}
-                >
-                  Reassign
-                </button>
-              ) : null}
-              {/*
-                "MARK DONE" AND NOT "COMPLETE", and the divergence is the
-                scanner's own argument run the other way. `completed` is the
-                merchant's neutral word for a column that also holds "Cancelled"
-                — which is why the PILL says "Completed" — but the CONTROL is an
-                imperative a receptionist presses, and "Mark done" sits beside
-                "Mark no-show" as the pair it actually is.
-              */}
-              {controls.can.complete ? (
-                <button
-                  type="button"
-                  className="appts__mark"
-                  aria-label={`Mark ${booking.memberName}'s appointment as done`}
-                  onClick={() => controls.onOpen('complete')}
-                >
-                  Mark done
-                </button>
-              ) : null}
-              {controls.can.cancel ? (
-                <button
-                  type="button"
-                  className="appts__mark"
-                  aria-label={`Cancel ${booking.memberName}'s appointment`}
-                  onClick={() => controls.onOpen('cancel')}
-                >
-                  Cancel appointment
-                </button>
-              ) : null}
-            </span>
-          ) : null}
+      {/*
+        ═══════════════════════════════════════════════════════════════
+        THE FOUR CONTROLS — IN THE SAME SLOT, IN THE SAME REGISTER
+        ═══════════════════════════════════════════════════════════════
+        NOT A SEVENTH COLUMN. The design draws six and
+        `interaction-spec.md §1` says a data table scrolls rather than
+        dropping one; adding a column would push the board past its
+        `min-width` on every screen to hold controls that are blank on most
+        rows. The status cell is already "what state is this in", and what
+        you may do about it is the same question.
 
-          {controls.open === 'reschedule' && controls.timezone !== null ? (
-            <RescheduleStep
-              booking={booking}
-              timezone={controls.timezone}
-              pending={controls.pending}
-              onSubmit={controls.onReschedule}
-              onDismiss={controls.onDismiss}
-            />
-          ) : null}
+        THE SHAPE IS THE NO-SHOW LINK'S, WHICH THIS FILE ALREADY ARGUED:
+        a 12px link-styled `<button>`, and the link SWAPS for a short step in
+        the same slot rather than opening a modal. That decision is recorded
+        at § the armed row and it holds for all five controls — an overlay,
+        a focus trap and a title this design draws nowhere, for a form with
+        one or two fields.
 
-          {controls.open === 'reassign' ? (
-            <ReassignStep
-              booking={booking}
-              artists={controls.artists}
-              pending={controls.pending}
-              onSubmit={controls.onReassign}
-              onDismiss={controls.onDismiss}
-            />
-          ) : null}
+        ONE STEP AT A TIME ACROSS THE BOARD, so the links disappear while any
+        step is open on this row. Four half-filled steps in a table whose
+        rows shift under a refetch is four chances to complete a control
+        against the wrong appointment.
 
-          {/*
-            CANCEL AND MARK DONE ARE ARM-THEN-CONFIRM, for the no-show's reasons
-            minus one. Neither can be undone — there is no un-cancel and no
-            un-complete route — and cancel RELEASES THE SLOT, so the artist's
-            hour is bookable from the wallet the instant it commits.
-
-            CANCEL STATES THE MONEY AND "MARK DONE" DOES NOT, because there is a
-            deposit to state on one and there is provably none on the other:
-            `canComplete` is false above zero. The cancel question therefore
-            branches on `held` — "Cancel and return 5.000 KD to Dana?" on an app
-            booking, and a sentence with no money in it on a hand-written one,
-            where "return" would name a refund that does not exist.
-          */}
-          {controls.open === 'cancel' ? (
-            <ConfirmStep
-              question={
-                held ? (
-                  <>
-                    Cancel this appointment and return{' '}
-                    <Money amount={parseFils(booking.depositFils)} withUnit /> to{' '}
-                    {booking.memberName}?
-                  </>
-                ) : (
-                  <>Cancel this appointment for {booking.memberName}? No deposit was taken.</>
-                )
-              }
-              confirmLabel="Yes, cancel"
-              pendingLabel="Cancelling…"
-              confirmAria={`Yes, cancel ${booking.memberName}'s appointment`}
-              pending={controls.pending}
-              onConfirm={controls.onCancel}
-              onDismiss={controls.onDismiss}
-            />
-          ) : null}
-
-          {controls.open === 'complete' ? (
-            <ConfirmStep
-              question={<>Mark {booking.memberName}&rsquo;s appointment as done?</>}
-              confirmLabel="Yes, mark done"
-              pendingLabel="Marking…"
-              confirmAria={`Yes, mark ${booking.memberName}'s appointment as done`}
-              pending={controls.pending}
-              onConfirm={controls.onComplete}
-              onDismiss={controls.onDismiss}
-            />
-          ) : null}
-
-          {/*
-            THE FOUR CONTROLS' OWN REFUSAL, IN THE ROW IT FAILED ON.
-
-            `slot_taken` IS SINGLED OUT AND IS NOT AN ERROR TOAST. The exclusion
-            constraint spans hand-written and app bookings deliberately, so this
-            is the ordinary answer when a customer took that hour from her phone
-            while the front desk was typing — and it is RECOVERABLE. The server's
-            sentence states the fact and names no remedy; the remedy differs by
-            control, so this screen supplies it: a reschedule's way out is a
-            different time, a reassign's is a different artist. The step stays
-            open with what she typed still in it.
-
-            EVERYTHING ELSE GOES THROUGH `WriteError`, which renders the server's
-            own sentence verbatim for a 400, a 409 and a 403 — `not_changeable`,
-            `already_cancelled`, `deposit_completed_at_the_counter` and the
-            permission refusal all name what happened and what to do, and a
-            paraphrase here would drop the second half.
-
-            THE REASSURANCE BRANCHES ON `held` FOR THE THIRD TIME IN THIS CELL.
-            "The deposit is still held" is true on an app booking and a lie on a
-            hand-written one; "Nothing has changed" is true of both but says less
-            where there is more to say.
-          */}
-          {controls.error !== null && controls.error !== undefined ? (
-            isSlotTaken(controls.error) ? (
-              <div className="appts__slot" role="alert">
-                <b>That artist already has an appointment then.</b>{' '}
-                {controls.open === 'reassign'
-                  ? 'Pick a different artist, or move the time first.'
-                  : 'Pick another time.'}{' '}
-                This appointment has not moved.
-              </div>
-            ) : (
-              <WriteError
-                error={controls.error}
-                reassurance={held ? 'The deposit is still held.' : 'Nothing has changed.'}
-              />
-            )
-          ) : null}
-
-          {/*
-            THE DESIGN'S LINK — AS A `<button>`, WHICH IS THE ONE THING ABOUT IT
-            THAT IS NOT THE DESIGN'S.
-
-            `:184` is `<a href="#2a">`, which is what a static mock writes for
-            every affordance because it has nowhere to go. This one goes nowhere
-            either: it POSTs. An anchor that does not navigate is a control a
-            keyboard user reaches with the wrong key, a screen reader announces
-            as "link", and a middle-click opens in a tab where nothing happens.
-            CLAUDE.md's own rule for this case — follow the platform, note the
-            departure. Everything visual stays: 12px, `--avo-text-muted-soft`,
-            the exact colour `:184` names, beside the pill in the same slot.
-
-            THE ACCESSIBLE NAME CARRIES THE CUSTOMER. "Mark no-show" repeated
-            down a column of rows is a list of identical controls to anyone not
-            looking at the row it is in. The visible text is unchanged, so
-            "Label in Name" holds: the accessible name still starts with what is
-            drawn.
-          */}
-          {canMark && !armed && controls.open === null ? (
+        EVERY ONE OF THESE IS A COURTESY (#7). The predicates above mirror
+        server gates that refuse independently, and the refusal is rendered
+        below rather than assumed unreachable.
+      */}
+      {controls.open === null && !armed ? (
+        <span className="appts__acts">
+          {controls.can.reschedule && controls.timezone !== null ? (
             <button
               type="button"
               className="appts__mark"
-              aria-label={`Mark no-show for ${booking.memberName}`}
-              onClick={onArm}
+              aria-label={`Change the date or time for ${booking.memberName}`}
+              onClick={() => controls.onOpen('reschedule')}
             >
-              Mark no-show
+              Change time
             </button>
           ) : null}
-
-          {/*
-            THE ARMED STEP. `Appointments § the armed row` argues why it exists
-            and why it is not a modal. The money is `<Money>` — integer fils
-            through the one formatter, with the announced string that is not the
-            drawn one (#1, interaction-spec.md §2). It states the AMOUNT and the
-            CONSEQUENCE, because the two things a merchant can get wrong here are
-            "which row" and "how much".
-
-            AND AT ZERO THERE IS NO AMOUNT AND NO RETURN, WHICH THIS SENTENCE
-            USED TO ASSERT ANYWAY. Lane A ruled that a no-show is a fact about
-            ATTENDANCE rather than about money, so a hand-written appointment is
-            markable too — and on that row `<Money>` rendered "0.000 KD" inside
-            the word "Return", offering to send a customer nothing and calling it
-            a refund. The `markNoShow` response now carries `balanceAfterFils` and
-            `transactionId` as `null` on that branch for the same reason, and the
-            endpoint's own terminal copy stopped promising a refund.
-
-            THE CONSEQUENCE IS STILL STATED, because it is the half that has not
-            gone away: the mark is an assertion about a named customer's conduct,
-            written to her record, and it releases the slot. What is withdrawn is
-            only the claim about the money.
-          */}
-          {armed ? (
-            <span className="appts__confirm">
-              <span className="appts__confirm-q">
-                {held ? (
-                  <>
-                    Return <Money amount={parseFils(booking.depositFils)} withUnit /> to{' '}
-                    {booking.memberName} and mark a no-show?
-                  </>
-                ) : (
-                  <>
-                    Mark {booking.memberName} as a no-show? No deposit was taken, so nothing
-                    comes back.
-                  </>
-                )}
-              </span>
-              <span className="appts__confirm-acts">
-                <button
-                  type="button"
-                  className="appts__confirm-yes"
-                  aria-label={`Yes, mark ${booking.memberName} as a no-show`}
-                  onClick={onConfirm}
-                  disabled={marking}
-                >
-                  {marking ? 'Marking…' : 'Yes, mark'}
-                </button>
-                <button
-                  type="button"
-                  className="appts__confirm-no"
-                  onClick={onCancel}
-                  disabled={marking}
-                >
-                  Cancel
-                </button>
-              </span>
-            </span>
+          {controls.can.reassign ? (
+            <button
+              type="button"
+              className="appts__mark"
+              aria-label={`Reassign ${booking.memberName} to another artist`}
+              onClick={() => controls.onOpen('reassign')}
+            >
+              Reassign
+            </button>
           ) : null}
-
           {/*
-            THE FAILED WRITE, IN THE ROW IT FAILED ON.
-
-            `WriteError` rather than `SectionError`: a refused mark is not a
-            refused screen, and the distinction `sectionState.tsx` draws is
-            exactly the one a merchant needs here — the board is still correct,
-            the deposit is still held, and one action did not happen.
-
-            IN THE CELL AND NOT OVER THE TABLE. A board-level banner saying "that
-            didn't work" cannot say WHICH booking, and this is a screen whose
-            rows are indistinguishable at a glance.
-
-            THE REASSURANCE IS THE SENTENCE THAT MATTERS. Every refusal on this
-            path leaves the deposit exactly where it was — the 403, the two
-            409s, the 400, the 422, and a connection that died mid-flight, which
-            `markNoShow`'s single transaction guarantees for the last one. So one
-            reassurance is honest for all of them.
-
-            AND THE 403 IS BUILT EVEN THOUGH THE LINK IS GATED. #7 in its own
-            words: the UI hiding a button is a courtesy, not a control. The
-            reachable path is a mid-session revocation — `perms.void` taken away
-            in Accounts while this board is open — and the session's copy of
-            `perms` is the one that was true at sign-in. `WriteError` renders the
-            server's own sentence, which names the permission and who can grant
-            it; paraphrasing it here would drop the second half.
-
-            AND THE REASSURANCE BRANCHES, FOR THE PILL'S REASON ONE LAST TIME.
-            "The deposit is still held" was written when a no-show was a money
-            transition by definition; on a hand-written appointment it names a
-            hold that does not exist, under a failure, which is the worst moment
-            to tell a merchant something reassuring and false. "Nothing has
-            changed" is true of every refusal on this path either way — the
-            single transaction guarantees it — and it is the honest version where
-            there is no deposit to be still holding.
+            "MARK DONE" AND NOT "COMPLETE", and the divergence is the
+            scanner's own argument run the other way. `completed` is the
+            merchant's neutral word for a column that also holds "Cancelled"
+            — which is why the PILL says "Completed" — but the CONTROL is an
+            imperative a receptionist presses, and "Mark done" sits beside
+            "Mark no-show" as the pair it actually is.
           */}
-          {markError ? (
-            <WriteError
-              error={markError}
-              reassurance={held ? 'The deposit is still held.' : 'Nothing has changed.'}
-            />
+          {controls.can.complete ? (
+            <button
+              type="button"
+              className="appts__mark"
+              aria-label={`Mark ${booking.memberName}'s appointment as done`}
+              onClick={() => controls.onOpen('complete')}
+            >
+              Mark done
+            </button>
           ) : null}
-        </div>
-      </td>
-    </tr>
+          {controls.can.cancel ? (
+            <button
+              type="button"
+              className="appts__mark"
+              aria-label={`Cancel ${booking.memberName}'s appointment`}
+              onClick={() => controls.onOpen('cancel')}
+            >
+              Cancel appointment
+            </button>
+          ) : null}
+        </span>
+      ) : null}
+
+      {controls.open === 'reschedule' && controls.timezone !== null ? (
+        <RescheduleStep
+          booking={booking}
+          timezone={controls.timezone}
+          pending={controls.pending}
+          onSubmit={controls.onReschedule}
+          onDismiss={controls.onDismiss}
+        />
+      ) : null}
+
+      {controls.open === 'reassign' ? (
+        <ReassignStep
+          booking={booking}
+          artists={controls.artists}
+          pending={controls.pending}
+          onSubmit={controls.onReassign}
+          onDismiss={controls.onDismiss}
+        />
+      ) : null}
+
+      {/*
+        CANCEL AND MARK DONE ARE ARM-THEN-CONFIRM, for the no-show's reasons
+        minus one. Neither can be undone — there is no un-cancel and no
+        un-complete route — and cancel RELEASES THE SLOT, so the artist's
+        hour is bookable from the wallet the instant it commits.
+
+        CANCEL STATES THE MONEY AND "MARK DONE" DOES NOT, because there is a
+        deposit to state on one and there is provably none on the other:
+        `canComplete` is false above zero. The cancel question therefore
+        branches on `held` — "Cancel and return 5.000 KD to Dana?" on an app
+        booking, and a sentence with no money in it on a hand-written one,
+        where "return" would name a refund that does not exist.
+      */}
+      {controls.open === 'cancel' ? (
+        <ConfirmStep
+          question={
+            held ? (
+              <>
+                Cancel this appointment and return{' '}
+                <Money amount={parseFils(booking.depositFils)} withUnit /> to{' '}
+                {booking.memberName}?
+              </>
+            ) : (
+              <>Cancel this appointment for {booking.memberName}? No deposit was taken.</>
+            )
+          }
+          confirmLabel="Yes, cancel"
+          pendingLabel="Cancelling…"
+          confirmAria={`Yes, cancel ${booking.memberName}'s appointment`}
+          pending={controls.pending}
+          onConfirm={controls.onCancel}
+          onDismiss={controls.onDismiss}
+        />
+      ) : null}
+
+      {controls.open === 'complete' ? (
+        <ConfirmStep
+          question={<>Mark {booking.memberName}&rsquo;s appointment as done?</>}
+          confirmLabel="Yes, mark done"
+          pendingLabel="Marking…"
+          confirmAria={`Yes, mark ${booking.memberName}'s appointment as done`}
+          pending={controls.pending}
+          onConfirm={controls.onComplete}
+          onDismiss={controls.onDismiss}
+        />
+      ) : null}
+
+      {/*
+        THE FOUR CONTROLS' OWN REFUSAL, IN THE ROW IT FAILED ON.
+
+        `slot_taken` IS SINGLED OUT AND IS NOT AN ERROR TOAST. The exclusion
+        constraint spans hand-written and app bookings deliberately, so this
+        is the ordinary answer when a customer took that hour from her phone
+        while the front desk was typing — and it is RECOVERABLE. The server's
+        sentence states the fact and names no remedy; the remedy differs by
+        control, so this screen supplies it: a reschedule's way out is a
+        different time, a reassign's is a different artist. The step stays
+        open with what she typed still in it.
+
+        EVERYTHING ELSE GOES THROUGH `WriteError`, which renders the server's
+        own sentence verbatim for a 400, a 409 and a 403 — `not_changeable`,
+        `already_cancelled`, `deposit_completed_at_the_counter` and the
+        permission refusal all name what happened and what to do, and a
+        paraphrase here would drop the second half.
+
+        THE REASSURANCE BRANCHES ON `held` FOR THE THIRD TIME IN THIS CELL.
+        "The deposit is still held" is true on an app booking and a lie on a
+        hand-written one; "Nothing has changed" is true of both but says less
+        where there is more to say.
+      */}
+      {controls.error !== null && controls.error !== undefined ? (
+        isSlotTaken(controls.error) ? (
+          <div className="appts__slot" role="alert">
+            <b>That artist already has an appointment then.</b>{' '}
+            {controls.open === 'reassign'
+              ? 'Pick a different artist, or move the time first.'
+              : 'Pick another time.'}{' '}
+            This appointment has not moved.
+          </div>
+        ) : (
+          <WriteError
+            error={controls.error}
+            reassurance={held ? 'The deposit is still held.' : 'Nothing has changed.'}
+          />
+        )
+      ) : null}
+
+      {/*
+        THE DESIGN'S LINK — AS A `<button>`, WHICH IS THE ONE THING ABOUT IT
+        THAT IS NOT THE DESIGN'S.
+
+        `:184` is `<a href="#2a">`, which is what a static mock writes for
+        every affordance because it has nowhere to go. This one goes nowhere
+        either: it POSTs. An anchor that does not navigate is a control a
+        keyboard user reaches with the wrong key, a screen reader announces
+        as "link", and a middle-click opens in a tab where nothing happens.
+        CLAUDE.md's own rule for this case — follow the platform, note the
+        departure. Everything visual stays: 12px, `--avo-text-muted-soft`,
+        the exact colour `:184` names, beside the pill in the same slot.
+
+        THE ACCESSIBLE NAME CARRIES THE CUSTOMER. "Mark no-show" repeated
+        down a column of rows is a list of identical controls to anyone not
+        looking at the row it is in. The visible text is unchanged, so
+        "Label in Name" holds: the accessible name still starts with what is
+        drawn.
+      */}
+      {canMark && !armed && controls.open === null ? (
+        <button
+          type="button"
+          className="appts__mark"
+          aria-label={`Mark no-show for ${booking.memberName}`}
+          onClick={onArm}
+        >
+          Mark no-show
+        </button>
+      ) : null}
+
+      {/*
+        THE ARMED STEP. `Appointments § the armed row` argues why it exists
+        and why it is not a modal. The money is `<Money>` — integer fils
+        through the one formatter, with the announced string that is not the
+        drawn one (#1, interaction-spec.md §2). It states the AMOUNT and the
+        CONSEQUENCE, because the two things a merchant can get wrong here are
+        "which row" and "how much".
+
+        AND AT ZERO THERE IS NO AMOUNT AND NO RETURN, WHICH THIS SENTENCE
+        USED TO ASSERT ANYWAY. Lane A ruled that a no-show is a fact about
+        ATTENDANCE rather than about money, so a hand-written appointment is
+        markable too — and on that row `<Money>` rendered "0.000 KD" inside
+        the word "Return", offering to send a customer nothing and calling it
+        a refund. The `markNoShow` response now carries `balanceAfterFils` and
+        `transactionId` as `null` on that branch for the same reason, and the
+        endpoint's own terminal copy stopped promising a refund.
+
+        THE CONSEQUENCE IS STILL STATED, because it is the half that has not
+        gone away: the mark is an assertion about a named customer's conduct,
+        written to her record, and it releases the slot. What is withdrawn is
+        only the claim about the money.
+      */}
+      {armed ? (
+        <span className="appts__confirm">
+          <span className="appts__confirm-q">
+            {held ? (
+              <>
+                Return <Money amount={parseFils(booking.depositFils)} withUnit /> to{' '}
+                {booking.memberName} and mark a no-show?
+              </>
+            ) : (
+              <>
+                Mark {booking.memberName} as a no-show? No deposit was taken, so nothing
+                comes back.
+              </>
+            )}
+          </span>
+          <span className="appts__confirm-acts">
+            <button
+              type="button"
+              className="appts__confirm-yes"
+              aria-label={`Yes, mark ${booking.memberName} as a no-show`}
+              onClick={onConfirm}
+              disabled={marking}
+            >
+              {marking ? 'Marking…' : 'Yes, mark'}
+            </button>
+            <button
+              type="button"
+              className="appts__confirm-no"
+              onClick={onCancel}
+              disabled={marking}
+            >
+              Cancel
+            </button>
+          </span>
+        </span>
+      ) : null}
+
+      {/*
+        THE FAILED WRITE, IN THE ROW IT FAILED ON.
+
+        `WriteError` rather than `SectionError`: a refused mark is not a
+        refused screen, and the distinction `sectionState.tsx` draws is
+        exactly the one a merchant needs here — the board is still correct,
+        the deposit is still held, and one action did not happen.
+
+        IN THE CELL AND NOT OVER THE TABLE. A board-level banner saying "that
+        didn't work" cannot say WHICH booking, and this is a screen whose
+        rows are indistinguishable at a glance.
+
+        THE REASSURANCE IS THE SENTENCE THAT MATTERS. Every refusal on this
+        path leaves the deposit exactly where it was — the 403, the two
+        409s, the 400, the 422, and a connection that died mid-flight, which
+        `markNoShow`'s single transaction guarantees for the last one. So one
+        reassurance is honest for all of them.
+
+        AND THE 403 IS BUILT EVEN THOUGH THE LINK IS GATED. #7 in its own
+        words: the UI hiding a button is a courtesy, not a control. The
+        reachable path is a mid-session revocation — `perms.void` taken away
+        in Accounts while this board is open — and the session's copy of
+        `perms` is the one that was true at sign-in. `WriteError` renders the
+        server's own sentence, which names the permission and who can grant
+        it; paraphrasing it here would drop the second half.
+
+        AND THE REASSURANCE BRANCHES, FOR THE PILL'S REASON ONE LAST TIME.
+        "The deposit is still held" was written when a no-show was a money
+        transition by definition; on a hand-written appointment it names a
+        hold that does not exist, under a failure, which is the worst moment
+        to tell a merchant something reassuring and false. "Nothing has
+        changed" is true of every refusal on this path either way — the
+        single transaction guarantees it — and it is the honest version where
+        there is no deposit to be still holding.
+      */}
+      {markError ? (
+        <WriteError
+          error={markError}
+          reassurance={held ? 'The deposit is still held.' : 'Nothing has changed.'}
+        />
+      ) : null}
+    </div>
   );
 }
 
