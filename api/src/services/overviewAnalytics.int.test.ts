@@ -239,6 +239,19 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
         }
         await tx1(id('R5'), M.m2, A2, false, 'deposit_return', 2000, '2026-09-11T09:00:00Z');
         await tx1(id('R6'), M.m4, A1, false, 'deposit_return', 2000, '2026-09-11T09:00:00Z');
+        // kept deposits (migration 0066) — revenue, and spend. `amount_fils` is 0 by
+        // CHECK; the magnitude is the `salon_revenue` leg, which is what is read.
+        // m1 is already active in the window, so no member count moves.
+        const forfeit = async (tid: string, br: string, kept: number, at: string) => {
+          await tx1(tid, M.m1, br, false, 'deposit_forfeit', 0, at, { method: 'wallet' });
+          await t(sql`
+            INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction, amount_fils, balance_after_fils)
+            VALUES (${tid}, ${A}, NULL, 'deposit_held', 'debit', ${kept}, NULL),
+                   (${tid}, ${A}, NULL, 'salon_revenue', 'credit', ${kept}, NULL)`);
+        };
+        await forfeit(id('F0'), A1, 700, '2026-08-28T10:00:00Z'); // outside the window
+        await forfeit(id('F1'), A1, 2000, '2026-09-09T19:00:00Z'); // the same day and branch as TX2
+        await forfeit(id('F2'), A2, 1500, '2026-09-13T10:00:00Z'); // a day with no sale at A2
 
         const bk = async (
           bid: string, o: { member: string | null; guest?: string; artist: string; service: string;
@@ -496,16 +509,60 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
     });
   });
 
-  it('9 · wallet — loaded, bonus, spent (= the sales report) and the balance liability', () => {
+  it('9 · wallet — loaded, bonus, spent (= the sales report, kept deposits included) and the balance liability', () => {
     expect(got.all.wallet).toEqual({
       status: 'ok',
       loadedFils: 18500, // 11.000 + 5.000 + 2.500; the pending Apple Pay is not loaded
       bonusFils: 1000,
       topups: 3,
-      spentFils: 62000, // 8+20+5+20 charges + 6+3 shop; TX5 voided, TX0 and TS3 outside
+      // 8+20+5+20 charges + 6+3 shop = 62.000; TX5 voided, TX0 and TS3 outside.
+      // Plus 2.000 + 1.500 kept deposits; F0 outside.
+      spentFils: 65500,
       liabilityFils: 17500,
     });
-    expect(got.all.wallet.spentFils).toBe(got.sales.stat.value);
+    // RECONCILED IN FILS against the served report: `Gross KD` (the stat, which
+    // is unchanged) plus the `Kept deposits KD` column, summed over its rows.
+    const kept = (got.sales.rows as Array<Record<string, number>>).reduce(
+      (n, r) => n + (r.keptDepositsFils ?? NaN),
+      0,
+    );
+    expect(got.sales.stat.value).toBe(62000);
+    expect(kept).toBe(3500);
+    expect(got.all.wallet.spentFils).toBe(got.sales.stat.value + kept);
+  });
+
+  it('9b · sales — kept deposits are their own column, on the day and branch they were kept', () => {
+    expect((got.sales.columns as Array<{ header: string }>).map((c) => c.header)).toEqual([
+      'Date',
+      'Transactions',
+      'Gross KD',
+      'Branch',
+      'Kept deposits KD',
+    ]);
+    const row = (date: string, branch: string) =>
+      (got.sales.rows as Array<Record<string, unknown>>).find((r) => r.date === date && r.branch === branch);
+    // Beside TX2's 20.000 at Salmiya on 9 Sept: the charge count and gross are untouched.
+    expect(row('2026-09-09', 'OV Salmiya')).toEqual({
+      date: '2026-09-09',
+      transactions: 1,
+      grossFils: 20000,
+      branch: 'OV Salmiya',
+      keptDepositsFils: 2000,
+    });
+    // A day with a kept deposit and no sale at that branch is a row of its own.
+    expect(row('2026-09-13', 'OV Hawally')).toEqual({
+      date: '2026-09-13',
+      transactions: 0,
+      grossFils: 0,
+      branch: 'OV Hawally',
+      keptDepositsFils: 1500,
+    });
+    // Every other row keeps no deposit.
+    const others = (got.sales.rows as Array<Record<string, unknown>>).filter(
+      (r) => !(r.date === '2026-09-09' && r.branch === 'OV Salmiya') && !(r.date === '2026-09-13' && r.branch === 'OV Hawally'),
+    );
+    expect(others.length).toBeGreaterThan(0);
+    for (const r of others) expect(r.keptDepositsFils).toBe(0);
   });
 
   it('10 · payment mix — top-ups by method in basis points; spend is the wallet', () => {
@@ -514,7 +571,10 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
       card: { count: 1, fils: 5000, shareBp: 2703 }, // 27.027…% rounds up
       applepay: { count: 0, fils: 0, shareBp: 0 },
     });
-    expect(got.all.paymentMix.walletSpend).toEqual({ count: 6, fils: 62000 });
+    // Six charges and shop orders, and the two kept deposits: the wallet block's
+    // `spentFils`, from the same rows.
+    expect(got.all.paymentMix.walletSpend).toEqual({ count: 8, fils: 65500 });
+    expect(got.all.paymentMix.walletSpend.fils).toBe(got.all.wallet.spentFils);
   });
 
   it('11 · shop — orders by status, top products, revenue; module off at B is an answer, not zeros', () => {

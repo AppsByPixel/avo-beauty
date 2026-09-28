@@ -1073,5 +1073,42 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(res.statusCode, res.body).toBe(200);
       expect(((res.json() as Json).items as Json[]).some((t) => t.kind === 'deposit_forfeit')).toBe(false);
     });
+
+    it("every deposit this suite's salon KEPT is in the Sales report and the Overview's spend, to the fil", async () => {
+      // The ledger's own answer: the salon_revenue leg of every forfeit. `upTo`
+      // because the sweep specs above settle at a FUTURE instant they pass in
+      // (slot end + grace), and a report window ends at the real now.
+      const ledgerKept = (upTo: 'all' | 'now') =>
+        num(sql`
+          SELECT coalesce(sum(l.amount_fils), 0)::bigint AS n
+            FROM ledger_entry l JOIN "transaction" t ON t.id = l.transaction_id
+           WHERE t.salon_id = ${SALON} AND t.kind::text = 'deposit_forfeit'
+             AND l.account = 'salon_revenue' AND l.direction = 'credit'
+             ${upTo === 'now' ? sql`AND t.created_at < now()` : sql``}`);
+      // And the bookings' own: settled_kept_fils, which the settle wrote beside it.
+      const bookingKept = await num(sql`
+        SELECT coalesce(sum(settled_kept_fils), 0)::bigint AS n FROM booking WHERE salon_id = ${SALON}`);
+      expect(await ledgerKept('all')).toBe(bookingKept);
+      const keptByNow = await ledgerKept('now');
+      expect(keptByNow).toBeGreaterThan(0);
+
+      const sales = await get(`/salons/${SALON}/reports/sales?period=30d`, bearer[MANAGER]!);
+      expect(sales.statusCode, sales.body).toBe(200);
+      const report = sales.json() as Json;
+      expect((report.columns as Json[]).at(-1)).toEqual({
+        header: 'Kept deposits KD',
+        key: 'keptDepositsFils',
+        type: 'money',
+      });
+      const kept = (report.rows as Json[]).reduce((n, r) => n + Number(r.keptDepositsFils), 0);
+      expect(kept).toBe(keptByNow);
+
+      const ov = await get(`/v1/salons/${SALON}/overview/analytics?period=30d`, bearer[MANAGER]!);
+      expect(ov.statusCode, ov.body).toBe(200);
+      const wallet = (ov.json() as Json).wallet as Json;
+      // The one charge this suite rang up (9.000 against a 5.005 deposit) is `Gross KD`.
+      expect(report.stat.value).toBe(9_000);
+      expect(wallet.spentFils).toBe(report.stat.value + kept);
+    });
   });
 });

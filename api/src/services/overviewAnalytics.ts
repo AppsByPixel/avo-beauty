@@ -80,7 +80,7 @@ import type { BranchFilter } from './branchFilter';
 import { at, int } from './metrics';
 import { resolveWindow, serialiseWindow, type Period, type PeriodWindow } from './period';
 import { NOT_VOIDED } from './reports';
-import { revenueJoin, revenueLeftJoin } from '../money/revenue';
+import { keptDepositJoin, revenueJoin, revenueLeftJoin } from '../money/revenue';
 import {
   parseDate,
   salonWallClock,
@@ -816,9 +816,16 @@ export async function computeOverviewAnalytics(
    * `loadedFils - bonusFils` and is a subtraction of two served integers rather
    * than a third figure that could disagree with them.
    *
-   * SPENT is `earned_fils` over settled, not-voided charges and shop orders — the
-   * `sales` report's `Gross KD` over the same window, which the int spec asserts.
-   * The deposit half of a booked visit left her wallet earlier and is spend here.
+   * SPENT is `earned_fils` over settled, not-voided charges and shop orders, PLUS
+   * every deposit the salon KEPT under its booking policy in the window (the
+   * `salon_revenue` leg of each settled `deposit_forfeit` — money/revenue.ts
+   * § keptDepositJoin). That is the `sales` report's `Gross KD` plus its
+   * `Kept deposits KD` over the same window, which the int spec asserts in fils.
+   * The deposit half of a booked visit left her wallet earlier and is spend here;
+   * so is a deposit she forfeited — it left her wallet at the hold and never came
+   * back. Before 2026-09-29 SPENT was `Gross KD` alone and missed the forfeits.
+   * `walletSpend` in the payment mix is the same figure and the same rows
+   * (charges, shop orders and forfeits), so the two widgets cannot disagree.
    *
    * LIABILITY is `sum(member.balance_fils)` now — what the salon's customers can
    * still spend. The server owns the balance (non-negotiable #2); this is that fact
@@ -852,7 +859,7 @@ export async function computeOverviewAnalytics(
          AND created_at < ${at(to)}
        GROUP BY 1
     `);
-    const spent = (
+    const sold = (
       await rows(sql`
         SELECT count(*) AS n, coalesce(sum(rev.earned_fils), 0)::bigint AS earned
           FROM "transaction" t
@@ -865,6 +872,22 @@ export async function computeOverviewAnalytics(
            ${NOT_VOIDED}
       `)
     )[0];
+    // The `sales` report's kept-deposits predicate, verbatim.
+    const kept = (
+      await rows(sql`
+        SELECT count(*) AS n, coalesce(sum(kept.amount_fils), 0)::bigint AS kept
+          FROM "transaction" t
+          ${keptDepositJoin('t')}
+         WHERE t.salon_id = ${salon.id}
+           AND t.kind = 'deposit_forfeit'
+           AND t.status = 'settled'
+           AND t.created_at >= ${at(from)}
+           AND t.created_at < ${at(to)}
+           ${NOT_VOIDED}
+      `)
+    )[0];
+    const spentFils = add(money(sold?.earned), money(kept?.kept));
+    const spentCount = int(sold?.n) + int(kept?.n);
     const liability = (
       await rows(sql`
         SELECT coalesce(sum(balance_fils), 0)::bigint AS total
@@ -883,13 +906,13 @@ export async function computeOverviewAnalytics(
       loadedFils,
       bonusFils: add(...loaded.map((x) => money(x.bonus))),
       topups: loaded.reduce((n, x) => n + int(x.n), 0),
-      spentFils: money(spent?.earned),
+      spentFils,
       liabilityFils: money(liability?.total),
     };
     paymentMix = {
       status: 'ok',
       topups: { knet: method('knet'), card: method('card'), applepay: method('applepay') },
-      walletSpend: { count: int(spent?.n), fils: money(spent?.earned) },
+      walletSpend: { count: spentCount, fils: spentFils },
     };
   }
 
