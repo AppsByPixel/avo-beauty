@@ -659,7 +659,8 @@ suite('the salon writes its own booking policy (0066)', () => {
       const res = await app.inject({
         method: 'POST',
         url: `/salons/${SALON}/bookings/${bk}/cancel`,
-        headers: { authorization: `Bearer ${bearer[MANAGER]}` },
+        // Required since 2026-09-29 (non-negotiable #4).
+        headers: { authorization: `Bearer ${bearer[MANAGER]}`, 'idempotency-key': `bp-scx-${randomUUID()}` },
       });
       expect(res.statusCode, res.body).toBe(200);
       expect((res.json() as Json).refundedFils).toBe(5_005);

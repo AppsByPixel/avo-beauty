@@ -2672,16 +2672,25 @@ export async function completeBooking(
  * booking returns money to a customer, and a cancellation is a record about a
  * slot the salon had committed to.
  *
- * NO IDEMPOTENCY KEY, for `cancelBooking`'s reason: this names one resource with
- * one live state, and the transition out of `deposit_held` happens under
- * `FOR UPDATE` inside this transaction. A second cancel blocks on the row lock,
- * re-reads a status that is no longer `deposit_held`, and is answered
- * `already_cancelled`. That holds for two DIFFERENT keys as well as for one
- * repeated, which a key does not.
+ * THE IDEMPOTENCY KEY IS REQUIRED (non-negotiable #4; DECISIONS.md, 2026-09-29,
+ * "The salon's cancel takes an Idempotency-Key"). Lane D found that this returns
+ * money without one. The row lock was never the gap: the transition out of
+ * `deposit_held` happens under `FOR UPDATE`, so a second cancel re-reads a status
+ * that is no longer held and is answered `already_cancelled`, for one key or two,
+ * and money moves once either way. The gap was the ANSWER. A dashboard that lost
+ * the response and retried was told `already_cancelled`, not how much came back
+ * or where. With the key, the retry replays the committed response byte for
+ * byte. A DIFFERENT key after completion still gets `already_cancelled` from the
+ * lock, which is the guarantee a key alone cannot give.
+ *
+ * Claimed FIRST, inside this transaction, on BOTH paths, the moneyless one
+ * included. The route cannot know which path the row takes before it reads it,
+ * and one endpoint with one contract is simpler for the dashboard than a key that
+ * is sometimes required. `markNoShow`'s shape.
  */
 export async function cancelByMerchant(
   db: Db,
-  params: { salonId: string; bookingId: string },
+  params: { salonId: string; bookingId: string; idempotency: BookingIdempotency },
   ctx: MerchantBookingContext,
 ): Promise<{
   booking: ReturnType<typeof serialiseBooking>;
@@ -2690,6 +2699,10 @@ export async function cancelByMerchant(
   transactionId: string | null;
 }> {
   return db.transaction(async (tx) => {
+    // THE CLAIM FIRST. A retry with the same key blocks on the unique index here,
+    // and the route replays the stored response.
+    const keyId = await claimKey(tx, params.idempotency);
+
     /**
      * UNLOCKED, to learn whether there is money and whose it is. `returnDeposit`'s
      * header says why the member row has to be locked FIRST when there is one: the
@@ -2757,13 +2770,15 @@ export async function cancelByMerchant(
         ipAddress: ctx.ipAddress ?? null,
         userAgent: ctx.userAgent ?? null,
       });
-      return {
+      const result = {
         // Reloaded, so `settlement` says the whole deposit came back.
         booking: serialiseBooking(await reloadBooking(tx, row.id)),
         refundedFils: row.depositFils,
-        balanceAfterFils: returned.balanceAfterFils,
-        transactionId: returned.transactionId,
+        balanceAfterFils: returned.balanceAfterFils as number,
+        transactionId: returned.transactionId as string | null,
       };
+      await completeKey(tx, keyId, { status: 200, body: result }, returned.transactionId);
+      return result;
     }
 
     // ---------------------------------------------------- the moneyless one --
@@ -2809,11 +2824,13 @@ export async function cancelByMerchant(
      * without it guessing from which keys are missing — the same argument
      * `chargeVoided` and `depositReturnedFils` make on their own responses.
      */
-    return {
+    const result = {
       booking: serialiseBooking(updated as BookingRow),
       refundedFils: 0,
       balanceAfterFils: null,
       transactionId: null,
     };
+    await completeKey(tx, keyId, { status: 200, body: result }, null);
+    return result;
   });
 }
