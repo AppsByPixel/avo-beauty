@@ -90,9 +90,11 @@ Hit the URL a minute before showing it to anybody.
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
 exists and is not what serves anything. **Deployed state as of 2026-09-29: both
-projects on `main` @ `405b20f`, database migrated to `0068`**. Live: API
-`avo-4579sakqb`, dashboard `avo-dashboard-6j6xmrlty` (bundle `index-NOlHGRA_.js`).
-Rollback targets: API `avo-r4b3xn22n`, dashboard `avo-dashboard-1c5t1v0ej`. **Rolling the API
+projects on `main`: API @ `405b20f`, dashboard @ `729609c` (the Overview layout, the
+scroll containment and the sign-in 429 copy; nothing under `api/` or `packages/` changed
+between them), database migrated to `0068`**. Live: API `avo-4579sakqb`, dashboard
+`avo-dashboard-exdknuraj` (bundle `index-BmxG6swy.js`). Rollback targets: API
+`avo-r4b3xn22n`, dashboard `avo-dashboard-6j6xmrlty` (405b20f) then `avo-dashboard-1c5t1v0ej`. **Rolling the API
 back alone is not safe against the new dashboard's writes' shapes in reverse** (the old API
 ignores an Idempotency-Key and a boost window; it is the NEW API that refuses the old
 dashboard), so roll back the dashboard first, then the API, deployed by hand from the CLI — **neither
