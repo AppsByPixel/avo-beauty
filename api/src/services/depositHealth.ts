@@ -199,6 +199,27 @@ export interface DepositRow {
   depositFils: Fils;
   noShowReturnDueAt: string;
   source: string;
+  /**
+   * WHICH WAY THE MONEY GOES ON A NO-SHOW: the booking's stamped
+   * `policy.noShow` (migration 0066), the same value `serialiseBooking` serves
+   * as `booking.policy.noShow`. Read from the ROW, never from the salon's
+   * current policy, because the stamp she booked under is the one that settles.
+   *
+   *   'keep'    the salon keeps the deposit when the no-show settles
+   *   'return'  it goes back to her wallet
+   *   null      LEGACY: booked before 0066 or at a salon with no published
+   *             policy. It settles as a full return, exactly as 'return' does,
+   *             and is served as null rather than 'return' so a client can tell
+   *             "no policy" from "a policy that returns".
+   *
+   * A FACT ABOUT THE BOOKING'S TERMS, NOT ABOUT HER. It says what the salon
+   * agreed to do with the money, and it is the same for every customer who
+   * booked under that version.
+   *
+   * On an `unclosed` row (no hold, no money) it is null by construction:
+   * `booking_policy_requires_hold`.
+   */
+  noShow: 'keep' | 'return' | null;
 
   /**
    * HOW OVERDUE, in whole minutes since `starts_at`. Floored, not rounded: "at
@@ -338,6 +359,17 @@ function filsFrom(value: unknown): Fils {
   return fils(n);
 }
 
+/**
+ * `booking.policy_no_show` → the wire. `booking_policy_no_show_valid` admits
+ * only these two or NULL. Anything else is refused rather than served, because
+ * the dashboard would draw it as a sentence about money.
+ */
+function noShowOf(value: unknown): 'keep' | 'return' | null {
+  if (value === null || value === undefined) return null;
+  if (value === 'keep' || value === 'return') return value;
+  throw new TypeError(`booking.policy_no_show arrived as ${String(value)}, which is not keep or return.`);
+}
+
 /** An ISO instant from a raw-`sql` timestamptz, or null. `metrics.ts § rawNext`. */
 function instant(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -439,6 +471,7 @@ export async function computeDepositHealth(
       booking.deposit_fils             AS deposit_fils,
       booking.no_show_return_due_at    AS no_show_return_due_at,
       booking.source                   AS source,
+      booking.policy_no_show           AS policy_no_show,
       member.name                      AS member_name,
       member.phone                     AS member_phone,
       member.erased_at                 AS member_erased_at,
@@ -505,6 +538,7 @@ export async function computeDepositHealth(
       depositFils: filsFrom(r.deposit_fils),
       noShowReturnDueAt: new Date(r.no_show_return_due_at as string | Date).toISOString(),
       source: String(r.source),
+      noShow: noShowOf(r.policy_no_show),
       overdueMinutes: int(r.overdue_minutes),
       returnOverdueMinutes:
         overdueReturn === null || overdueReturn === undefined ? null : int(overdueReturn),

@@ -659,7 +659,8 @@ suite('the salon writes its own booking policy (0066)', () => {
       const res = await app.inject({
         method: 'POST',
         url: `/salons/${SALON}/bookings/${bk}/cancel`,
-        headers: { authorization: `Bearer ${bearer[MANAGER]}` },
+        // Required since 2026-09-29 (non-negotiable #4).
+        headers: { authorization: `Bearer ${bearer[MANAGER]}`, 'idempotency-key': `bp-scx-${randomUUID()}` },
       });
       expect(res.statusCode, res.body).toBe(200);
       expect((res.json() as Json).refundedFils).toBe(5_005);
@@ -963,6 +964,42 @@ suite('the salon writes its own booking policy (0066)', () => {
         expect([200, 409], res.body).toContain(res.statusCode);
         if (res.statusCode === 409) expect(JSON.parse(res.body).error).toBe('already_no_show');
       }
+    });
+  });
+
+  // ====================================================== deposit health ==
+
+  /**
+   * GET /salons/{id}/deposits rows carry the booking's stamped `policy.noShow`,
+   * so the dashboard can say which way each overdue deposit goes. From the ROW,
+   * never the salon's current policy: the last publish below is `return`, and
+   * the `keep` booking must still say `keep`.
+   */
+  describe('deposit-health rows carry the stamped noShow', () => {
+    it("keep, return and legacy null, each from the booking's own stamp", async () => {
+      const keepId = String(
+        (await publish({ noShow: 'keep', cancellation: RULES, text: { en: 'Keep.', ar: '' } })).policy.id,
+      );
+      const returnId = String(
+        (await publish({ noShow: 'return', cancellation: RULES, text: { en: 'Return.', ar: '' } })).policy.id,
+      );
+      const kept = await heldBooking(await customer(), { startsInMinutes: -10, policyId: keepId });
+      const returned = await heldBooking(await customer(), { startsInMinutes: -10, policyId: returnId });
+      const legacy = await heldBooking(await customer(), { startsInMinutes: -10, policyId: null });
+
+      const res = await get(`/salons/${SALON}/deposits`, bearer[MANAGER]!);
+      expect(res.statusCode, res.body).toBe(200);
+      const rows = (res.json() as Json).rows as Json[];
+      const noShowOf = (id: string) => {
+        const row = rows.find((r) => r.bookingId === id);
+        expect(row, `${id} is not on the deposit-health rows`).toBeTruthy();
+        // PRESENT on every row, null included, never omitted.
+        expect(row).toHaveProperty('noShow');
+        return row!.noShow;
+      };
+      expect(noShowOf(kept)).toBe('keep');
+      expect(noShowOf(returned)).toBe('return');
+      expect(noShowOf(legacy)).toBeNull();
     });
   });
 

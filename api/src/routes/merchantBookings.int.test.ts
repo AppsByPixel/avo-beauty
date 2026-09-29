@@ -239,16 +239,25 @@ suite('the merchant writes an appointment down, and then changes it', () => {
     });
   }
 
+  /**
+   * The four transitions. A CANCEL carries a fresh Idempotency-Key unless `key`
+   * says otherwise (a string to reuse one, `null` to send none): since
+   * 2026-09-29 the salon's cancel requires one, because it can return money.
+   */
   function act(
     verb: 'reschedule' | 'reassign' | 'cancel' | 'complete',
     bookingId: string,
     body: Record<string, unknown> | undefined = undefined,
-    opts: { bearer?: string; salonId?: string } = {},
+    opts: { bearer?: string; salonId?: string; key?: string | null } = {},
   ) {
+    const key = opts.key === undefined ? (verb === 'cancel' ? `mb-cx-${randomUUID()}` : null) : opts.key;
     return app.inject({
       method: 'POST',
       url: `/salons/${opts.salonId ?? SALON}/bookings/${bookingId}/${verb}`,
-      headers: { authorization: `Bearer ${opts.bearer ?? managerBearer}` },
+      headers: {
+        authorization: `Bearer ${opts.bearer ?? managerBearer}`,
+        ...(key !== null ? { 'idempotency-key': key } : {}),
+      },
       ...(body ? { payload: body } : {}),
     });
   }
@@ -796,6 +805,79 @@ suite('the merchant writes an appointment down, and then changes it', () => {
       'the deposit_held release',
     );
     expect(posting.direction).toBe('debit');
+  });
+
+  /**
+   * THE SALON'S CANCEL TAKES AN IDEMPOTENCY-KEY (non-negotiable #4; DECISIONS.md
+   * 2026-09-29). Lane D found it returned money without one. The row lock always
+   * stopped a double refund; what a key adds is the ORIGINAL ANSWER on a retry.
+   */
+  it('18a · a cancel with NO key is refused 400 before anything moves', async () => {
+    const m = await customer();
+    const bk = await appBooking(m, ARTIST_A, at(22, 60), 30);
+    const balanceBefore = await balanceOf(m);
+    const txBefore = await txCountFor(m);
+
+    const res = await act('cancel', bk, undefined, { key: null });
+    expect(res.statusCode, res.body).toBe(400);
+    expect((res.json() as { error: string }).error).toBe('idempotency_key_required');
+
+    expect(String((await rowOf(bk)).status)).toBe('deposit_held');
+    expect(await balanceOf(m)).toBe(balanceBefore);
+    expect(await txCountFor(m)).toBe(txBefore);
+  });
+
+  it('18b · a retry with the SAME key replays the committed answer, and the deposit returns once', async () => {
+    const m = await customer();
+    const bk = await appBooking(m, ARTIST_A, at(22, 120), 30);
+    const balanceBefore = await balanceOf(m);
+    const key = `mb-cx-${randomUUID()}`;
+
+    const first = await act('cancel', bk, undefined, { key });
+    expect(first.statusCode, first.body).toBe(200);
+    const retry = await act('cancel', bk, undefined, { key });
+    expect(retry.statusCode, retry.body).toBe(200);
+    // Byte for byte, not merely the same money: the retry is told what happened.
+    expect(retry.json()).toEqual(first.json());
+    expect((retry.json() as { refundedFils: number }).refundedFils).toBe(5000);
+
+    expect(await balanceOf(m)).toBe(balanceBefore + 5000);
+    const returns = await exec(sql`
+      SELECT count(*)::int AS n FROM "transaction" WHERE member_id = ${m} AND kind = 'deposit_return'`);
+    expect(Number(returns[0]?.n)).toBe(1);
+  });
+
+  it('18c · a SECOND key after completion is refused already_cancelled, and nothing moves again', async () => {
+    const m = await customer();
+    const bk = await appBooking(m, ARTIST_A, at(22, 180), 30);
+    const balanceBefore = await balanceOf(m);
+
+    const first = await act('cancel', bk);
+    expect(first.statusCode, first.body).toBe(200);
+    const second = await act('cancel', bk);
+    expect(second.statusCode, second.body).toBe(409);
+    expect((second.json() as { error: string }).error).toBe('already_cancelled');
+    expect(await balanceOf(m)).toBe(balanceBefore + 5000);
+  });
+
+  it('18d · the same key on a DIFFERENT booking is refused 422, not replayed', async () => {
+    const m = await customer();
+    const a = await appBooking(m, ARTIST_A, at(22, 240), 30);
+    const b = await appBooking(m, ARTIST_A, at(22, 300), 30);
+    const key = `mb-cx-${randomUUID()}`;
+    expect((await act('cancel', a, undefined, { key })).statusCode).toBe(200);
+    const reused = await act('cancel', b, undefined, { key });
+    expect(reused.statusCode, reused.body).toBe(422);
+    expect((reused.json() as { error: string }).error).toBe('idempotency_key_reused');
+    expect(String((await rowOf(b)).status)).toBe('deposit_held');
+  });
+
+  it('18e · the gate comes before the key: perms.void off with no key is 403, not 400', async () => {
+    const m = await customer();
+    const bk = await appBooking(m, ARTIST_A, at(22, 360), 30);
+    const res = await act('cancel', bk, undefined, { bearer: frontdeskBearer, key: null });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(String((await rowOf(bk)).status)).toBe('deposit_held');
   });
 
   it('19 · the change window does NOT apply to the merchant', async () => {

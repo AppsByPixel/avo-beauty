@@ -160,9 +160,52 @@ suite('branch boosts: a duration and a stop, decided by the server (0067)', () =
 
   const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
 
-  /** Publish 2x visits (+20% top-ups) at S's one branch, with the given window. */
+  /**
+   * One real top-up at salon S, settled through the sandbox gateway. Returns the
+   * transaction's `promo_bonus_fils` and its tier `bonus_fils`, the two columns
+   * services/topup.ts keeps apart.
+   */
+  async function topUpBonuses(): Promise<{ promo: number; tier: number }> {
+    const sandbox = (await import('../gateway')).sandboxGateway();
+    if (!sandbox) throw new Error('this suite requires GATEWAY_DRIVER=sandbox');
+    const topup = await import('../services/topup');
+    const { topUpIntent } = await import('../db/schema/topup');
+    const { eq } = await import('drizzle-orm');
+
+    const m = await customer();
+    const wallet = (await issue(db, { principalKind: 'member', memberId: m, salonId: S, scope: 'wallet' }))
+      .accessToken;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/topups',
+      headers: { authorization: `Bearer ${wallet}`, 'idempotency-key': `bw-topup-${randomUUID()}` },
+      payload: { amountFils: 5000, method: 'knet' },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const [row] = await db.select().from(topUpIntent).where(eq(topUpIntent.id, (res.json() as Json).id)).limit(1);
+    if (!row) throw new Error('no intent');
+    await sandbox.setOutcome(row.pspReference as string, 'succeeded');
+    const settled = await topup.settleFromGatewayRead(
+      db,
+      row as unknown as import('../services/topup').TopUpIntentRow,
+      'succeeded',
+      row.amountFils,
+    );
+    expect(settled.kind).toBe('applied');
+    const [t] = await exec(sql`
+      SELECT promo_bonus_fils::int AS promo, bonus_fils::int AS tier
+        FROM "transaction" WHERE member_id = ${m} AND kind = 'topup'`);
+    return { promo: Number(t?.promo), tier: Number(t?.tier) };
+  }
+  const promoOf = async () => (await topUpBonuses()).promo;
+
+  /**
+   * Publish 2x visits at S's one branch, with the given window. `topup: 0` because
+   * a branch boost carries no top-up bonus since 0068. It was `topup: 20` before,
+   * which the PUT now refuses with `boost_topup_removed`.
+   */
   async function publish(window: { startsAt?: string | null; endsAt?: string | null } = {}) {
-    const res = await put({ [branchOf(S)]: { visit: 2, topup: 20, stamp: 1, ...window } });
+    const res = await put({ [branchOf(S)]: { visit: 2, topup: 0, stamp: 1, ...window } });
     expect(res.statusCode, res.body).toBe(200);
     return res.json() as Json;
   }
@@ -175,7 +218,7 @@ suite('branch boosts: a duration and a stop, decided by the server (0067)', () =
       const set = await publish({ endsAt });
       expect(set.boosts[branchOf(S)]).toEqual({
         visit: 2,
-        topup: 20,
+        topup: 0,
         stamp: 1,
         startsAt: null,
         endsAt: new Date(endsAt).toISOString(),
@@ -239,42 +282,10 @@ suite('branch boosts: a duration and a stop, decided by the server (0067)', () =
     });
 
     it('a top-up never earns a branch boost, running or expired — a top-up has no branch', async () => {
-      // services/topup.ts passes `branchId: null` to loadPromotionInputs, so the
-      // branch boost's `topup` points are skipped by construction (branchSource.test.ts
-      // pins the call). The predicate is the same function either way; this pins
-      // that an expired boost cannot leak into a top-up by some other route.
-      const sandbox = (await import('../gateway')).sandboxGateway();
-      if (!sandbox) throw new Error('this suite requires GATEWAY_DRIVER=sandbox');
-      const topup = await import('../services/topup');
-      const { topUpIntent } = await import('../db/schema/topup');
-      const { eq } = await import('drizzle-orm');
-
-      const promoOf = async () => {
-        const m = await customer();
-        const wallet = (await issue(db, { principalKind: 'member', memberId: m, salonId: S, scope: 'wallet' }))
-          .accessToken;
-        const res = await app.inject({
-          method: 'POST',
-          url: '/topups',
-          headers: { authorization: `Bearer ${wallet}`, 'idempotency-key': `bw-topup-${randomUUID()}` },
-          payload: { amountFils: 5000, method: 'knet' },
-        });
-        expect(res.statusCode, res.body).toBe(200);
-        const [row] = await db.select().from(topUpIntent).where(eq(topUpIntent.id, (res.json() as Json).id)).limit(1);
-        if (!row) throw new Error('no intent');
-        await sandbox.setOutcome(row.pspReference as string, 'succeeded');
-        const settled = await topup.settleFromGatewayRead(
-          db,
-          row as unknown as import('../services/topup').TopUpIntentRow,
-          'succeeded',
-          row.amountFils,
-        );
-        expect(settled.kind).toBe('applied');
-        const [t] = await exec(sql`
-          SELECT promo_bonus_fils::int AS promo FROM "transaction" WHERE member_id = ${m} AND kind = 'topup'`);
-        return Number(t?.promo);
-      };
-
+      // services/topup.ts passes `branchId: null` to loadPromotionInputs, so no
+      // branch boost is found for a top-up (branchSource.test.ts pins the call),
+      // and since 0068 a boost carries no top-up points anyway. This pins that an
+      // expired boost cannot leak into a top-up by some other route.
       await publish({ endsAt: inMinutes(120) });
       await exec(sql`
         UPDATE boost SET ends_at = now() - interval '1 minute' WHERE salon_id = ${S} AND branch_id = ${branchOf(S)}`);
@@ -304,8 +315,11 @@ suite('branch boosts: a duration and a stop, decided by the server (0067)', () =
         SELECT action, kind::text AS kind, detail, metadata FROM audit_log
          WHERE salon_id = ${S} AND action = 'Boost stopped' ORDER BY created_at DESC LIMIT 1`);
       expect(audit).toMatchObject({ action: 'Boost stopped', kind: 'rules' });
-      expect(String(audit?.detail)).toContain(`${branchOf(S)}: 2× visits, +20% top-ups, 1× stamps`);
-      expect((audit?.metadata as Json).stopped).toMatchObject({ visit: 2, topup: 20, stamp: 1 });
+      // No top-up part since 0068: it could only ever read "+0% top-ups".
+      expect(String(audit?.detail)).toContain(`${branchOf(S)}: 2× visits, 1× stamps`);
+      expect(String(audit?.detail)).not.toContain('top-ups');
+      expect((audit?.metadata as Json).stopped).toMatchObject({ visit: 2, stamp: 1 });
+      expect((audit?.metadata as Json).stopped).not.toHaveProperty('topup');
       expect((audit?.metadata as Json).branchId).toBe(branchOf(S));
     });
 
@@ -377,6 +391,46 @@ suite('branch boosts: a duration and a stop, decided by the server (0067)', () =
       expect((guessed.json() as Json).error).toBe('unknown_branch');
       expect(await boostRow()).toMatchObject({ visit: 2, stopped_at: null });
       expect(await visitsEarned()).toBe(2);
+    });
+  });
+  // ============================================ 0068, no top-up on a boost ==
+
+  describe('a branch boost pays no top-up bonus (0068, Aftab: "Remove it from boosts")', () => {
+    it('PUT with a non-zero topup is refused 400 boost_topup_removed, and nothing is written', async () => {
+      await publish();
+      const before = await boostRow();
+      const res = await put({ [branchOf(S)]: { visit: 3, topup: 10, stamp: 1 } });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json() as Json).toMatchObject({ error: 'boost_topup_removed', branchId: branchOf(S) });
+      expect(await boostRow()).toEqual(before);
+    });
+
+    it('topup left out is accepted, and the wire still carries it as 0 so installed apps keep parsing', async () => {
+      const res = await put({ [branchOf(S)]: { visit: 2, stamp: 2 } });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(((res.json() as Json).boosts[branchOf(S)] as Json)).toMatchObject({ visit: 2, topup: 0, stamp: 2 });
+      expect(await boostRow()).toMatchObject({ topup: 0 });
+    });
+
+    it('a top-up at a branch that has a running boost earns no boost bonus, and the tier bonus is unchanged', async () => {
+      await put({});
+      const plain = await topUpBonuses();
+      await publish({ endsAt: inMinutes(120) });
+      const boosted = await topUpBonuses();
+      expect(boosted.promo).toBe(0);
+      expect(boosted.tier).toBe(plain.tier);
+      expect(boosted).toEqual(plain);
+    });
+
+    it('the database refuses a non-zero topup even when the API is bypassed', async () => {
+      let code: string | undefined;
+      try {
+        await exec(sql`UPDATE boost SET topup = 10 WHERE salon_id = ${S} AND branch_id = ${branchOf(S)}`);
+      } catch (err) {
+        code = (err as { code?: string }).code ?? (err as { cause?: { code?: string } }).cause?.code;
+      }
+      expect(code).toBe('23514');
+      expect(await boostRow()).toMatchObject({ topup: 0 });
     });
   });
 });

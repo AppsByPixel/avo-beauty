@@ -134,6 +134,8 @@ interface DepositRowWire {
   depositFils: number;
   noShowReturnDueAt: string;
   source: string;
+  /** The booking's stamped `policy.noShow`; null on a legacy row. */
+  noShow: 'keep' | 'return' | null;
   overdueMinutes: number;
   returnOverdueMinutes: number | null;
 }
@@ -619,6 +621,16 @@ suite('deposit health — what she is holding, and what never resolved', () => {
     // The future booking is held and is NOT overdue.
     expect(b.rows.map((r) => r.bookingId)).not.toContain(BK_FUTURE);
     expect(b.scheduled).toEqual({ bookings: 1, fils: FUTURE_FILS });
+
+    /**
+     * WHICH WAY THE MONEY GOES, on every row and never omitted. SAL-AMARA has no
+     * published policy, so all three are LEGACY and say null. keep and return are
+     * proved in bookingPolicy.int.test.ts, on a salon that can publish one.
+     */
+    for (const row of [waiting, owed, open]) {
+      expect(row).toHaveProperty('noShow');
+      expect(row.noShow).toBeNull();
+    }
   });
 
   // ============================================================== guests ==
