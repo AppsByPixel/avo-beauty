@@ -73,6 +73,16 @@ const DECIDED_CHIPS = [
 
 export function Approvals() {
   const campaigns = usePlatformCampaigns();
+  /*
+   * "WAITING ON YOU" IS ITS OWN `?status=pending` READ. It was built by filtering
+   * the unfiltered read, which is `LIMIT 200` newest-first with no cursor — so
+   * once 200 newer campaigns had been decided, an older submission still pending
+   * dropped off the queue entirely, and the reviewer was told "nothing queued"
+   * over a campaign nobody had released. The pending read is ordered OLDEST
+   * first on the server (`routes/campaigns.ts`, `onlyPending`), so the longest
+   * wait is the first card.
+   */
+  const pendingRead = usePlatformCampaigns('pending');
   const url = useUrlFilters(APPROVAL_FILTERS);
   const decidedStatus = url.values.decided;
   // Only asked for while a chip is on. Disabled, it shares the unfiltered key above.
@@ -86,20 +96,21 @@ export function Approvals() {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
 
-  if (campaigns.isError) {
+  if (campaigns.isError || pendingRead.isError) {
+    const failed = pendingRead.isError ? pendingRead : campaigns;
     return (
       <SectionError
-        error={campaigns.error}
+        error={failed.error}
         forbiddenTitle="You don't have access to approvals"
         failedTitle="Couldn't load the approval queue"
-        onRetry={() => void campaigns.refetch()}
-        retrying={campaigns.isFetching}
+        onRetry={() => void failed.refetch()}
+        retrying={failed.isFetching}
       />
     );
   }
 
   const items = campaigns.data ?? [];
-  const pending = items.filter((c) => c.status === 'pending');
+  const pending = pendingRead.data ?? [];
   const decided =
     decidedStatus === '' ? items.filter((c) => c.status !== 'pending') : (decidedRead.data ?? []);
 
@@ -116,7 +127,7 @@ export function Approvals() {
           <div className="approvals__queuehead">
             <h2 className="approvals__h2 avo-display">Waiting on you</h2>
             <span className="approvals__note">
-              {campaigns.isPending
+              {pendingRead.isPending
                 ? ''
                 : pending.length === 0
                   ? 'nothing queued'
@@ -124,7 +135,7 @@ export function Approvals() {
             </span>
           </div>
 
-          {campaigns.isPending ? (
+          {pendingRead.isPending ? (
             <Card className="approvals__card">
               <Skeleton width="38%" height={13} />
               <Skeleton width="70%" height={17} />
@@ -258,7 +269,7 @@ export function Approvals() {
           )}
         </div>
 
-        <ThrottlePanel policy={policy} items={items} />
+        <ThrottlePanel policy={policy} items={items} awaiting={pending.length} />
       </div>
     </div>
   );
@@ -522,9 +533,12 @@ function DecidedRow({ campaign: c }: { campaign: Campaign }) {
 function ThrottlePanel({
   policy,
   items,
+  awaiting,
 }: {
   policy: ReturnType<typeof useMessagingPolicy>;
   items: Campaign[];
+  /** From the `?status=pending` read, so it agrees with the queue beside it. */
+  awaiting: number;
 }) {
   const update = useUpdateMessagingPolicy();
 
@@ -626,7 +640,7 @@ function ThrottlePanel({
       <Card className="approvals__stats">
         <h2 className="approvals__h2 avo-display">This month</h2>
         <StatRow label="Submitted" value={items.length} />
-        <StatRow label="Awaiting review" value={items.filter((c) => c.status === 'pending').length} />
+        <StatRow label="Awaiting review" value={awaiting} />
         <StatRow label="Sent" value={items.filter((c) => c.status === 'sent').length} />
         <StatRow
           label="Approved, not yet sent"

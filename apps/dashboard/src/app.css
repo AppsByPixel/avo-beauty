@@ -2524,6 +2524,149 @@ a:hover {
   color: var(--avo-text-muted-strong);
 }
 
+/*
+ * Settings → Booking policy (2026-09-29). NEW WORK — the design draws no such
+ * card. Every size and colour below is one this screen already uses: 12.5px
+ * muted for captions (`.settings__sub`), 13.5px body (`.settings__hours-row`),
+ * the hairline and the foot's strong-muted ink, and `.mk__textarea`'s textarea.
+ */
+.policy {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.policy__loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.policy__version,
+.policy__readonly,
+.policy__none,
+.policy__notice-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-strong);
+}
+
+.policy__readonly {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--avo-surface-alt);
+}
+
+.policy__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy__rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy__rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.policy__rule-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+}
+
+.policy__rule-word {
+  color: var(--avo-text-muted-strong);
+}
+
+.policy__rule-arrow {
+  color: var(--avo-text-muted);
+}
+
+.policy__num {
+  width: 64px;
+  text-align: center;
+}
+
+.policy__remove {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--avo-danger-text);
+  cursor: pointer;
+}
+
+.policy__preview {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 13.5px;
+  color: var(--avo-ink);
+}
+
+.policy__textarea {
+  line-height: 1.5;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.policy__count {
+  align-self: flex-end;
+  font-size: 11.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+.policy__publish {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.policy__result {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-strong);
+}
+
+.policy__facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.policy__facts dt {
+  font-size: 11px;
+  color: var(--avo-text-muted-label);
+}
+
+.policy__facts dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  color: var(--avo-ink);
+}
+
+.policy__text {
+  white-space: pre-wrap;
+}
+
 .settings__hours-row {
   display: flex;
   align-items: center;
@@ -3414,6 +3557,18 @@ a:hover {
 }
 
 .appts__due {
+  white-space: nowrap;
+}
+
+/* Where a settled deposit went — under the deposit, on the list and in the popover. */
+.appts__settled {
+  display: block;
+  /* Body type, not the deposit figure's display face: it is a caption under it. */
+  font-family: var(--avo-font-ui);
+  font-weight: 400;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--avo-text-muted-strong);
   white-space: nowrap;
 }
 
@@ -4342,6 +4497,11 @@ a:hover {
   margin: 1px 0 0;
   font-size: 13px;
   color: var(--avo-ink);
+}
+
+/* The popover's half-width cell is narrower than the list's; let the split wrap. */
+.apweek__pop-facts .appts__settled {
+  white-space: normal;
 }
 
 .apweek__pop-acts {

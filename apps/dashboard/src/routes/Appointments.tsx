@@ -34,6 +34,7 @@ import {
 } from '../api/bookings.js';
 import { useBookableArtists } from '../api/artists.js';
 import { formatWindowDay } from '../api/reports.js';
+import { useBookingPolicy } from '../api/bookingPolicy.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { AppointmentForm } from './AppointmentForm.js';
@@ -56,7 +57,7 @@ import { DATE_PARAM, enumParam, useUrlFilters } from './listFilters.js';
 import { whenLabel } from './appointmentWhen.js';
 import { readBookingFocus, type BookingFocus } from './appointmentHref.js';
 import { DepositHealth } from './DepositHealth.js';
-import { formatReturnWindow } from './noShowWindow.js';
+import { NoShowBannerCopy, SettlementNote } from './depositCopy.js';
 import { SectionError, WriteError } from './sectionState.js';
 
 /**
@@ -303,6 +304,12 @@ export interface RowControls {
 export function Appointments() {
   const navigate = useNavigate();
   const salon = useSalon();
+  /*
+   * THE SALON'S PUBLISHED POLICY, for the banner's no-show rule. Ungated on the
+   * server — any staff member of the salon may read it — so it cannot refuse a
+   * merchant who can see this board.
+   */
+  const policy = useBookingPolicy();
   const session = useSession('merchant');
   const mark = useMarkNoShow();
 
@@ -689,16 +696,11 @@ export function Appointments() {
         the copy — it sends a merchant looking for something she cannot find.
         The link is drawn now, so the sentence is whole. Verbatim, both halves.
 
-        AND THE HOUR IS THE SALON'S HOUR, NOT THE DESIGN'S.
-        The design writes `1 hour` into the markup because the bundle has no
-        control that could change it. Settings now has one — the merchant picks
-        15 minutes / 30 minutes / 1 hour / 2 hours / 4 hours, the server holds
-        `noShowReturnMinutes`, and a salon set to 4 hours was still told "1 hour"
-        HERE, on the board where she decides whether to mark a customer. A rule
-        stated wrong on the screen where it is acted on is worse than not stated.
-        `formatReturnWindow` is the SAME function the Settings sentence and its
-        option labels use (`routes/noShowWindow.ts`), so the two screens cannot
-        drift apart at any value — including the values no preset offers.
+        AND THE HOUR IS THE SALON'S HOUR, NOT THE DESIGN'S — for a salon with
+        no policy. The legacy line renders the salon's stored
+        `noShowReturnMinutes` through `formatReturnWindow`. The merchant can no
+        longer set it (console-only since lane A's be36b9a), but a salon that
+        never published a policy still settles by it.
 
         WHAT SHOWS BEFORE THE SALON LANDS: NOTHING. NOT A DEFAULT, NOT HALF A
         SENTENCE.
@@ -722,11 +724,27 @@ export function Appointments() {
             (a card that grew a row AFTER it appeared finished).
         `salon.isError` never reaches this line: `SectionError` returned above.
       */}
-      {salon.isSuccess ? (
+      {/*
+        THE RULE IS THE SALON'S PUBLISHED POLICY NOW (migration 0066). The
+        design's sentence — "Deposits auto-return … <b>1 hour</b> after a missed
+        slot" — is true only of a salon that has never published one, and is
+        shown for exactly that salon, with its own stored window. A salon with a
+        policy is told what it chose: keep, or return to her wallet, settled an
+        hour after the slot or when staff mark it. `depositCopy.tsx` owns both
+        wordings and the Settings foot uses the same file.
+
+        Nothing renders until BOTH reads land, for the reason the note above
+        gives: a default here would be a wrong claim about her customers' money
+        with a shorter lifetime. A failed policy read renders nothing rather
+        than the legacy line, because "no policy" and "could not ask" are
+        different facts.
+      */}
+      {salon.isSuccess && policy.isSuccess ? (
         <InfoBanner icon={<ClockGlyph />}>
-          Deposits auto-return to the customer&rsquo;s wallet{' '}
-          <b>{formatReturnWindow(salon.data.noShowReturnMinutes)}</b> after a missed slot — the
-          money never leaves the ecosystem. Use <b>Mark no-show</b> only for edge cases.
+          <NoShowBannerCopy
+            policy={policy.data}
+            legacyMinutes={salon.data.noShowReturnMinutes}
+          />
         </InfoBanner>
       ) : null}
 
@@ -1160,6 +1178,7 @@ export function BookingRow(props: BookingActionsProps & { focused?: boolean }) {
           the formatter and not the label.
         */}
         <Money amount={parseFils(booking.depositFils)} withUnit />
+        <SettlementNote booking={booking} />
       </td>
       <td>
         <BookingActions {...props} />
@@ -1241,9 +1260,16 @@ export function BookingActions({
         status was not a sufficient condition: there is a real timestamp
         sitting there, and it is about nothing.
       */}
+      {/*
+        AND THE VERB IS THE BOOKING'S OWN POLICY. A booking stamped under a
+        `keep` policy is not returned if missed — the salon keeps it at that
+        instant — so "Returns" over it would promise her money she will not get.
+        The STAMP decides, never the salon's current policy: a later publish
+        does not change what an existing booking does.
+      */}
       {booking.status === 'deposit_held' && held ? (
         <span className="appts__due">
-          Returns{' '}
+          {booking.policy?.noShow === 'keep' ? 'Kept' : 'Returns'}{' '}
           <time dateTime={booking.noShowReturnDueAt}>
             {whenLabel(booking.noShowReturnDueAt, controls.timezone)}
           </time>{' '}
@@ -1805,3 +1831,4 @@ function ClockGlyph() {
     </svg>
   );
 }
+

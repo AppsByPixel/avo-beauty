@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import type { UseQueryResult } from '@tanstack/react-query';
 import {
   fils,
   formatFils,
   hhmmToMinutes,
   socialUrl,
   visibleSocialLinks,
+  type BookingPolicy,
   type Branch,
   type Salon,
   type SocialLink,
@@ -13,14 +15,21 @@ import {
   Button,
   Card,
   ErrorState,
+  InlineError,
   Pill,
+  Segmented,
   Select,
   Skeleton,
   Stepper,
   TextField,
   Toggle,
-  type SelectOption,
+  type SegmentedOption,
 } from '@avo/ui';
+import {
+  useBookingPolicy,
+  usePublishBookingPolicy,
+  type BookingPolicyPublished,
+} from '../api/bookingPolicy.js';
 import { useSalon } from '../api/salon.js';
 import {
   useAddBranch,
@@ -42,7 +51,21 @@ import {
   type BusinessHours,
   type Span,
 } from './businessHours.js';
-import { formatReturnWindow } from './noShowWindow.js';
+import { whenLabel } from './appointmentWhen.js';
+import {
+  MAX_CANCELLATION_RULES,
+  MAX_POLICY_TEXT,
+  draftFrom,
+  draftToInput,
+  fieldForServerError,
+  parsedRules,
+  ruleSentence,
+  validateDraft,
+  type DraftRule,
+  type PolicyDraft,
+  type RowError,
+} from './bookingPolicyRules.js';
+import { NoShowFootCopy } from './depositCopy.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { Tills } from './Tills.js';
 
@@ -55,6 +78,10 @@ import { Tills } from './Tills.js';
  * the API has had two fields for it since decision 88, and a merchant who cannot
  * reach the second one cannot do what Aftab's item 11 asks. See § receipt
  * channels for what the extra row may and may not say.
+ *
+ * THE BOOKING POLICY IS A SEVENTH PANEL (2026-09-29), directly under the
+ * deposit, and it replaced the deposit card's no-show return window — see
+ * § deposit and § booking policy below.
  *
  * SOCIAL LINKS ARE BUILT HERE NOW, and this header said they were not.
  *
@@ -128,6 +155,13 @@ export function Settings() {
    * rather than share anything.
    */
   const social = useUpdateSocialLink();
+  /*
+   * The booking policy has its own read and its own write. The read is not
+   * permission-gated, so it runs for every staff member; the panel decides
+   * whether it is editable.
+   */
+  const policy = useBookingPolicy();
+  const publishPolicy = usePublishBookingPolicy();
   const salon = salonQuery.data;
 
   /*
@@ -226,9 +260,26 @@ export function Settings() {
           />
           <ModulesPanel salon={salon} update={update} />
           <div className="settings__pair">
-            <DepositPanel salon={salon} update={update} />
+            <DepositPanel
+              salon={salon}
+              update={update}
+              policy={policy.isSuccess ? policy.data : undefined}
+            />
             <BusinessHoursPanel salon={salon} />
           </div>
+          {/*
+            THE BOOKING POLICY SITS DIRECTLY UNDER THE DEPOSIT, full width: it is
+            the rule for what happens to that deposit, and it replaces the return
+            window that card used to carry. Full width because a cut-off row
+            ("At least [24] hours before → [100] % back  Remove") wraps in half a
+            column, and a rule that breaks across lines is harder to read as one.
+          */}
+          <BookingPolicyPanel
+            policy={policy}
+            timezone={salon?.timezone ?? null}
+            canEdit
+            publish={publishPolicy}
+          />
           {/*
             * `settings__stack` IS BACK, AND THE NOTE THAT REMOVED IT WAS RIGHT.
             *
@@ -263,10 +314,23 @@ export function Settings() {
           </div>
         </>
       ) : (
-        <ErrorState
-          title="You don't have access to salon settings"
-          body="You don't have permission to change loyalty settings. A manager can grant it."
-        />
+        <>
+          <ErrorState
+            title="You don't have access to salon settings"
+            body="You don't have permission to change loyalty settings. A manager can grant it."
+          />
+          {/*
+            READ-ONLY, NOT HIDDEN. The policy read is ungated — her customers
+            read it before they book — so staff without `perms.loyalty` may read
+            it too. The panel says why it cannot be edited.
+          */}
+          <BookingPolicyPanel
+            policy={policy}
+            timezone={salon?.timezone ?? null}
+            canEdit={false}
+            publish={publishPolicy}
+          />
+        </>
       )}
 
       {/*
@@ -821,128 +885,35 @@ function ModuleRow({
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- * THE NO-SHOW RETURN WINDOW — NEW WORK, AND A LIST RATHER THAN A STEPPER
+ * THE NO-SHOW RETURN WINDOW IS GONE FROM THIS CARD — THE SALON'S POLICY SAYS IT
  * ═══════════════════════════════════════════════════════════════════════════
- * Aftab's item 6: "what if they dont have enough payment (sometimes they dont
- * have money but lock the booking and they dont come) deposit health option for
- * merchants".
+ * This card carried a "Return window" select (15 minutes … 4 hours) writing
+ * `noShowReturnMinutes` through `PATCH /salons/{id}`. Lane A's be36b9a moved that
+ * field out of `MERCHANT_EDITABLE` into `PLATFORM_ONLY_EDITABLE`, so every pick
+ * now answers `400 not_editable`. The rule it set is replaced by the salon's own
+ * booking policy (migration 0066; DECISIONS, the fourth list): the salon chooses
+ * whether a no-show keeps or returns the deposit, in `BookingPolicyPanel` below.
+ * The window survives only on the console, for legacy bookings and the till's
+ * early-arrival grace.
  *
- * NEW WORK. THE DESIGN DRAWS NO CONTROL HERE. `AVO Merchant Dashboard
- * .dc.html:1059` is a static strip — `No-show: deposit returns to the wallet
- * <b>1 hour</b> after a missed slot.` — with the hour written into the markup
- * and nothing beside it. The SENTENCE below is the designer's, verbatim and
- * unchanged; the CONTROL is invented. Said plainly so a later reader does not go
- * looking for a dropdown in the bundle.
+ * `SalonPatch` no longer admits the key, so the compiler refuses a stale write
+ * from this client too. `settingsNoShowWindow.test.tsx` pins both halves.
  *
- * The gap it closes: `noShowReturnMinutes` has been in `MERCHANT_EDITABLE` since
- * the route was written and this panel READ it and only displayed it. A merchant
- * was told a rule about her own customers' money, on a card that changes the
- * deposit immediately above, and given no way to set it.
- *
- * WHAT THIS IS NOT. Forfeiture — the merchant KEEPING the money — is a different
- * thing, is not built, and is escalated. The bundle's own notification copy
- * (`AVO Merchant Dashboard.dc.html:1136`, "Deposit is yours to keep or release.")
- * implies it and contradicts the product description in so many words:
- * `design/AVO-Beauty-Product-Description-v2.md:45` — "automatically returns to
- * their wallet. (Money never leaves the ecosystem; the deposit creates
- * commitment, not punishment.)" Reported as a design copy conflict. No string
- * here may imply otherwise, and none does.
- *
- * ── why a fixed list and not a second Stepper ──────────────────────────────
- * The deposit above is a `Stepper` with a hard 1–10 KD range the DATABASE states
- * (`salon_deposit_range`) and the route re-states. This field is bounded too, as
- * of lane A's ceiling: `parseNoShowReturnMinutes` holds 5 ≤ n ≤ 1440 and the CHECK
- * `salon_no_show_return_in_range` holds it again. The list still beats a stepper,
- * and the reasons barely move — a bound existing is not the same as a bound this
- * control should re-state.
- *
- *   A STEPPER WOULD HAVE TO MIRROR `min` AND `max` AND INVENT `step`, and would
- *   then ENFORCE the mirror: `Stepper` clamps (`Math.min(max, Math.max(min, …))`),
- *   so a salon holding a value outside a STALE copy of the range would have it
- *   quietly rewritten the first time anyone touched the control — and the copy
- *   goes stale the day api/ retunes either end. Values between the presets exist:
- *   `e2e/tenancy.test.ts:709` sends 999 and calls it valid, which 5–1440 still
- *   does. One `step` also cannot serve both ends: 15 makes a full day 96 presses,
- *   60 makes 45 minutes unreachable.
- *
- *   A BOUNDED TEXT INPUT would need its own parse, its own inline error and its
- *   own refusal path — a second one, beside the screen's — and would still be
- *   inventing the bound, only less visibly. It also makes the merchant think in
- *   minutes while the sentence beneath her reads "1 hour".
- *
- *   A FIXED LIST INVENTS A CHOICE, NOT A BOUND. It does not clamp — an unlisted
- *   value is CARRIED as its own option rather than corrected — and every value it
- *   can produce is enumerable, which is what lets the design's sentence be
- *   checked at all of them instead of argued about. See
- *   `settingsNoShowWindow.test.tsx § the sentence and the option agree`.
- *
- * ── the five, and why the ends are about the till ──────────────────────────
- * THIS NUMBER IS TWO WINDOWS, NOT ONE, and that is the whole argument. Besides
- * deciding when the deposit auto-returns (`booking.no_show_return_due_at =
- * ends_at + n`), `findApplicableHold` reuses it as the EARLY-ARRIVAL GRACE at the
- * till: `starts_at <= now + noShowReturnMinutes` decides which held deposit a
- * charge may consume. So both ends of the range are money at the counter:
- *
- *   TOO SHORT and a customer checked in ten minutes before her slot finds her own
- *   deposit not applicable — she paid, and the till cannot see it. 15 minutes is
- *   the shortest that clears an ordinary check-in lead.
- *   TOO LONG and the grace reaches a DIFFERENT appointment. `findApplicableHold`'s
- *   header describes the failure at length — "A customer with an appointment next
- *   Tuesday who walks in today for a blow-dry must not have Tuesday's deposit
- *   spent on it" — and a large enough window re-opens it by configuration rather
- *   than by code. 4 hours sits inside a salon's own day (morning 10:00–13:00,
- *   evening 16:00–21:00 in the seeded hours), so the grace cannot reach tomorrow.
- *
- * 60 is the anchor: the contract's example, the column default, the seed, the
- * design's rendered "1 hour", and the product description's stated rule ("if the
- * customer doesn't arrive within 1 hour of the slot").
- *
- * ── THE BOUND ITSELF BELONGS ON THE SERVER, AND NOW LIVES THERE ────────────
- * This list is what the CONTROL offers. It is not a validation and must not be
- * mistaken for one — that is non-negotiable #7's reasoning applied to a range
- * instead of a permission, and a client-side bound is a validation the next
- * client will not have. It was reported to trunk for `api/`, and `api/` has since
- * answered: `parseNoShowReturnMinutes` refuses anything outside 5 ≤ n ≤ 1440, and
- * migration 0051's `salon_no_show_return_in_range` refuses it again at the column,
- * replacing the old `> 0`. So the console's `PATCH /v1/platform/salons/{id}` and
- * curl are bounded by the same range this select sits inside — the endpoint no
- * longer accepts 1, and no longer accepts 10080.
- *
- * These five were chosen before that range existed and all five sit inside it, so
- * nothing here moved. `settingsNoShowWindow.test.tsx § offers no preset the server
- * would refuse` reads BOTH this array and the route's two constants from source
- * and checks the containment on every run, so a sixth preset outside the range
- * fails at the gate rather than as a 400 under a merchant's hand.
+ * THE FOOT SENTENCE FOLLOWS THE POLICY. The design's line ("No-show: deposit
+ * returns to the wallet 1 hour after a missed slot.") is still true of a salon
+ * that has never published a policy, and is shown for exactly that salon.
+ * `depositCopy.tsx` owns both wordings, shared with the Appointments banner.
  */
-const RETURN_WINDOW_PRESETS: readonly number[] = [15, 30, 60, 120, 240];
-
-/*
- * THE LABEL ITSELF MOVED OUT — `routes/noShowWindow.ts`.
- *
- * It was exported from here, and that was right while this was the only screen
- * that could state the window. Appointments states the same rule on the board
- * where a merchant acts on a no-show, and a route importing a formatter out of a
- * sibling route would make one screen's copy a library for the other's. One
- * function still, so the select's option labels and BOTH sentences cannot
- * disagree at any value; it simply no longer lives in one of the two callers.
- */
-
-/**
- * The presets, plus the salon's own value when it is not one of them.
- *
- * CARRIED, NOT CLAMPED, AND SORTED INTO PLACE. A salon on 45 minutes sees "45
- * minutes" selected between 30 and 60 and may leave it there; picking a preset is
- * then her decision and not a side effect of the panel rendering. This is the
- * behaviour a `Stepper` could not have had, and the reason the control is a list.
- */
-function returnWindowOptions(current: number): SelectOption[] {
-  const minutes = RETURN_WINDOW_PRESETS.includes(current)
-    ? [...RETURN_WINDOW_PRESETS]
-    : [...RETURN_WINDOW_PRESETS, current].sort((a, b) => a - b);
-  return minutes.map((m) => ({ value: String(m), label: formatReturnWindow(m) }));
-}
-
-export function DepositPanel({ salon, update }: { salon: Salon | undefined; update: Updater }) {
+export function DepositPanel({
+  salon,
+  update,
+  policy,
+}: {
+  salon: Salon | undefined;
+  update: Updater;
+  /** `undefined` while the policy read is in flight or failed: the foot makes no claim. */
+  policy?: BookingPolicy | null | undefined;
+}) {
   const serverValue = salon?.depositFils ?? DEPOSIT_MIN;
   const [value, setValue] = useState<number>(serverValue);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -969,63 +940,6 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  /*
-   * NO `?? 60`. THE SAME ARGUMENT AS THE APPOINTMENTS BANNER, AND IT LANDS HARDER
-   * HERE.
-   *
-   * This line read `salon?.noShowReturnMinutes ?? 60` and the foot sentence below
-   * rendered outside the `salon === undefined` branch, so every salon was told
-   * "1 hour" for as long as the read took and a salon on 4 hours was then
-   * corrected. That is the defect the banner was just fixed for, on the screen a
-   * merchant opens IN ORDER TO SET THIS VALUE — so it is the reading most likely
-   * to be done carefully, and the claim is about the control she is reaching for.
-   * A card that says "1 hour" to a salon set to 4 is telling her the control does
-   * not hold what it holds.
-   *
-   * The tell was the asymmetry on this card: the select beside the sentence has
-   * been correctly skeletoned since it was built, and the sentence was the one
-   * part of the card still speaking from a default.
-   */
-  const returnMinutes = salon?.noShowReturnMinutes;
-
-  /*
-   * THE VALUE THE SELECT SHOWS WHILE A WRITE IS IN THE AIR, WITHOUT A LOCAL COPY.
-   *
-   * `useUpdateSalon` writes nothing optimistically, so rendering `returnMinutes`
-   * alone would snap the select back under the merchant's hand the instant she
-   * picked an option and hold it there until the refetch landed. The stepper
-   * above solves that with `useState` + an effect, which it needs anyway for the
-   * debounce; a select has no intermediate values to debounce, so it can read the
-   * in-flight value off the mutation instead and keep no state of its own. That
-   * also removes a failure the stepper's draft has: after a REFUSED patch the
-   * server value is unchanged, so an effect keyed on it never re-fires and the
-   * draft sits on a number nobody accepted. Here the settled mutation simply
-   * stops being pending and the server's value renders again.
-   *
-   * BOTH HALVES OF THE CONDITION EARN THEIR PLACE, and a third did not.
-   *
-   * `update` is ONE mutation shared by every panel on this screen, so `isPending`
-   * alone is true during a WhatsApp flip too — reading the KEY off `variables` is
-   * what keeps another panel's write off this control. And `isPending` is what
-   * makes the settled state the server's again, refusal included: `variables`
-   * survives a failed mutation, so without it a refused 240 would sit here
-   * forever.
-   *
-   * WHAT IS NOT HERE: an `'noShowReturnMinutes' in update.variables` guard, which
-   * this line carried until a mutation proved it inert — deleting it failed
-   * nothing, because the `??` below already answers for a patch that does not
-   * mention the field. A check that cannot fail is not a safeguard, it is a
-   * second statement of a rule that lives one line down.
-   *
-   * IT TAKES THE LOADED SALON AS AN ARGUMENT rather than reading the optional
-   * `returnMinutes` above, and that is what dropping the `?? 60` costs — one
-   * parameter. The alternative was a fallback the control can never reach (it
-   * renders only in the branch where the salon HAS loaded), and an unreachable
-   * default is worse than a reachable one: nothing can ever prove it wrong.
-   */
-  const pendingWindow = update.isPending ? update.variables?.noShowReturnMinutes : undefined;
-  const shownMinutes = (loaded: Salon) => pendingWindow ?? loaded.noShowReturnMinutes;
-
   return (
     <Card className="settings__card">
       <h2 className="settings__title avo-display">Booking deposit</h2>
@@ -1034,121 +948,391 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
       </p>
 
       {salon === undefined ? (
-        <>
-          <Skeleton width={220} height={38} />
-          {/*
-            The new row skeletons too, and at its real height — interaction-spec
-            §4 asks skeletons to match the layout's shape, and a card that grows
-            a 33px row on load is the reflow `Overview.tsx` was corrected for.
-          */}
-          <div className="settings__window">
-            <span className="settings__window-label">Return window</span>
-            <Skeleton width={104} height={33} radius={10} />
-          </div>
-        </>
+        <Skeleton width={220} height={38} />
       ) : (
-        <>
-          <div className="settings__deposit">
-            <Stepper
-              label="Booking deposit"
-              value={value}
-              min={DEPOSIT_MIN}
-              max={DEPOSIT_MAX}
-              step={DEPOSIT_STEP}
-              onChange={onChange}
-              // Integer fils in, formatted only here. Never a float.
-              format={(v) => formatFils(fils(v))}
-              valueText={`${formatFils(fils(value))} Kuwaiti dinars`}
-              disabled={update.isPending}
-            />
-            <span className="settings__deposit-unit">KD</span>
-            <span className="settings__deposit-range">1&ndash;10 KD</span>
-          </div>
-
-          <div className="settings__window">
-            {/*
-              THE VISIBLE CAPTION IS A SUBSTRING OF THE ACCESSIBLE NAME, on
-              purpose — WCAG 2.5.3 "Label in Name". "Return window" is
-              unambiguous inside a card titled Booking deposit and above a
-              sentence that starts "No-show:", while a screen reader that has
-              neither still hears which window this is.
-            */}
-            <span className="settings__window-label">Return window</span>
-            <Select
-              label="No-show return window"
-              labelHidden
-              size="sm"
-              value={String(shownMinutes(salon))}
-              options={returnWindowOptions(shownMinutes(salon))}
-              disabled={update.isPending}
-              /*
-               * NOT DEBOUNCED, and the stepper beside it is — the difference is
-               * the control, not an inconsistency. A stepper passes through 6, 7
-               * and 8 on the way to 9 and each would be its own write; a select
-               * emits one settled choice per interaction. Compared against the
-               * SERVER's value, so re-picking what the salon already holds is not
-               * a write at all.
-               */
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (next !== salon.noShowReturnMinutes) update.mutate({ noShowReturnMinutes: next });
-              }}
-            />
-          </div>
-        </>
+        <div className="settings__deposit">
+          <Stepper
+            label="Booking deposit"
+            value={value}
+            min={DEPOSIT_MIN}
+            max={DEPOSIT_MAX}
+            step={DEPOSIT_STEP}
+            onChange={onChange}
+            // Integer fils in, formatted only here. Never a float.
+            format={(v) => formatFils(fils(v))}
+            valueText={`${formatFils(fils(value))} Kuwaiti dinars`}
+            disabled={update.isPending}
+          />
+          <span className="settings__deposit-unit">KD</span>
+          <span className="settings__deposit-range">1&ndash;10 KD</span>
+        </div>
       )}
 
       {/*
-        THE DESIGN'S SENTENCE, VERBATIM, AND IT FOLLOWS THE SERVER RATHER THAN THE
-        CONTROL. While a write is in the air the select shows the merchant's
-        choice and this shows the salon's live rule, because the two say different
-        things: one is an intent, the other is a claim about what happens to a
-        CUSTOMER'S money and must never run ahead of the server. `ModuleRow`'s
-        Pill-beside-Toggle carries the same argument. They re-agree the moment the
-        write settles, whichever way it settles; a refusal surfaces in the
-        screen's own `WriteError`.
-
-        AND BEFORE THE SALON LANDS IT MAKES NO CLAIM — BUT IT SKELETONS RATHER
-        THAN VANISHING, WHICH IS *NOT* WHAT APPOINTMENTS DOES.
-
-        Same rule, different answer, and the difference is real rather than an
-        inconsistency:
-
-          · THE APPOINTMENTS BANNER IS THE FIRST THING ON A PAGE THAT IS ENTIRELY
-            SKELETONED at that moment, so nothing around it looks settled and a
-            strip appearing costs no confidence. It is also standing prose in an
-            `InfoBanner`, a component with no loading shape of its own.
-          · THIS IS THE LAST LINE OF A BOUNDED CARD WHOSE OTHER ROWS ARE ALREADY
-            SKELETONED at their real heights — deliberately, because "a card that
-            grows a 33px row on load is the reflow `Overview.tsx` was corrected
-            for" (the note on the select's skeleton, two rows up). Omitting this
-            line would shrink the card and then grow it, which is the very thing
-            the rows above pay for.
-
-        THE OBJECTION THAT KILLED THE SKELETON ON APPOINTMENTS DOES NOT APPLY.
-        There it would have meant skeletoning ONE WORD inside a sentence: an
-        `aria-hidden` gap leaves a screen reader a grammatical sentence stating a
-        DIFFERENT rule ("…returns to the customer's wallet after a missed slot"),
-        and `.avo-skeleton` is `display:block`, so an inline variant would have had
-        to be invented for it. Here the whole line is replaced, block with block,
-        no new variant and no half sentence — the line says nothing at all, which
-        is the only honest thing it can say before the value arrives.
-
-        The width is approximate and cannot be otherwise: the sentence's rendered
-        length moves with the label ("15 minutes" is wider than "1 hour"). The
-        HEIGHT is what holds the card's shape, and that is fixed.
+        NO CLAIM BEFORE BOTH READS LAND. The legacy line needs the salon's window
+        and the policy line needs the policy; guessing either is telling a
+        merchant a rule about a customer's money that nobody sent. Skeletoned at
+        the line's height so the card does not grow on load.
       */}
       <div className="settings__foot">
-        {returnMinutes === undefined ? (
+        {salon === undefined || policy === undefined ? (
           <Skeleton width="82%" height={15} />
         ) : (
-          <>
-            No-show: deposit returns to the wallet <b>{formatReturnWindow(returnMinutes)}</b> after
-            a missed slot.
-          </>
+          <NoShowFootCopy policy={policy} legacyMinutes={salon.noShowReturnMinutes} />
         )}
       </div>
     </Card>
+  );
+}
+
+/* ----------------------------------------------------------- booking policy */
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Settings → Booking policy — NEW WORK, THE DESIGN DRAWS NO SUCH CARD
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Aftab, 2026-09-29: "Policy change option in the dashboard and a notification
+ * should be sent on each policy change"; "In booking deposit there must be no
+ * return or refund window but there must be option to set policy about the
+ * refund that will be displayed to the customer"; "how much time before the
+ * booked slot, X amount will be returned".
+ *
+ * `GET /salons/{id}/booking-policy` reads it; `PUT` publishes version n+1 and
+ * writes one wallet-bell notice per member, coalesced to one a salon-day, no push.
+ * `api/src/services/bookingPolicy.ts` is the specification.
+ *
+ * THE FORM VALIDATES AS THE SERVER DOES, IN THE SERVER'S WORDS
+ * (`bookingPolicyRules.ts`), and still maps every server `400` back to its row —
+ * the PUT is the control, the form is a courtesy.
+ *
+ * `perms.loyalty` GATES THE PUT, and without it this card is READ-ONLY rather
+ * than absent: the GET is not gated (the policy is the most public thing a salon
+ * publishes), so a staff member without the permission can still read what her
+ * customers are told. The refusal the server gives a mid-session revocation
+ * renders through `WriteError`, verbatim. Non-negotiable #7.
+ *
+ * WHAT IS RETURNED IS WALLET CREDIT (#5). Nothing on this card offers, or
+ * implies, cash or a card reversal.
+ */
+export function BookingPolicyPanel({
+  policy,
+  timezone,
+  canEdit,
+  publish,
+}: {
+  policy: UseQueryResult<BookingPolicy | null>;
+  timezone: string | null;
+  canEdit: boolean;
+  publish: ReturnType<typeof usePublishBookingPolicy>;
+}) {
+  return (
+    <Card className="settings__card">
+      <h2 className="settings__title avo-display">Booking policy</h2>
+      <p className="settings__sub">
+        What happens to her deposit if she cancels or doesn&rsquo;t arrive. She sees this before
+        she books, and anything returned goes back to her AVO wallet.
+      </p>
+      {policy.isError ? (
+        <SectionError
+          error={policy.error}
+          forbiddenTitle="You don't have access to the booking policy"
+          failedTitle="Couldn't load the booking policy"
+          onRetry={() => void policy.refetch()}
+          retrying={policy.isFetching}
+        />
+      ) : policy.isPending ? (
+        <div className="policy__loading">
+          <Skeleton width="60%" height={15} />
+          <Skeleton width="100%" height={33} radius={10} />
+          <Skeleton width="100%" height={90} radius={10} />
+        </div>
+      ) : canEdit ? (
+        <PolicyEditor
+          // A new published version re-seeds the draft; typing does not.
+          key={policy.data?.id ?? 'none'}
+          policy={policy.data}
+          timezone={timezone}
+          publish={publish}
+        />
+      ) : (
+        <PolicyReadOnly policy={policy.data} timezone={timezone} />
+      )}
+    </Card>
+  );
+}
+
+function publishedLine(policy: BookingPolicy, timezone: string | null): string {
+  return `Version ${policy.version} · published ${whenLabel(policy.publishedAt, timezone)}`;
+}
+
+function PolicyReadOnly({ policy, timezone }: { policy: BookingPolicy | null; timezone: string | null }) {
+  return (
+    <div className="policy">
+      <p className="policy__readonly" role="note">
+        You can read this policy but not change it — changing it needs the loyalty permission. A
+        manager can grant it.
+      </p>
+      {policy === null ? (
+        <p className="policy__version">
+          No policy published yet. Until one is, a cancel or a no-show returns her full deposit.
+        </p>
+      ) : (
+        <>
+          <p className="policy__version">{publishedLine(policy, timezone)}</p>
+          <dl className="policy__facts">
+            <div>
+              <dt>No-show</dt>
+              <dd>{policy.noShow === 'keep' ? 'Keep the deposit' : 'Return it to her wallet'}</dd>
+            </div>
+            <div>
+              <dt>Cancellation</dt>
+              <dd>{ruleSentence(policy.cancellation)}</dd>
+            </div>
+            <div>
+              <dt>Policy text</dt>
+              <dd className="policy__text">{policy.text.en}</dd>
+            </div>
+          </dl>
+        </>
+      )}
+    </div>
+  );
+}
+
+const NO_SHOW_OPTIONS: SegmentedOption<BookingPolicy['noShow']>[] = [
+  { value: 'keep', label: 'Keep the deposit' },
+  { value: 'return', label: 'Return it to her wallet' },
+];
+
+function PolicyEditor({
+  policy,
+  timezone,
+  publish,
+}: {
+  policy: BookingPolicy | null;
+  timezone: string | null;
+  publish: ReturnType<typeof usePublishBookingPolicy>;
+}) {
+  const [draft, setDraft] = useState<PolicyDraft>(() => draftFrom(policy));
+  /*
+   * ERRORS SHOW ONCE SHE HAS TRIED TO PUBLISH, or on a row she has already left.
+   * A blank English box shouting "The policy needs its English text." before she
+   * has typed a word is an error about nothing she did.
+   */
+  const [attempted, setAttempted] = useState(false);
+  const [touched, setTouched] = useState<Set<string>>(() => new Set());
+  const enId = useId();
+  const arId = useId();
+  const touch = (key: string) => setTouched((prev) => new Set(prev).add(key));
+
+  const local = validateDraft(draft);
+  /*
+   * THE SERVER'S REFUSAL WINS OVER THE FORM'S SILENCE, until she edits. A 400 the
+   * form did not predict (a rule retuned in api/ before this file) is placed on
+   * its row, verbatim, and cleared by the next keystroke: the mutation resets on
+   * every edit, so a stale refusal never sits beside a value it no longer
+   * describes.
+   */
+  const server = publish.isError ? fieldForServerError(publish.error) : null;
+  const show = (key: string) => attempted || touched.has(key);
+
+  const edit = (next: PolicyDraft) => {
+    if (!publish.isPending) publish.reset();
+    setDraft(next);
+  };
+  const setRule = (index: number, patch: Partial<DraftRule>) =>
+    edit({ ...draft, rules: draft.rules.map((r, i) => (i === index ? { ...r, ...patch } : r)) });
+
+  const rules = parsedRules(draft.rules);
+  const input = draftToInput(draft);
+
+  function onPublish() {
+    setAttempted(true);
+    if (input === null || publish.isPending) return;
+    publish.mutate(input);
+  }
+
+  const rowError = (index: number): RowError | null =>
+    server?.rows[index] ?? (show(`row-${index}`) ? (local.rows[index] ?? null) : null);
+  const enError = server?.textEn ?? (show('en') ? local.textEn : null);
+  const arError = server?.textAr ?? (show('ar') ? local.textAr : null);
+  const rulesError = server?.rules ?? local.rules;
+
+  return (
+    <div className="policy">
+      <p className="policy__version">
+        {policy === null
+          ? 'No policy published yet. Until you publish one, a cancel or a no-show returns her full deposit.'
+          : publishedLine(policy, timezone)}
+      </p>
+
+      <div className="policy__group">
+        <span className="avo-label">If she doesn&rsquo;t arrive</span>
+        <Segmented
+          label="No-show"
+          options={NO_SHOW_OPTIONS}
+          value={draft.noShow}
+          onChange={(next) => edit({ ...draft, noShow: next })}
+        />
+        {server?.noShow ? <InlineError message={server.noShow} /> : null}
+      </div>
+
+      <div className="policy__group">
+        <span className="avo-label">If she cancels</span>
+        {draft.rules.length === 0 ? (
+          <p className="policy__none">No cut-offs: a cancel keeps the whole deposit.</p>
+        ) : (
+          <ol className="policy__rules">
+            {draft.rules.map((rule, index) => {
+              const error = rowError(index);
+              const errorId = `${enId}-row-${index}`;
+              return (
+                <li key={index} className="policy__rule">
+                  <div className="policy__rule-line">
+                    <span className="policy__rule-word">At least</span>
+                    <input
+                      className="avo-input policy__num"
+                      inputMode="numeric"
+                      aria-label={`Cut-off ${index + 1}: hours before the slot`}
+                      aria-invalid={error?.field === 'hours' ? true : undefined}
+                      {...(error?.field === 'hours' ? { 'aria-describedby': errorId } : {})}
+                      value={rule.hours}
+                      onChange={(e) => setRule(index, { hours: e.target.value })}
+                      onBlur={() => touch(`row-${index}`)}
+                    />
+                    <span className="policy__rule-word">hours before</span>
+                    <span className="policy__rule-arrow" aria-hidden="true">
+                      &rarr;
+                    </span>
+                    <input
+                      className="avo-input policy__num"
+                      inputMode="numeric"
+                      aria-label={`Cut-off ${index + 1}: percent returned`}
+                      aria-invalid={error?.field === 'percent' ? true : undefined}
+                      {...(error?.field === 'percent' ? { 'aria-describedby': errorId } : {})}
+                      value={rule.percent}
+                      onChange={(e) => setRule(index, { percent: e.target.value })}
+                      onBlur={() => touch(`row-${index}`)}
+                    />
+                    <span className="policy__rule-word">% back</span>
+                    <button
+                      type="button"
+                      className="policy__remove"
+                      aria-label={`Remove cut-off ${index + 1}`}
+                      onClick={() => {
+                        setTouched(new Set());
+                        edit({ ...draft, rules: draft.rules.filter((_, i) => i !== index) });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {error ? <InlineError id={errorId} message={error.message} /> : null}
+                </li>
+              );
+            })}
+          </ol>
+        )}
+        {rulesError ? <InlineError message={rulesError} /> : null}
+        {draft.rules.length < MAX_CANCELLATION_RULES ? (
+          <div>
+            <Button
+              variant="secondary"
+              onClick={() => edit({ ...draft, rules: [...draft.rules, { hours: '', percent: '' }] })}
+            >
+              Add a cut-off
+            </Button>
+          </div>
+        ) : null}
+        <p className="policy__preview" aria-live="polite">
+          {rules === null ? 'Fix the cut-offs above to see the rule.' : ruleSentence(rules)}
+        </p>
+      </div>
+
+      <div className="policy__group">
+        <label className="avo-label" htmlFor={enId}>
+          Policy text (English)
+        </label>
+        <textarea
+          id={enId}
+          className="avo-input policy__textarea"
+          rows={4}
+          value={draft.textEn}
+          aria-invalid={enError ? true : undefined}
+          {...(enError ? { 'aria-describedby': `${enId}-err` } : {})}
+          onChange={(e) => edit({ ...draft, textEn: e.target.value })}
+          onBlur={() => touch('en')}
+        />
+        <span className="policy__count">
+          {draft.textEn.trim().length} / {MAX_POLICY_TEXT}
+        </span>
+        {enError ? <InlineError id={`${enId}-err`} message={enError} /> : null}
+      </div>
+
+      <div className="policy__group">
+        <label className="avo-label" htmlFor={arId}>
+          Policy text (Arabic, optional)
+        </label>
+        <textarea
+          id={arId}
+          dir="rtl"
+          lang="ar"
+          className="avo-input policy__textarea"
+          rows={4}
+          value={draft.textAr}
+          aria-invalid={arError ? true : undefined}
+          aria-describedby={`${arId}-hint`}
+          onChange={(e) => edit({ ...draft, textAr: e.target.value })}
+          onBlur={() => touch('ar')}
+        />
+        <span className="policy__count">
+          <span id={`${arId}-hint`}>Leave empty to show the English text.</span>{' '}
+          {draft.textAr.trim().length} / {MAX_POLICY_TEXT}
+        </span>
+        {arError ? <InlineError message={arError} /> : null}
+      </div>
+
+      <div className="policy__publish">
+        <Button onClick={onPublish} disabled={publish.isPending || (attempted && input === null)}>
+          {publish.isPending ? 'Publishing…' : 'Publish policy'}
+        </Button>
+        <span className="policy__notice-note">
+          Publishing tells your customers in their wallet bell — no push, at most one
+          notice a day.
+        </span>
+      </div>
+
+      {publish.isSuccess ? <PublishResultLine result={publish.data} /> : null}
+      {publish.isError && (server === null || server.general !== null) ? (
+        <WriteError error={publish.error} reassurance="Nothing was published." />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * WHAT THE PUBLISH DID, IN THE SERVER'S NUMBERS.
+ *
+ * `published: false` is the identical body: nothing was written and nobody was
+ * told, and claiming "Published" over it would be claiming a change that did not
+ * happen. `noticesWritten` is what THIS publish wrote — 0 on a second publish the
+ * same salon-day, because each customer gets at most one notice a day.
+ */
+export function PublishResultLine({ result }: { result: BookingPolicyPublished }) {
+  if (!result.published) {
+    return (
+      <p className="policy__result" role="status">
+        <b>Nothing changed.</b> This is already the published policy (version{' '}
+        {result.policy.version}), so nothing was published and no customers were notified.
+      </p>
+    );
+  }
+  const n = result.noticesWritten;
+  return (
+    <p className="policy__result" role="status">
+      <b>Version {result.policy.version} published.</b> {n} {n === 1 ? 'customer' : 'customers'}{' '}
+      notified. Notices go to the wallet bell only, at most one a day.
+    </p>
   );
 }
 

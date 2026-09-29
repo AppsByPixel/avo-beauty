@@ -73,6 +73,13 @@ import type { MerchantBooking } from '../api/bookings.js';
  * the first four describes below drive it directly.
  */
 const useSalon = vi.fn();
+/**
+ * THE SALON'S PUBLISHED POLICY. The banner states the policy's no-show rule and
+ * falls back to the legacy window only for a salon with none, so the default
+ * here is "no policy" — the case every legacy-window spec below is about.
+ */
+const useBookingPolicy = vi.fn();
+const NO_POLICY = { data: null, isSuccess: true, isPending: false, isError: false };
 const useSalonBookings = vi.fn();
 const mutate = vi.fn();
 const reset = vi.fn();
@@ -81,6 +88,9 @@ const perms = { void: true } as StaffPerms;
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('../api/salon.js', () => ({ useSalon: () => useSalon() }));
+vi.mock('../api/bookingPolicy.js', () => ({
+  useBookingPolicy: () => useBookingPolicy() ?? NO_POLICY,
+}));
 /**
  * THE FOUR OTHER WRITE HOOKS ARE STUBBED IDLE.
  *
@@ -151,6 +161,8 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
+  // Back to "no policy" — a policy stub must not leak into the legacy specs.
+  useBookingPolicy.mockReset();
   markState.isPending = false;
   markState.error = null;
   perms.void = true;
@@ -560,7 +572,7 @@ const SENTENCE = (window: string) =>
   `Deposits auto-return to the customer’s wallet ${window} after a missed slot — the money ` +
   'never leaves the ecosystem. Use Mark no-show only for edge cases.';
 
-describe('the banner names the control now that the control exists', () => {
+describe('the banner, for a salon with no policy, names the control and its own window', () => {
   it('carries both halves of the design’s sentence, verbatim', () => {
     expect(banner(60).text).toBe(SENTENCE('1 hour'));
   });
@@ -624,6 +636,54 @@ describe('the banner names the control now that the control exists', () => {
     const bolds = [...container.querySelectorAll('.avo-info b')];
     expect(bolds.map((b) => b.textContent)).toEqual([label, 'Mark no-show']);
     for (const b of bolds) expect(getComputedStyle(b).fontWeight).toBe('600');
+  });
+});
+
+/* ================================== the banner follows the published policy */
+
+describe('the banner states the salon’s published no-show rule', () => {
+  const POLICY = {
+    id: 'BP-1',
+    salonId: 'SAL-AMARA',
+    version: 2,
+    noShow: 'keep' as 'keep' | 'return',
+    cancellation: [{ hoursBefore: 24, returnPercent: 100 }],
+    text: { en: 'Cancel a day ahead for a full return.', ar: '' },
+    publishedAt: '2026-09-29T09:00:00.000Z',
+  };
+  const withPolicy = (over: Partial<typeof POLICY> | null) =>
+    useBookingPolicy.mockReturnValue(
+      over === null
+        ? { data: undefined, isSuccess: false, isPending: true, isError: false }
+        : { data: { ...POLICY, ...over }, isSuccess: true, isPending: false, isError: false },
+    );
+
+  it('says she keeps the deposit under a keep policy — and not the legacy window', () => {
+    withPolicy({ noShow: 'keep' });
+    const { text } = banner(240);
+    expect(text).toBe(
+      'No-shows: you keep the deposit. It settles 1 hour after the slot ends, or as soon as you use Mark no-show.',
+    );
+    expect(text).not.toMatch(/auto-return|4 hours/);
+  });
+
+  it('says it returns to her wallet under a return policy', () => {
+    withPolicy({ noShow: 'return' });
+    expect(banner(60).text).toBe(
+      'No-shows: the deposit returns to her wallet. It settles 1 hour after the slot ends, or as soon as you use Mark no-show.',
+    );
+  });
+
+  it('says nothing while the policy read is out, rather than the legacy line', () => {
+    withPolicy(null);
+    const { container } = banner(60);
+    expect(container.querySelector('.avo-info')).toBeNull();
+  });
+
+  it('says nothing when the policy read failed — "could not ask" is not "no policy"', () => {
+    useBookingPolicy.mockReturnValue({ data: undefined, isSuccess: false, isPending: false, isError: true });
+    const { container } = banner(60);
+    expect(container.querySelector('.avo-info')).toBeNull();
   });
 });
 

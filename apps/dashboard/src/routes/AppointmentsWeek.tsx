@@ -5,10 +5,11 @@ import { useSalonBookingStream, type MerchantBooking } from '../api/bookings.js'
 import { formatWindowDay } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
 import { whenLabel } from './appointmentWhen.js';
+import { SettlementNote } from './depositCopy.js';
 import { SectionError } from './sectionState.js';
 import {
-  STATUS_PILL,
   WALK_BUDGET,
+  pillFor,
   chipBox,
   chipDensity,
   chipLabel,
@@ -381,6 +382,7 @@ export function BookingPopover({
           <dt>Deposit</dt>
           <dd>
             <Money amount={parseFils(booking.depositFils)} withUnit />
+            <SettlementNote booking={booking} />
           </dd>
         </div>
       </dl>
@@ -682,7 +684,7 @@ function ChipContent({
       <span className="apweek__chip-line" aria-hidden="true">
         <span className="apweek__chip-time">{compactClockLabel(item.startMin)}</span>
         {shape === 'held' ? null : (
-          <span className="apweek__chip-status">{STATUS_PILL[b.status].label}</span>
+          <span className="apweek__chip-status">{pillFor(b).label}</span>
         )}
       </span>
       <span className="apweek__chip-who" aria-hidden="true">
@@ -894,3 +896,4 @@ export function WeekSkeleton() {
     </div>
   );
 }
+

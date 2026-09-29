@@ -275,14 +275,57 @@ describe('Console → Approvals → Decided', () => {
     };
   });
 
-  it('unfiltered, one read feeds the queue and Decided; a chip adds a ?status= read', async () => {
+  it('the queue is its own ?status=pending read, Decided the unfiltered one; a chip adds a ?status= read', async () => {
     mount(<Approvals />);
     await screen.findByText('Queue is clear');
-    expect(pathsTo('/v1/platform/campaigns')).toEqual(['/v1/platform/campaigns']);
+    expect([...pathsTo('/v1/platform/campaigns')].sort()).toEqual([
+      '/v1/platform/campaigns',
+      '/v1/platform/campaigns?status=pending',
+    ]);
     fireEvent.click(screen.getByRole('radio', { name: 'Rejected' }));
     await waitFor(() => expect(lastTo('/v1/platform/campaigns')).toBe('/v1/platform/campaigns?status=rejected'));
     expect(window.location.search).toBe('?decided=rejected');
     await screen.findByText('No campaigns match these filters');
+  });
+
+  /**
+   * THE BUG THE PENDING READ CLOSES. The unfiltered read is `LIMIT 200`
+   * newest-first, so once 200 newer campaigns exist an older one still waiting
+   * is not in it — and "Waiting on you" used to be that page filtered to
+   * `pending`. Here the unfiltered page holds none of it, exactly as it would
+   * past the cap, and the queue must still show it.
+   */
+  it('shows a pending campaign the capped unfiltered read no longer carries', async () => {
+    const OLD_PENDING = {
+      id: 'CMP-0001',
+      salonId: 'SAL-AMARA',
+      salon: 'Amara',
+      title: 'Ramadan hours',
+      body: 'Our Ramadan opening hours start this week.',
+      channel: 'push',
+      audience: 'all',
+      branchId: 'all',
+      reward: 'none',
+      customReward: null,
+      reach: 0,
+      when: 'now',
+      scheduledAt: '',
+      status: 'pending',
+      heldReason: null,
+      heldAt: null,
+      submittedBy: 'Noura',
+      submittedAt: '2026-03-01T09:00:00.000Z',
+      decidedBy: null,
+      decidedAt: null,
+      note: null,
+      result: null,
+    };
+    routes['/v1/platform/campaigns'] = (path: string) =>
+      path.includes('status=pending') ? { items: [OLD_PENDING] } : { items: [] };
+    mount(<Approvals />);
+    await screen.findByText('Ramadan hours');
+    expect(screen.getByText('1 waiting')).toBeTruthy();
+    expect(screen.queryByText('Queue is clear')).toBeNull();
   });
 });
 

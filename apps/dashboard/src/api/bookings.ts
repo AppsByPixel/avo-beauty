@@ -497,12 +497,24 @@ export function patchBookingStatus(
   cached: unknown,
   bookingId: string,
   status: BookingStatus,
+  /**
+   * THE SECOND FIELD A SETTLING WRITE CHANGES (migration 0066). A no-show or a
+   * cancel now settles the deposit by the booking's policy, so `settlement`
+   * moves with `status` — without it the row would read "No-show · returned"
+   * over a deposit the salon kept until the refetch landed. Omitted, the row's
+   * own value stands.
+   */
+  settlement?: MerchantBooking['settlement'],
 ): unknown {
   if (cached === null || typeof cached !== 'object') return cached;
 
   const patchPage = (page: Paginated<MerchantBooking>): Paginated<MerchantBooking> => ({
     ...page,
-    items: page.items.map((row) => (row.id === bookingId ? { ...row, status } : row)),
+    items: page.items.map((row) =>
+      row.id === bookingId
+        ? { ...row, status, ...(settlement === undefined ? {} : { settlement }) }
+        : row,
+    ),
   });
 
   if ('pages' in cached && Array.isArray((cached as InfiniteData<unknown>).pages)) {
@@ -638,7 +650,7 @@ export function useMarkNoShow(): UseMutationResult<
       const written = parseWrittenBooking(data);
       if (written !== null) {
         queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-          patchBookingStatus(old, bookingId, written.status),
+          patchBookingStatus(old, bookingId, written.status, written.settlement),
         );
       }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
@@ -976,7 +988,7 @@ export function useCancelBooking(): UseMutationResult<
       const written = parseWrittenBooking(data);
       if (written !== null) {
         queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-          patchBookingStatus(old, bookingId, written.status),
+          patchBookingStatus(old, bookingId, written.status, written.settlement),
         );
       }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
@@ -1021,7 +1033,7 @@ export function useCompleteBooking(): UseMutationResult<
       const written = parseWrittenBooking(data);
       if (written !== null) {
         queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-          patchBookingStatus(old, bookingId, written.status),
+          patchBookingStatus(old, bookingId, written.status, written.settlement),
         );
       }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
