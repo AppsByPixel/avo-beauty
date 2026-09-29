@@ -976,10 +976,18 @@ a:hover {
  * tablet. That is superseded here, at trunk's instruction, for these widgets:
  * the spec's rule predates them, and Aftab's complaint is its result.
  *
- * NO CARD IS STRETCHED to its neighbour's height: that only moves the blank
- * under a short card inside it. The pair keeps each card at its own height, and
- * the analytics pack as masonry (below, and `OverviewAnalytics.tsx §
- * useMasonry`), so each column stacks one gap under the card above it.
+ * THE ANALYTICS ARE NOT STRETCHED to a neighbour's height: that only moves the
+ * blank under a short card inside it. They pack as masonry instead (below, and
+ * `OverviewAnalytics.tsx § useMasonry`), so each column stacks one gap under
+ * the card above it.
+ *
+ * THE PAIR IS, BECAUSE ONE OF ITS CARDS CAN USE THE HEIGHT. Aftab: "still space
+ * under the gross by day chart". Measured at 802px, the trend card was 286px
+ * and the activity card 412px on one row, a 126px blank under the chart. A
+ * chart is the one card on this screen whose content has no natural height, so
+ * the pair shares the row and the extra goes to the bars (§ THE PLOT GROWS
+ * below), not to a blank. The analytics have no such content; they keep
+ * masonry.
  */
 .overview__kpis,
 .overview__grid,
@@ -1000,7 +1008,26 @@ a:hover {
     auto-fit,
     minmax(max(var(--ovw-half-min), calc((100% - var(--avo-space-grid-gap)) / 2)), 1fr)
   );
+}
+
+.ovw-grid {
   align-items: start;
+}
+
+/*
+ * The pair shares its row height, and each card is a column so that one child
+ * can take what the row adds: the plot on the trend card, the space above
+ * "Show N more" on the activity card, and the state's own block when either is
+ * empty or failed. Stacked one-up the row is the card's own height and none of
+ * this moves anything.
+ */
+.overview__grid {
+  align-items: stretch;
+}
+
+.overview__grid > .avo-card {
+  display: flex;
+  flex-direction: column;
 }
 
 /*
@@ -1082,6 +1109,13 @@ a:hover {
  * beside each other read as one pair rather than two designs.
  */
 .trend-card {
+  /*
+   * The bar row's floor and the day-number row under it (10px numbers, the
+   * day's 5px gap). The floor is the old fixed track height, so the chart can
+   * grow into a taller row and never draws shorter than it did.
+   */
+  --trend-bars: 132px;
+  --trend-num-row: 15px;
   padding: 8px 20px 14px;
 }
 
@@ -1092,7 +1126,16 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/*
+ * A state takes the height the row gives the card and centres its copy in it,
+ * so an empty or failed chart beside a long feed reads as one block rather than
+ * a sentence with a blank band under it.
+ */
 .trend-card__state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   padding: 4px 0 8px;
 }
 
@@ -1111,10 +1154,24 @@ a:hover {
   margin-bottom: 8px;
 }
 
+/*
+ * THE PLOT GROWS. It is the trend card's flex child, so a row taller than the
+ * chart's own content goes to the bars and the foot stays under them at the
+ * bottom of the card. The floor is the old height, bar row plus number row.
+ */
 .trend__plot {
   display: flex;
   align-items: stretch;
   gap: 10px;
+  flex: 1;
+  min-height: calc(var(--trend-bars) + var(--trend-num-row));
+}
+
+/* The skeleton's wrapper passes the growth through to its plot. */
+.trend__skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 /*
@@ -1126,8 +1183,13 @@ a:hover {
   flex-direction: column;
   justify-content: space-between;
   align-items: flex-end;
-  /* The tick type sits on the bar row only; the day numbers below are the list's. */
-  height: 132px;
+  /*
+   * The tick type sits on the bar row only; the day numbers below are the
+   * list's. Stretched to the plot, less the number row, it is the track's
+   * height at any plot height.
+   */
+  min-height: var(--trend-bars);
+  margin-bottom: var(--trend-num-row);
   padding-bottom: 1px;
 }
 
@@ -1142,7 +1204,7 @@ a:hover {
 
 .trend__days {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 4px;
   flex: 1;
   min-width: 0;
@@ -1164,13 +1226,16 @@ a:hover {
  * THE TRACK IS THE FULL HEIGHT AND THE BAR IS A PERCENTAGE OF IT. That is the
  * whole scaling mechanism: `routes/salesTrendRules.ts § barPermille` hands down an
  * integer permille of the tallest day and nothing here does arithmetic on
- * money. A fixed track height is what makes the percentage mean anything.
+ * money. The track is the day's flex child, so its height is the plot's real
+ * height less the number row, and a percentage of it scales with the plot. It
+ * never draws below the old fixed height.
  */
 .trend__track {
   display: flex;
   align-items: flex-end;
   width: 100%;
-  height: 132px;
+  flex: 1;
+  min-height: var(--trend-bars);
   border-bottom: 1px solid var(--avo-hairline);
 }
 
@@ -1290,7 +1355,12 @@ a:hover {
   color: var(--avo-text-muted-soft);
 }
 
+/* As `.trend-card__state`: a state takes the row's extra height and centres in it. */
 .overview__feed-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   border-top: 1px solid var(--avo-hairline-inner);
 }
 
@@ -1307,8 +1377,12 @@ a:hover {
  * it, because those sit under a bordered table and this list's rows are
  * separated by top hairlines only — outside, the control would float away from a
  * card with no bottom edge to sit against.
+ *
+ * `margin-top: auto`: when the chart beside it is the taller card, the list
+ * stays at the top and the control stays at the bottom edge.
  */
 .overview__feed-more {
+  margin-top: auto;
   border-top: 1px solid var(--avo-hairline-inner);
   padding: 11px 0 6px;
 }
