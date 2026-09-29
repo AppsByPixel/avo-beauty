@@ -21,17 +21,27 @@
  *   - "the first rule whose threshold she meets wins", measured in ms against
  *     `startsAt`, rules stored earliest cut-off first;
  *   - later than every threshold returns 0%;
+ *   - after a late reschedule, the SMALLER of that and `returnCapPercent`, the
+ *     percent she held when she moved (DECISIONS.md, "Reschedule loophole: lane
+ *     A's reading, accepted"; trunk 7646bb8);
  *   - `returnPercent` of integer fils ROUNDED DOWN, the salon keeps the
  *     remainder fil. 50% of 5.005 KD is 2.502 back and 2.503 kept.
  *
- * `percentOf` from @avo/types is NOT used, for the reason lane A's
- * `splitDeposit` gives: it rounds half-up through a float division and returns
- * 2503 for that case. The floor lives here until trunk lands the
- * `percentOfFloor` lane A recommended in 54308ea; both copies should then import
- * it. Reported, not added to @avo/types from a lane.
+ * The rounding is `percentOfFloor` from @avo/types, the one the server's split
+ * is owed to use too. NOT `percentOf`, which rounds half up and returns 2503 for
+ * that case.
  */
 
-import { fils, subtract, type BookingPolicy, type BookingPolicyStamp, type CancellationRule, type Fils, type Language } from '@avo/types';
+import {
+  fils,
+  percentOfFloor,
+  subtract,
+  type BookingPolicy,
+  type BookingPolicyStamp,
+  type CancellationRule,
+  type Fils,
+  type Language,
+} from '@avo/types';
 import type { Copy } from '../copy/types';
 
 /** What both a published policy and a booking's stamp carry. */
@@ -76,20 +86,16 @@ export function policySummary(terms: Pick<PolicyTerms, 'noShow' | 'cancellation'
 // ----------------------------------------------------------------- maths --
 
 /**
- * `returnPercent` of the deposit, rounded DOWN to the fil. Integer arithmetic
- * throughout, exactly `splitDeposit` in api/src/services/bookingPolicy.ts: the
- * product is an exact integer, subtracting its remainder mod 100 leaves an
- * exact multiple of 100, and that division is exact. No float holds a fil.
+ * `returnPercent` of the deposit, rounded DOWN to the fil, and the remainder
+ * the salon keeps — `splitDeposit` in api/src/services/bookingPolicy.ts. The
+ * floor is `percentOfFloor`'s, which refuses a fractional or out-of-range
+ * percent with a RangeError. No float holds a fil.
  */
 export function splitDeposit(
   deposit: Fils,
   returnPercent: number,
 ): { returnedFils: Fils; keptFils: Fils } {
-  if (!Number.isSafeInteger(returnPercent) || returnPercent < 0 || returnPercent > 100) {
-    throw new RangeError(`returnPercent must be a whole number 0–100, got ${returnPercent}`);
-  }
-  const product = deposit * returnPercent;
-  const returnedFils = fils((product - (product % 100)) / 100);
+  const returnedFils = percentOfFloor(deposit, returnPercent);
   return { returnedFils, keptFils: subtract(deposit, returnedFils) };
 }
 
@@ -102,16 +108,28 @@ export interface CancelPreview {
 
 /**
  * What cancelling at `now` would return under `rules`. Display only — see the
- * header. `cancellationOutcome` on the server, line for line.
+ * header. `cancellationOutcome` on the server, line for line, including the cap:
+ * `capPercent` is the booking's `returnCapPercent`, and the preview takes the
+ * smaller of it and the new slot's rule. Without it, a booking moved late from
+ * 50% to next week would read 100% here while the server pays 50%.
+ *
+ * When the cap binds, `rule` is the stamped rule whose percent it equals (the
+ * one that applied at the move), or null when no rule does.
  */
 export function cancelPreview(
   rules: readonly CancellationRule[],
   startsAt: string,
   now: Date,
   depositFils: number,
+  capPercent: number | null = null,
 ): CancelPreview {
+  const deposit = fils(depositFils);
   const aheadMs = new Date(startsAt).getTime() - now.getTime();
-  const rule = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
-  const returnPercent = rule ? rule.returnPercent : 0;
-  return { rule, returnPercent, ...splitDeposit(fils(depositFils), returnPercent) };
+  const matched = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
+  const byRules = matched ? matched.returnPercent : 0;
+  if (capPercent === null || capPercent >= byRules) {
+    return { rule: matched, returnPercent: byRules, ...splitDeposit(deposit, byRules) };
+  }
+  const rule = rules.find((r) => r.returnPercent === capPercent) ?? null;
+  return { rule, returnPercent: capPercent, ...splitDeposit(deposit, capPercent) };
 }
