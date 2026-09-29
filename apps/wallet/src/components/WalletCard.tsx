@@ -17,11 +17,16 @@
  * member with no tier yet keep the brand card above, unchanged. The palette,
  * and why the metals get dark overlays and solid text, is `theme/cardInk.ts`.
  * The payment code panel inside reads the same palette through `CardInkProvider`.
+ *
+ * UNLESS THE SALON KEEPS ITS OWN COLOUR (2026-09-29). `walletCard: 'brand'` on
+ * the salon paints the brand card above for every member, whatever her tier —
+ * a workspace that chose its theme (the dark-green `forest`, say) keeps it.
+ * `'tier'`, the schema default, is the metal rule unchanged.
  */
 
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { fils, type Fils } from '@avo/types';
+import { fils, type Fils, type Salon } from '@avo/types';
 import { frauncesLineHeight, radius, shadow, text } from '../theme';
 import { CardInkProvider, cardInkFor, useCardInk } from '../theme/cardInk';
 import { useLanguage } from '../i18n/language';
@@ -32,13 +37,19 @@ interface Props {
   balanceFils: number;
   pill: string | null;
   progress: LoyaltyProgress | null;
+  /**
+   * The salon's `walletCard`: `'brand'` keeps the salon's colour on the card
+   * whatever her tier, `'tier'` paints her tier's metal. Straight off the salon
+   * the wallet loaded; the schema defaults a missing key to `'tier'`.
+   */
+  walletCard: Salon['walletCard'];
   /** Offline shows the last-known balance under a "last updated" stamp. */
   lastUpdated: string | null;
   /** The payment code panel, or its offline replacement. */
   children?: React.ReactNode;
 }
 
-export function WalletCard({ balanceFils, pill, progress, lastUpdated, children }: Props) {
+export function WalletCard({ balanceFils, pill, progress, walletCard, lastUpdated, children }: Props) {
   const { lang, copy } = useLanguage();
   // fils() throws on a float. If a gateway or a migration ever puts 24.5 on the
   // wire, this card fails loudly instead of rendering "24.500" from a number
@@ -46,7 +57,8 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
   const balance: Fils = fils(balanceFils);
   // The tier is the SERVER's (`progress.current` is `member.tier`); nothing here
   // decides one. A climb re-colours the card on the next read of the member.
-  const ink = cardInkFor(progress);
+  // A salon that keeps its own colour (`walletCard: 'brand'`) overrides the tier.
+  const ink = cardInkFor(progress, walletCard);
 
   return (
     <CardInkProvider value={ink}>

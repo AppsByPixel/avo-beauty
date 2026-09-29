@@ -14,9 +14,29 @@
  * the member and not a moment before. A client that painted the card gold ahead
  * of the server would be telling her she is Gold when the till says otherwise.
  *
+ *   salon.walletCard 'brand' → the brand card, whatever her tier
  *   tiers mode, tier known   → that tier's `cardFrom → cardTo`, `cardText`
  *   stamps mode              → the brand card, exactly as it was
  *   tiers mode, no tier yet  → the brand card, exactly as it was
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * A WORKSPACE THAT KEEPS ITS OWN COLOUR (Aftab, 2026-09-29)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * "if … that workspace has a dark green theme chosen then it should override
+ * this tier coloring for that workspace." `Salon.walletCard` is the salon's
+ * setting, read off the salon the wallet already loads: `'brand'` paints the
+ * brand card for every member, a Gold member included; `'tier'` is the rule
+ * above, unchanged. It is a setting and not keyed off the hex, so any theme can
+ * keep its colour — and `SalonSchema` defaults a missing key to `'tier'`, so a
+ * salon read (or a cached snapshot) that predates the field draws exactly what
+ * it drew before, never a card the salon did not choose.
+ *
+ * The brand card is the DERIVED one, for any salon: `theme.card` is what
+ * `./brand` writes `deriveBrandSet(salon.brandColor)`'s `cardFrom`/`cardTo`
+ * into at boot, not a hard-coded Amara gradient. For the dark `forest` preset
+ * (#1F5A36) that is #277144 → #153C24, and white text at the brand card's own
+ * opacities, with its white overlays, clears AA on both stops — computed in
+ * `cardInk.test.ts` and rendered in `walletCardBrandRender.test.tsx`.
  *
  * The brand path is the white-label one and is kept byte-for-byte: the same
  * `theme.card` gradient, white text at the same opacities, and the translucent
@@ -47,7 +67,7 @@
  */
 
 import { createContext, useContext } from 'react';
-import type { TierName } from '@avo/types';
+import type { Salon, TierName } from '@avo/types';
 import { relativeLuminance } from '@avo/tokens';
 import type { LoyaltyProgress } from '../domain/loyalty';
 import { cardGradient, tierStyles, WHITE, withAlpha } from './index';
@@ -147,10 +167,20 @@ export function tierInk(tier: TierName): CardInk {
 }
 
 /**
- * The card's palette for this member. Only a tiers-mode progress carries a tier;
- * stamps and a null progress (no ladder, or no tier yet) keep the brand.
+ * The card's palette for this member at this salon. A salon whose `walletCard`
+ * is `'brand'` keeps its own colour on every card, whatever her tier. Otherwise
+ * only a tiers-mode progress carries a tier; stamps and a null progress (no
+ * ladder, or no tier yet) keep the brand.
+ *
+ * `walletCard` is REQUIRED, not defaulted here: the default is the schema's
+ * (`.default('tier')`), and a second default in this function would be a second
+ * place to decide it.
  */
-export function cardInkFor(progress: LoyaltyProgress | null): CardInk {
+export function cardInkFor(
+  progress: LoyaltyProgress | null,
+  walletCard: Salon['walletCard'],
+): CardInk {
+  if (walletCard === 'brand') return brandInk();
   return progress?.mode === 'tiers' ? tierInk(progress.current) : brandInk();
 }
 
