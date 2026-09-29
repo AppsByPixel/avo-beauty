@@ -5,8 +5,8 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import { CampaignRewardSchema, RewardKeySchema } from '@avo/types';
-import type { Campaign, CampaignReward, HappyHour, PromotionSet, RewardKey } from '@avo/types';
+import { CampaignRewardSchema, isBoostLive, RewardKeySchema } from '@avo/types';
+import type { Boost, Campaign, CampaignReward, HappyHour, PromotionSet, RewardKey } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { ApiError } from './client.js';
 import { useSalonId } from '../auth/AuthProvider.js';
@@ -55,21 +55,41 @@ export function usePromotions(): UseQueryResult<PromotionSet> {
 
 // ---------------------------------------------------------------- boosts ---
 
+/**
+ * What a branch boost changes: visits and stamps, and nothing else.
+ *
+ * `topup` IS GONE FROM THIS SHAPE, ON PURPOSE. Aftab ruled 2026-09-29 (DECISIONS,
+ * "Branch boosts lose the top-up bonus"): a top-up happens in the app and has no
+ * branch, so `decideEarning` never found a branch boost for one and the server
+ * never paid the "Top-up bonus" this screen let a merchant set. The wire field
+ * stays, always 0, so installed apps keep parsing — `publishBody` writes that 0
+ * itself, and no screen holds a value it could send instead.
+ */
 export interface BoostValues {
   visit: number;
-  topup: number;
   stamp: number;
 }
 
 /** The neutral row. A branch with no boost earns exactly the salon's base rate. */
-export const NEUTRAL_BOOST: BoostValues = { visit: 1, topup: 0, stamp: 1 };
+export const NEUTRAL_BOOST: BoostValues = { visit: 1, stamp: 1 };
 
 /** Bounds enforced by the API and by a CHECK. Restated so the stepper stops first. */
 export const BOOST_BOUNDS = {
   visit: { min: 1, max: 3, step: 1 },
-  topup: { min: 0, max: 30, step: 5 },
   stamp: { min: 1, max: 3, step: 1 },
 } as const;
+
+/**
+ * WHAT A CHARGE AT THIS BRANCH EARNS AT `now` — the published row read through
+ * `isBoostLive`, so a boost that has ended, has not started, or was stopped
+ * earns the base rate. The till panel's "what a charge through it earns" is a
+ * sentence about now; a boost scheduled for Friday does not make it true today.
+ * The server decides the charge with the same predicate (#2); this only says it.
+ */
+export function earningNow(boost: Boost | undefined, now: Date): BoostValues {
+  if (!boost || boost.stoppedAt !== null || !isBoostLive(boost, now)) return NEUTRAL_BOOST;
+  return { visit: boost.visit, stamp: boost.stamp };
+}
 
 /**
  * What a branch's boost row MEANS, in the design's own plain language.
@@ -91,15 +111,58 @@ export const BOOST_BOUNDS = {
  * The caller passes the branch name because the two screens frame it
  * differently — Boosts says "A visit at Salmiya…", the till panel says "A visit
  * on this till…" — and the subject is the only part that differs.
+ *
+ * NO TOP-UP CLAUSE. It said "adds 10% to every top-up", which the server never
+ * paid — see `BoostValues`.
  */
 export function summariseBoost(subject: string, v: BoostValues): string {
   const parts: string[] = [];
   if (v.visit > 1) parts.push(`counts as ${v.visit} visits`);
-  if (v.topup > 0) parts.push(`adds ${v.topup}% to every top-up`);
   if (v.stamp > 1) parts.push(`earns ${v.stamp} stamps`);
   if (parts.length === 0) return `A visit at ${subject} earns the salon's base rate.`;
   const last = parts.pop() as string;
   return `A visit at ${subject} ${parts.length ? `${parts.join(', ')} and ${last}` : last}.`;
+}
+
+/** One branch as the screen hands it over: the values, and its window. */
+export interface BoostPublishRow extends BoostValues {
+  /** ISO with a zone (`…Z`), or `null` for no bound. */
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
+export interface BoostWireRow {
+  visit: number;
+  topup: 0;
+  stamp: number;
+  startsAt: string | null;
+  endsAt: string | null;
+}
+
+/**
+ * The PUT's `boosts` object.
+ *
+ * `topup: 0`, ALWAYS, written here rather than carried in from the screen. The
+ * API refuses a non-zero value; nothing on the dashboard can hold one.
+ *
+ * A NEUTRAL ROW GOES WITHOUT A WINDOW. The server drops a window on "no boost"
+ * anyway (`parseBoost`), so sending one would only make a branch read as changed
+ * — and a changed branch loses its stop record.
+ */
+export function publishBody(rows: Record<string, BoostPublishRow>): Record<string, BoostWireRow> {
+  return Object.fromEntries(
+    Object.entries(rows).map(([branchId, r]) => {
+      const neutral = r.visit === NEUTRAL_BOOST.visit && r.stamp === NEUTRAL_BOOST.stamp;
+      const row: BoostWireRow = {
+        visit: r.visit,
+        topup: 0,
+        stamp: r.stamp,
+        startsAt: neutral ? null : r.startsAt,
+        endsAt: neutral ? null : r.endsAt,
+      };
+      return [branchId, row];
+    }),
+  );
 }
 
 /**
@@ -108,7 +171,9 @@ export function summariseBoost(subject: string, v: BoostValues): string {
  * A PUT of the SET, not a PATCH of a branch, because the screen is the whole
  * grid: the API resets any branch absent from the body to neutral, so sending a
  * partial map would silently clear the branches the merchant did not touch.
- * Every branch the salon has goes in the body, every time.
+ * Every branch the salon has goes in the body, every time — AND ITS WINDOW WITH
+ * IT, because a branch sent without its window loses it (lane A, 6d102c5). A
+ * branch sent back exactly as published keeps its stop record on the server.
  *
  * No optimistic update, for the reason the loyalty publish gives: the cache is
  * written only from the server's response, so a rejected publish leaves the
@@ -118,18 +183,59 @@ export function summariseBoost(subject: string, v: BoostValues): string {
 export function usePublishBoosts(): UseMutationResult<
   PromotionSet,
   unknown,
-  Record<string, BoostValues>
+  Record<string, BoostPublishRow>
 > {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (boosts) =>
+    mutationFn: (rows) =>
       authedRequest<PromotionSet>('merchant', `/v1/salons/${salonId}/promotions/boosts`, {
         method: 'PUT',
-        body: { boosts },
+        body: { boosts: publishBody(rows) },
       }),
     onSuccess: (set) => queryClient.setQueryData(promotionKeys.set(salonId), set),
+  });
+}
+
+/**
+ * STOP ONE BRANCH'S BOOST, NOW — `POST …/promotions/boosts/{branchId}/stop`,
+ * `perms.marketing` (the publish's gate, enforced server-side).
+ *
+ * The server writes that branch neutral with no window and records who stopped
+ * it and when; every other branch is untouched. A boost scheduled for later can
+ * be stopped too, which cancels it before it starts. It answers with the set.
+ *
+ * THE CACHE IS RESEEDED FROM THE RESPONSE, and it has to be: a stop does NOT
+ * bump `boostsPublishedAt`, the set's publish identity, so anything keyed on
+ * that alone would never notice. `Boosts.tsx` reseeds a branch's draft from the
+ * row's own fingerprint for the same reason.
+ *
+ * A 409 (`no_boost_running`, `boost_already_stopped`, `boost_already_ended`)
+ * means the screen's picture of that branch was stale — a colleague stopped it,
+ * or it ran out while the confirm was open. The set is re-read so the row shows
+ * what is true; the refusal itself is the row's to render.
+ *
+ * No Idempotency-Key: it moves no money (#4 is money-moving POSTs), and a
+ * repeated stop is told `boost_already_stopped` by name.
+ */
+export function useStopBoost(): UseMutationResult<PromotionSet, unknown, string> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (branchId) =>
+      authedRequest<PromotionSet>(
+        'merchant',
+        `/v1/salons/${salonId}/promotions/boosts/${encodeURIComponent(branchId)}/stop`,
+        { method: 'POST' },
+      ),
+    onSuccess: (set) => queryClient.setQueryData(promotionKeys.set(salonId), set),
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: promotionKeys.set(salonId) });
+      }
+    },
   });
 }
 
