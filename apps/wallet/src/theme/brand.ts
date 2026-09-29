@@ -33,10 +33,13 @@
  * `brand` is a SURFACE colour and white text goes on the derived `deep`. Measured
  * here, not assumed: white on the shipped default `brand` is 3.54:1 and would be
  * refused as a fill; on its derived `deep` it is 5.62:1. The same holds for the
- * other two shipped presets — white-on-brand is 2.98:1 for Noor rose and 3.76:1
+ * other two light presets — white-on-brand is 2.98:1 for Noor rose and 3.76:1
  * for Lila lilac, i.e. the rule is not a default-preset quirk, it is true of
- * every brand this product has. This module never writes a text colour; it writes
- * a palette, and `onBrandFill` in `./index` is what keeps white off `brand`.
+ * every light brand this product has. The dark `forest` preset (#1F5A36,
+ * 2026-09-29) passes white on its brand, and that is not an exception: its
+ * derived deep IS its brand, so white-on-deep is the same pixels. This module
+ * never writes a text colour; it writes a palette, and `onBrandFill` in
+ * `./index` is what keeps white on `deep`.
  *
  * (Those are a snapshot of a ramp that has already moved once — the default read
  * 4.27:1 before trunk revised it. `brandPresets.*.whiteOnBrand` is the declared
