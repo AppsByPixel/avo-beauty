@@ -444,6 +444,7 @@ export function HomeScreen({
         balanceFils={member.balanceFils}
         pill={loyaltyPill(progress, copy)}
         progress={progress}
+        walletCard={salon.walletCard}
         lastUpdated={offline && fetchedAt ? copy.lastUpdated(relativeTime(fetchedAt, copy)) : null}
       >
         <PaymentCode

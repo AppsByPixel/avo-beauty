@@ -169,7 +169,7 @@ function card(lang: 'en' | 'ar') {
   cleanup();
   const { container } = render(
     <LanguageProvider initial={lang}>
-      <WalletCard balanceFils={24500} pill="Gold" progress={null} lastUpdated={null} />
+      <WalletCard balanceFils={24500} pill="Gold" progress={null} walletCard="tier" lastUpdated={null} />
     </LanguageProvider>,
   );
   const all = leaves(container.firstElementChild as HTMLElement);

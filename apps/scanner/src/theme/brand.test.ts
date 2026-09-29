@@ -30,6 +30,15 @@ import { applyBrandColor } from './brand';
  */
 const PRESET_HEXES = Object.values(brandPresets).map((p) => p.brand);
 
+/**
+ * The presets dark enough that white passes on their brand — by NAME, as
+ * `packages/tokens/src/derive.test.ts` scopes them, so a light preset that
+ * drifted dark still goes red rather than quietly changing category.
+ */
+const DARK_PRESETS = new Set(['forest']);
+const LIGHT_PRESETS = Object.entries(brandPresets).filter(([name]) => !DARK_PRESETS.has(name));
+const DARK = Object.entries(brandPresets).filter(([name]) => DARK_PRESETS.has(name));
+
 /** The preset the generated native theme is built from. `generate.ts:218`. */
 const SHIPPED = brandPresets.amaraSage;
 
@@ -136,17 +145,42 @@ describe('non-negotiable #9 survives a rebrand on the staff surface', () => {
   });
 
   /**
-   * And FAILS it on `brand` for every one of them. That is why `onBrandFill` is a
-   * single constant pinned to `brandDeep`: the rule is a property of every brand
-   * this product has, not of the default.
+   * And FAILS it on `brand` for every LIGHT one of them. That is why `onBrandFill`
+   * is a single constant pinned to `brandDeep`: the rule is a property of the
+   * light brands this product has, not of the default.
+   *
+   * RESCOPED 2026-09-29, as trunk rescoped `packages/tokens/src/derive.test.ts`.
+   * The dark `forest` preset (#1F5A36) passes white on its brand — the safe
+   * direction, not an exception: #9 is "white goes on deep", and a dark preset's
+   * deep IS its brand. So the dark presets, by name, assert that identity with
+   * white clearing brand and both card stops (the scanner's home and member
+   * cards draw white on `card.from → card.to`).
    *
    * The per-brand figures used to be copied into this comment and went stale the
    * moment the ramp moved. They are not restated here; the token file declares
    * them as `whiteOnBrand` and the spec below holds that declaration to account.
    */
-  it('and fails it for white on brand, for every shipped brand', () => {
-    const legible = PRESET_HEXES.filter((hex) => contrastWithWhite(hex) >= AA_NORMAL_TEXT);
+  it('and fails it for white on brand, for every shipped light brand', () => {
+    const legible = LIGHT_PRESETS.map(([, p]) => p.brand).filter(
+      (hex) => contrastWithWhite(hex) >= AA_NORMAL_TEXT,
+    );
     expect(legible).toEqual([]);
+  });
+
+  it('and every shipped dark brand is its own deep, with white clearing brand and both card stops', () => {
+    expect(DARK.length).toBeGreaterThan(0);
+    const failures = DARK.flatMap(([name, p]) => {
+      const r = deriveBrandSet(p.brand);
+      if (!r.ok) return [`${name} refused`];
+      return [
+        r.set.deep === r.set.brand ? null : `${name}: deep ${r.set.deep} is not brand ${r.set.brand}`,
+        ...(['brand', 'cardFrom', 'cardTo'] as const).map((k) => {
+          const ratio = contrastWithWhite(r.set[k]);
+          return ratio >= AA_NORMAL_TEXT ? null : `${name} ${k} ${ratio.toFixed(2)}:1`;
+        }),
+      ].filter(Boolean);
+    });
+    expect(failures).toEqual([]);
   });
 
   /**

@@ -37,6 +37,13 @@ const PRESET_HEXES = Object.fromEntries(
 ) as Record<string, string>;
 
 /**
+ * The presets dark enough that white passes on their brand — scoped by NAME, as
+ * `packages/tokens/src/derive.test.ts` scopes them, so a light preset that drifted
+ * dark would still go red rather than quietly change category.
+ */
+const DARK_PRESETS = new Set(['forest']);
+
+/**
  * The default palette, read off the preset the native theme is generated from
  * (`packages/tokens/src/generate.ts:218`) rather than remembered from `theme` —
  * `applyBrandColor` mutates `theme`, and a test that captured a reference would
@@ -207,20 +214,40 @@ describe('non-negotiable #9 holds for every brand a salon can be given', () => {
       });
 
       /**
-       * The rule's own justification for each brand in turn: white on `brand`
-       * fails on all three, so #9 is a property of every brand this product has,
-       * not an Amara quirk. If a hex ever arrives where white-on-brand passes,
-       * this fails and somebody has to say why `brand` may now carry text.
+       * The rule's own justification for each LIGHT brand in turn: white on
+       * `brand` fails on every one, so #9 is a property of the light brands this
+       * product has, not an Amara quirk. If a light preset ever drifts to where
+       * white-on-brand passes, this fails and somebody has to say why.
        *
-       * The three ratios used to be copied into this sentence and one of them
-       * went stale with the ramp. They live on `brandPresets.*.whiteOnBrand`, and
-       * the scanner's `theme/brand.test.ts` recomputes those declarations rather
-       * than trusting them.
+       * THE DARK PRESETS ARE SCOPED OUT BY NAME, the way trunk scoped them in
+       * `packages/tokens/src/derive.test.ts` (2026-09-29). `forest` (#1F5A36) is
+       * dark enough that white passes on its brand — and that is the safe
+       * direction, not an exception to #9: the rule is "white goes on deep", and
+       * a dark preset's deep IS its brand. So for those the assertion is that
+       * identity, plus white clearing the brand and both card stops. It was never
+       * true that no hex `deriveBrandSet` accepts makes white legible on brand; a
+       * merchant could always enter one. What #9 needs is that every white-text
+       * fill in the app uses `deep`, and `contrast.test.ts` still scans for that.
+       *
+       * The ratios used to be copied into this sentence and one of them went
+       * stale with the ramp. They live on `brandPresets.*.whiteOnBrand`, and the
+       * scanner's `theme/brand.test.ts` recomputes those declarations rather than
+       * trusting them.
        */
-      it('and FAILS it for white on brand, which is why the rule exists', () => {
-        if (!result.ok) throw new Error(`${hex} was refused`);
-        expect(contrastWithWhite(result.set.brand)).toBeLessThan(AA_NORMAL_TEXT);
-      });
+      if (DARK_PRESETS.has(name)) {
+        it('is a dark preset: its own deep, and white clears brand and both card stops', () => {
+          if (!result.ok) throw new Error(`${hex} was refused`);
+          expect(result.set.deep).toBe(result.set.brand);
+          expect(contrastWithWhite(result.set.brand)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+          expect(contrastWithWhite(result.set.cardFrom)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+          expect(contrastWithWhite(result.set.cardTo)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+        });
+      } else {
+        it('and FAILS it for white on brand, which is why the rule exists', () => {
+          if (!result.ok) throw new Error(`${hex} was refused`);
+          expect(contrastWithWhite(result.set.brand)).toBeLessThan(AA_NORMAL_TEXT);
+        });
+      }
 
       it('clears 4.5:1 for the derived deep as LABEL text on the derived tint', () => {
         if (!result.ok) throw new Error(`${hex} was refused`);

@@ -216,6 +216,13 @@ function rebranded(hex: string): Record<string, string> {
  * brand ramp: the suite stayed green while one of its four tenants was fictional,
  * which is a worse outcome than going red.
  */
+/**
+ * The presets dark enough that white passes on their brand, scoped by NAME as
+ * `packages/tokens/src/derive.test.ts` scopes them.
+ */
+const DARK_PRESETS = new Set(['forest']);
+const isDarkTenant = (label: string) => DARK_PRESETS.has(label.split(' ')[0] ?? '');
+
 const TENANTS: Array<[string, Record<string, string>]> = [
   ['the shipped default', DEFAULT_PALETTE],
   ...Object.entries(brandPresets).map(
@@ -255,14 +262,37 @@ describe('every foreground/background pair stated in one style entry clears AA',
    * The two source scans above — "never sets a text colour in the same entry as a
    * brand fill" and "never pairs a white foreground with any brand-family
    * background" — are palette-INDEPENDENT: they match identifiers, not values, so
-   * they already hold for every tenant. This asserts the property that makes that
-   * true rather than leaving it as a claim in a comment: no viable brand hex can
-   * make white legible on `brand`, so the rule can never become optional.
+   * they already hold for every tenant. This asserts why the rule can never
+   * become optional, per tenant, rather than leaving it as a claim in a comment.
+   *
+   * RESCOPED 2026-09-29, the way trunk rescoped `packages/tokens/src/derive.test.ts`.
+   * This used to say "no viable brand hex ever makes white legible on `brand`",
+   * and that was never true of every hex `deriveBrandSet` accepts: the dark
+   * `forest` preset (#1F5A36) is one, and a merchant could always have typed it.
+   * It is harmless, and this is the reason: #9 says white goes on `deep`, and a
+   * dark brand's deep IS its brand. So the light tenants keep "white fails on
+   * brand" — the rule's justification — and the dark ones assert the identity
+   * that makes their white-on-deep the same pixels, with white clearing the brand
+   * and both card stops. The #9 scans themselves are untouched.
    */
-  it('and no viable brand hex ever makes white legible on `brand`', () => {
-    const legible = TENANTS.filter(
-      ([, palette]) => contrastRatio(WHITE, palette.brand as string) >= AA_NORMAL_TEXT,
-    ).map(([label]) => label);
+  it('and every light tenant fails white on `brand`, which is why the rule exists', () => {
+    const legible = TENANTS.filter(([label]) => !isDarkTenant(label))
+      .filter(([, palette]) => contrastRatio(WHITE, palette.brand as string) >= AA_NORMAL_TEXT)
+      .map(([label]) => label);
     expect(legible).toEqual([]);
+  });
+
+  it('and every dark tenant is its own deep, with white clearing brand and both card stops', () => {
+    const dark = Object.entries(brandPresets).filter(([name]) => DARK_PRESETS.has(name));
+    expect(dark.length).toBeGreaterThan(0);
+    for (const [name, p] of dark) {
+      const palette = rebranded(p.brand);
+      const derived = deriveBrandSet(p.brand);
+      if (!derived.ok) throw new Error(`${name} was refused`);
+      expect(palette.brandDeep, name).toBe(palette.brand);
+      expect(contrastRatio(WHITE, palette.brand as string), name).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+      expect(contrastRatio(WHITE, derived.set.cardFrom), name).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+      expect(contrastRatio(WHITE, derived.set.cardTo), name).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+    }
   });
 });

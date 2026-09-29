@@ -111,7 +111,7 @@ function draw(
 ) {
   const ui = (p: LoyaltyProgress | null) => (
     <LanguageProvider initial={lang}>
-      <WalletCard balanceFils={24500} pill={pill} progress={p} lastUpdated="Last updated 2m ago">
+      <WalletCard balanceFils={24500} pill={pill} progress={p} walletCard="tier" lastUpdated="Last updated 2m ago">
         {panel ? (
           <PaymentCode
             memberId="AVO-1204"
