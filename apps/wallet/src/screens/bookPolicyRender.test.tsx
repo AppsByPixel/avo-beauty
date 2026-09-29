@@ -16,6 +16,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { tapAndSettle } from '../testing/tapAndSettle';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookableArtist, BookingPolicy, Language, Member, Salon } from '@avo/types';
 
@@ -145,7 +146,10 @@ async function walkToReview() {
   fireEvent.click(screen.getByTestId('book-next'));
   await waitFor(() => expect(screen.getByTestId('book-slot-16:00')).toBeTruthy());
   fireEvent.click(screen.getByTestId('book-slot-16:00'));
-  fireEvent.click(screen.getByTestId('book-next'));
+  // Into review, where the policy read starts and Confirm waits on it: that
+  // read answers inside act, so Confirm's responder is armed when a spec taps
+  // it (src/testing/tapAndSettle.ts). A held read stays held.
+  await tapAndSettle(screen.getByTestId('book-next'));
   await waitFor(() => expect(screen.getByTestId('book-confirm')).toBeTruthy());
 }
 
@@ -239,7 +243,7 @@ describe('409 policy_changed — the new policy is shown and she confirms again'
     draw();
     await walkToReview();
     await screen.findByTestId('book-review-policy');
-    fireEvent.click(screen.getByTestId('book-confirm'));
+    await tapAndSettle(screen.getByTestId('book-confirm'));
 
     await screen.findByTestId('book-policy-changed');
     expect(textOf('book-policy-changed')).toBe(en.policyChanged);
@@ -271,7 +275,7 @@ describe('409 policy_changed — the new policy is shown and she confirms again'
     draw();
     await walkToReview();
     await screen.findByTestId('book-review-policy');
-    fireEvent.click(screen.getByTestId('book-confirm'));
+    await tapAndSettle(screen.getByTestId('book-confirm'));
     await waitFor(() => expect(screen.queryByTestId('book-review-policy')).toBeNull());
     await waitFor(() => expect(isDisabled('book-confirm')).toBe(false));
     fireEvent.click(screen.getByTestId('book-confirm'));

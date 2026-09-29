@@ -48,6 +48,9 @@ export default defineConfig({
     // `.tsx` was absent, so a render test would not merely have failed — it
     // would not have been COLLECTED, and the run would have reported success.
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Raises Testing Library's `findBy*`/`waitFor` ceiling to 5s for the jsdom
+    // files. Why 5s, and why it must stay below `testTimeout`: vitest.setup.ts.
+    setupFiles: ['./vitest.setup.ts'],
     /**
      * 20s, up from vitest's 5s default, and it is about MEASURED cost rather
      * than slow tests.
@@ -65,6 +68,10 @@ export default defineConfig({
      * that four workers shared four cores. The ceiling is raised rather than
      * the tests trimmed: each one is driving a real flow end to end, which is
      * what makes them worth having.
+     *
+     * It must stay ABOVE Testing Library's `asyncUtilTimeout` (5s, set in
+     * vitest.setup.ts), so a wait that never resolves fails with its own
+     * "Unable to find …" rather than as an anonymous test timeout.
      */
     testTimeout: 20_000,
   },
