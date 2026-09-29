@@ -72,8 +72,8 @@ describe('one grid: every row is quarters of the same column, with the one gap t
     expect(rulesFor('.overview__kpis')).toMatch(/--ovw-half-min: \d+px/);
   });
 
-  it('no card is stretched to its neighbour’s height', () => {
-    for (const sel of ['.overview__grid', '.ovw-grid']) expect(rulesFor(sel)).toContain('align-items: start');
+  it('the analytics cards are not stretched to a neighbour: masonry packs them instead', () => {
+    expect(rulesFor('.ovw-grid')).toContain('align-items: start');
   });
 
   it('the analytics pack as masonry once measured: 1px rows, no row gap, dense, a measured span', () => {
@@ -138,5 +138,75 @@ describe('the heatmap fills its card', () => {
       'height: clamp(20px, calc((100cqw - 40px) / var(--hours) * 0.8), 36px)',
     );
     expect(rulesFor('.ovw-heat tbody td')).not.toMatch(/(^|[ ;])width:/);
+  });
+});
+
+/*
+ * Aftab: "still space under the gross by day chart". Measured at 802px: the
+ * trend card 286px and the activity card 412px on one row, `align-items: start`,
+ * so a 126px blank under the chart. The pair now shares its row height, and the
+ * extra height goes to the one thing on either card that can use it (the bars)
+ * rather than to a blank under a short card or inside it.
+ */
+describe('the trend/activity pair shares one row height, and the chart grows into it', () => {
+  it('the pair stretches to the row; the analytics grid does not', () => {
+    expect(rulesFor('.overview__grid')).toContain('align-items: stretch');
+    expect(rulesFor('.overview__grid')).not.toContain('align-items: start');
+  });
+
+  it('each card in the pair is a column, so a child can take the extra height', () => {
+    const card = rulesFor('.overview__grid > .avo-card');
+    expect(card).toContain('display: flex');
+    expect(card).toContain('flex-direction: column');
+  });
+
+  it('the plot flexes, never below the chart’s old height, and the caption stays under it', () => {
+    expect(rulesFor('.trend__plot')).toContain('flex: 1');
+    expect(rulesFor('.trend__plot')).toContain(
+      'min-height: calc(var(--trend-bars) + var(--trend-num-row))',
+    );
+    expect(rulesFor('.trend-card')).toContain('--trend-bars: 132px');
+    // The foot follows the plot in the column; nothing pins it anywhere else.
+    expect(rulesFor('.trend-card__foot')).not.toMatch(/position:|order:/);
+  });
+
+  it('the bars are a percentage of the track, and the track is the flex child, not a fixed box', () => {
+    const track = rulesFor('.trend__track');
+    expect(track).toContain('flex: 1');
+    expect(track).toContain('min-height: var(--trend-bars)');
+    expect(track).not.toMatch(/(^|[ ;])height:/);
+    expect(rulesFor('.trend__days')).toContain('align-items: stretch');
+    // The axis spans exactly the bar row: the plot less the day-number row.
+    const axis = rulesFor('.trend__axis');
+    expect(axis).toContain('min-height: var(--trend-bars)');
+    expect(axis).toContain('margin-bottom: var(--trend-num-row)');
+    expect(axis).not.toMatch(/(^|[ ;])height:/);
+  });
+
+  it('the skeleton grows the same way, so the card does not change height when bars arrive', () => {
+    expect(rulesFor('.trend__skeleton')).toContain('flex: 1');
+    expect(rulesFor('.trend__skeleton')).toContain('display: flex');
+  });
+
+  it('a state in either card takes the extra height, so no blank band sits under its copy', () => {
+    for (const sel of ['.trend-card__state', '.overview__feed-state']) {
+      const state = rulesFor(sel);
+      expect(state).toContain('flex: 1');
+      expect(state).toContain('justify-content: center');
+    }
+  });
+
+  it('a stretched activity card keeps its list at the top and “Show N more” at the bottom', () => {
+    expect(rulesFor('.overview__feed-more')).toContain('margin-top: auto');
+  });
+
+  it('computed in the real cascade: the pair’s cards are flex columns in a stretching grid', () => {
+    document.body.innerHTML =
+      '<div class="overview__grid"><div class="avo-card trend-card"></div><div class="avo-card overview__activity"></div></div>';
+    for (const card of document.querySelectorAll('.avo-card')) {
+      expect(getComputedStyle(card).display).toBe('flex');
+      expect(getComputedStyle(card).flexDirection).toBe('column');
+    }
+    expect(getComputedStyle(document.querySelector('.overview__grid')!).alignItems).toBe('stretch');
   });
 });

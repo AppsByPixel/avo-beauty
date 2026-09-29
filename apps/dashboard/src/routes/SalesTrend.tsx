@@ -568,7 +568,7 @@ export function TrendFoot({ scope }: { scope: TrendScope }) {
  */
 export function TrendSkeleton() {
   return (
-    <div aria-hidden="true">
+    <div className="trend__skeleton" aria-hidden="true">
       <div className="trend__plot">
         <div className="trend__axis">
           <Skeleton width={46} height={11} />
