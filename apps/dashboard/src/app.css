@@ -2533,6 +2533,138 @@ a:hover {
   font-size: 17px;
 }
 
+/*
+ * ------------------------------------------------------------- wallet card
+ * `Settings.tsx § WalletCardPanel` and the wizard's step 3 — NEW WORK, the
+ * design draws no such control. The layout borrows the brand kit's own
+ * (`AVO Merchant Dashboard.dc.html:966`): controls on the left, a fixed-width
+ * preview stage on the right, collapsing to one column below desktop.
+ */
+.wcard-panel {
+  display: grid;
+  grid-template-columns: 1fr 232px;
+  gap: 24px;
+  align-items: start;
+}
+
+.dash[data-bp='narrow'] .wcard-panel,
+.dash[data-bp='tablet'] .wcard-panel {
+  grid-template-columns: 1fr;
+}
+
+.wcard-panel__controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wcard-panel__controls .settings__row-body {
+  margin-top: 0;
+}
+
+.wcard-panel__brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+/* `--avo-brand` as a pure surface. No text sits on it (#9). */
+.wcard-panel__swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: var(--avo-brand);
+}
+
+.wcard-panel__hex {
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-ink);
+}
+
+.wcard-panel__status {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+/*
+ * The preview stage. Every card fill is a pair of custom properties set inline
+ * from the token file — `tier.<name>.cardFrom/To` or `deriveBrandSet(hex)` —
+ * with the page's own card stops as the declared default. No text sits on a
+ * card; the tier names are captions in ink below (#9 by construction).
+ */
+.wcard {
+  margin: 0;
+  /* The stage's width on desktop, and its ceiling once the panel is one column. */
+  max-width: 300px;
+  background: var(--avo-surface-alt2);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.wcard__row {
+  display: flex;
+  gap: 10px;
+}
+
+.wcard__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wcard__card {
+  --wcard-from: var(--avo-card-from);
+  --wcard-to: var(--avo-card-to);
+  aspect-ratio: 1.6;
+  border-radius: 12px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 5px;
+  background: linear-gradient(135deg, var(--wcard-from), var(--wcard-to));
+}
+
+/* Decoration, not text: a balance line and a name line, in the card's ink. */
+.wcard__bar {
+  display: block;
+  height: 5px;
+  width: 70%;
+  border-radius: 999px;
+  background: var(--avo-white);
+  opacity: 0.55;
+}
+
+.wcard__card[data-ink='dark'] .wcard__bar {
+  background: var(--avo-ink);
+  opacity: 0.35;
+}
+
+.wcard__bar--short {
+  width: 42%;
+}
+
+.wcard__label {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-strong);
+  text-align: center;
+}
+
+.wcard__caption {
+  font-size: 11.5px;
+  color: var(--avo-text-muted);
+  text-align: center;
+  margin-top: 11px;
+}
+
 .settings__card--rows .settings__title {
   padding: 16px 0 4px;
 }
@@ -8181,6 +8313,14 @@ a:hover {
 
 .wiz__swatch[data-on] {
   border-color: var(--avo-ink);
+  /*
+   * THE INSET WHITE RING IS THE MERCHANT DESIGN'S OWN selected chip
+   * (`AVO Merchant Dashboard.dc.html § paletteChips`: "border:2px solid #1C1B19;
+   * box-shadow:0 0 0 3px #fff inset"). The console's `wBrands` draws the ink
+   * border alone, which was enough on three mid-tone swatches and is not on the
+   * dark `forest` — ink on #1F5A36 does not read as a selection.
+   */
+  box-shadow: inset 0 0 0 3px var(--avo-white);
 }
 
 /*

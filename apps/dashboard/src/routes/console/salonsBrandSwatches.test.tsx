@@ -59,6 +59,22 @@ describe('the console onboarding wizard draws the token file’s brand presets',
   });
 
   /**
+   * THE FOURTH PRESET, BY NAME. Trunk's fd6edc8 added the dark-green `forest`
+   * and the wizard drew it with no change here — which is the assertion above
+   * doing its job. It is named separately anyway because it is the first preset
+   * the design never drew, and "the list grew and nothing had to move" is worth
+   * one line that fails if it ever stops being true: a literal restored in
+   * `Salons.tsx` would drop it first.
+   *
+   * COUNTED OFF THE TOKEN FILE, NOT AS `4`. The count is the relationship, so
+   * a fifth preset keeps this green without an edit.
+   */
+  it('draws the dark-green Forest preset, read from the token file', () => {
+    expect(BRAND_SWATCHES).toContain(brandPresets.forest.brand);
+    expect(BRAND_SWATCHES).toHaveLength(Object.keys(brandPresets).length);
+  });
+
+  /**
    * THE LIVE DEFECT, ASSERTED SEPARATELY FROM THE LIST.
    *
    * "Which swatch is preselected" and "which hex the platform defaults to" were

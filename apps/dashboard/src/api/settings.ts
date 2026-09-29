@@ -108,6 +108,15 @@ export type SalonPatch = Partial<
     | 'name'
     | 'nameAr'
     | 'brandColor'
+    /*
+     * What colours the wallet's main card — the member's tier metal, or this
+     * brand (Aftab, 2026-09-29; trunk's fd6edc8). Beside `brandColor` because it
+     * is the same door and the same gate: `PATCH /salons/{id}`, `perms.loyalty`.
+     * Lane A adds it to `MERCHANT_EDITABLE` in parallel; until that lands the
+     * server answers `400 not_editable`, which `Settings.tsx § WalletCardPanel`
+     * renders verbatim.
+     */
+    | 'walletCard'
     | 'depositFils'
     /*
      * `noShowReturnMinutes` WAS HERE AND IS GONE. Lane A's be36b9a moved it to

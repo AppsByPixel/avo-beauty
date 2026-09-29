@@ -68,6 +68,13 @@ import {
 import { NoShowFootCopy } from './depositCopy.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { Tills } from './Tills.js';
+import {
+  WALLET_CARD_BODY,
+  WALLET_CARD_OPTIONS,
+  WALLET_CARD_STAMPS_NOTE,
+  WalletCardPreview,
+  type WalletCard,
+} from './walletCardChoice.js';
 
 /**
  * Merchant → Settings.
@@ -251,6 +258,13 @@ export function Settings() {
             the screen is open the row's own `WriteError` renders the server's
             403 verbatim. Non-negotiable #7.
           */}
+          {/*
+            THE WALLET CARD FIRST, where the design puts the brand kit it belongs
+            to (`AVO Merchant Dashboard.dc.html:963`). The kit itself — logo,
+            palette, typography — is still not built, so this card carries the
+            brand colour as a read-out beside the one brand choice that is.
+          */}
+          <WalletCardPanel salon={salon} canEdit />
           <SocialLinksPanel
             salon={salon}
             saving={social.isPending ? socialId : null}
@@ -320,6 +334,12 @@ export function Settings() {
             body="You don't have permission to change loyalty settings. A manager can grant it."
           />
           {/*
+            READ-ONLY, NOT HIDDEN, for the policy's reason: the salon read is
+            ungated, so what her customers' cards look like is not a secret from
+            her. The panel says why she cannot change it.
+          */}
+          <WalletCardPanel salon={salon} canEdit={false} />
+          {/*
             READ-ONLY, NOT HIDDEN. The policy read is ungated — her customers
             read it before they book — so staff without `perms.loyalty` may read
             it too. The panel says why it cannot be edited.
@@ -344,6 +364,118 @@ export function Settings() {
         <WriteError error={update.error} reassurance="That setting is unchanged." />
       ) : null}
     </div>
+  );
+}
+
+/* -------------------------------------------------------------- wallet card */
+
+/**
+ * ==========================================================================
+ * Merchant → Settings → Wallet card — NEW WORK, THE DESIGN DRAWS NO SUCH CARD
+ * ==========================================================================
+ * Aftab, 2026-09-29: a workspace that has chosen its theme — the dark-green
+ * `forest` preset, say — keeps it on the wallet card instead of the member's
+ * tier metal. `Salon.walletCard` (trunk, fd6edc8): `tier` (the default) or
+ * `brand`. The words and the picture are `walletCardChoice.tsx`, shared with
+ * the console's onboarding wizard.
+ *
+ * THE SAME DOOR AND THE SAME GATE AS THE BRAND. `PATCH /salons/{id}` with
+ * `{ walletCard }`, `perms.loyalty` — the courtesy check is `canEdit`, and the
+ * server refuses with it deleted (#7). Without it the card is READ-ONLY, not
+ * absent: `GET /salons/{id}` is ungated, so the setting is not a secret, and a
+ * control that vanishes tells her nothing about why.
+ *
+ * ITS OWN MUTATION, not `Settings`' shared `update`, for `SalonHoursEditor`'s
+ * reason: the refusal belongs on this card, beside the control that caused it,
+ * and a write in flight here must not disable the deposit stepper or the
+ * module switches.
+ *
+ * NO OPTIMISTIC FLIP, for `ModuleRow`'s reason. The segment follows the SERVER's
+ * value; `useUpdateSalon` writes the parsed response into the cache and the
+ * selection moves then, not before. So a refusal needs no rollback — the choice
+ * never moved — and "Saving…" is the only thing the press changes until the
+ * answer lands.
+ *
+ * THE REFUSAL IS THE SERVER'S SENTENCE, whatever its code. Lane A names the code
+ * for a bad value in parallel; today's API has no `walletCard` in
+ * `MERCHANT_EDITABLE` and answers `400 not_editable` — "These fields cannot be
+ * edited here: walletCard." — and `WriteError` renders either verbatim.
+ */
+export function WalletCardPanel({ salon, canEdit }: { salon: Salon | undefined; canEdit: boolean }) {
+  const update = useUpdateSalon();
+
+  function choose(next: WalletCard) {
+    if (!canEdit || update.isPending || salon === undefined || next === salon.walletCard) return;
+    update.mutate({ walletCard: next });
+  }
+
+  return (
+    <Card className="settings__card">
+      <h2 className="settings__title avo-display">Wallet card</h2>
+      <p className="settings__sub">
+        The main card in the customer app. Changes reach phones on next open.
+      </p>
+
+      {salon === undefined ? (
+        <div className="wcard-panel">
+          <div className="wcard-panel__controls">
+            <Skeleton width={220} height={40} radius={12} />
+            <Skeleton width="70%" height={15} />
+          </div>
+          <Skeleton width={232} height={128} radius={18} />
+        </div>
+      ) : (
+        <div className="wcard-panel">
+          <div className="wcard-panel__controls">
+            {canEdit ? null : (
+              <p className="policy__readonly" role="note">
+                You can see this setting but not change it — changing it needs the loyalty
+                permission. A manager can grant it.
+              </p>
+            )}
+            <Segmented
+              label="Wallet card"
+              value={salon.walletCard}
+              onChange={choose}
+              options={WALLET_CARD_OPTIONS.map((o) => ({
+                ...o,
+                disabled: !canEdit || update.isPending,
+              }))}
+            />
+            <p className="settings__row-body">
+              {WALLET_CARD_BODY[salon.walletCard]}
+            </p>
+            {salon.loyaltyMode === 'stamps' ? (
+              <p className="settings__row-body">{WALLET_CARD_STAMPS_NOTE}</p>
+            ) : null}
+            {/*
+              THE BRAND, AS A READ-OUT. The brand kit is not built, so the hex
+              cannot be changed here; it is shown because "Our colour" means
+              this one. `--avo-brand` as a pure surface with no text on it (#9).
+            */}
+            <div className="wcard-panel__brand">
+              <span className="wcard-panel__swatch" aria-hidden="true" />
+              <span>
+                Brand colour <span className="wcard-panel__hex">{salon.brandColor.toUpperCase()}</span>
+              </span>
+            </div>
+            {update.isPending ? (
+              <p className="wcard-panel__status" role="status">
+                Saving…
+              </p>
+            ) : null}
+            {update.isError ? (
+              <WriteError error={update.error} reassurance="That setting is unchanged." />
+            ) : null}
+          </div>
+          <WalletCardPreview
+            choice={salon.walletCard}
+            brandHex={salon.brandColor}
+            loyaltyMode={salon.loyaltyMode}
+          />
+        </div>
+      )}
+    </Card>
   );
 }
 
