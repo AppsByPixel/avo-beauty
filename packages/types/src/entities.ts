@@ -193,8 +193,17 @@ export const SalonSchema = z.object({
   modules: z.object({ booking: z.boolean(), shop: z.boolean() }),
   loyaltyMode: z.enum(['tiers', 'stamps']),
   tiers: z.array(TierSchema).optional(),
-  stampTarget: z.number().int().positive().optional(),
-  stampReward: z.string().optional(),
+  /**
+   * NULLABLE, because the API sends `null` when a salon has none (routes/salons.ts
+   * `serialiseSalon` emits every key, null rather than omitted) and onboarding
+   * writes `stampReward: null` for every new salon. These were `.optional()` —
+   * undefined only — so the wallet refused the salon read of any salon without
+   * stamp config and showed "We couldn't load your wallet". Found 2026-09-29 by
+   * signing in to the new SAL-FOREST on the simulator; SAL-LUMIERE had the same
+   * shape. Amara only ever worked because its seed sets both.
+   */
+  stampTarget: z.number().int().positive().nullable().optional(),
+  stampReward: z.string().nullable().optional(),
   /** "تصفيف شعر مجاني" — the reward is customer-facing copy, so it needs both. */
   stampRewardAr: z.string().nullable().optional(),
   depositFils: FilsSchema.min(1000).max(10000),
