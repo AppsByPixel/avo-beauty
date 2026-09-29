@@ -2275,3 +2275,17 @@ sends a key and the API requires it. The dashboard deploys before the API, as it
 - **Approvals month stats:** counted from the newest 200 campaigns, and labelled as floors when all
   200 fall this month. A `?from=&to=` or counts endpoint on `/v1/platform/campaigns` is owed by
   lane A.
+
+**The wallet card: tier colours, or the workspace's own.** Aftab, 2026-09-29:
+- *"if the tier is silver the color of the wallet main widget is silver, gold to gold"*
+- *"if … that workspace has a dark green theme chosen then it should override this tier coloring"*
+
+What was built:
+- **Tier card (08330d1).** The card is the member's tier metal: bronze, silver or gold with dark text, or black with white text. The metals come from the `tier.*.cardFrom/cardTo/cardText` tokens, and every text colour clears AA against both gradient stops. A stamps-mode salon, or a member with no tier yet, keeps the brand card.
+- **The workspace setting.** `Salon.walletCard: 'tier' | 'brand'` defaults to `tier`. When it is `brand`, the workspace's own colour is on every card. It is a setting rather than keyed off one hex, so any workspace can choose it. It is edited wherever `brandColor` is, under the same permission.
+- **The `forest` preset.** A dark-green brand, `#1F5A36`, is added to the presets.
+- **The demo workspace.** `SAL-FOREST` is set to forest and `brand`.
+
+Accessibility calls:
+- **Four translucent overlays on forest's light card stop are accepted as documented exceptions:** the offline stamp (4.33), the pill (4.03), the panel title (4.40) and the panel body (3.68). All are above 3:1 and pinned. Every brand card shares these overlays, and forest is the most legible brand card shipped: solid white on Amara's light stop is 2.75.
+- **Rule #9 violation fixed.** The booking tick drew white on `brand`, which breaks #9. It moves to `brandDeep` as compliance, not as a restyle.
