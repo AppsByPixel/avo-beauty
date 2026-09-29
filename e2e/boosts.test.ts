@@ -49,9 +49,11 @@
  * stays. Its boost is reset to the identity after every spec and PROVED at the identity
  * in `afterAll`. The member's opening balance is given a real ledger pair up front.
  *
- * NOT HERE, DELIBERATELY: the top-up half of a boost. Lane A is removing the boost
- * top-up bonus in parallel (migration 0068, a 400 on a non-zero `topup`); trunk sends
- * those specs after it merges. Every body below sends `topup: 0`.
+ * AND NO TOP-UP BONUS, EVER (migration 0068, lane A `39c939b`). A branch boost's
+ * `topup` never paid a fil — a top-up has no branch — and since 0068 a non-zero one is
+ * 400 `boost_topup_removed`, every row is 0 and `boost_topup_removed` holds it there. The
+ * last describe proves the refusal, the CHECK, the served 0, and that neither a charge
+ * nor a top-up at a boosted branch is credited a fil beyond what it should be.
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -60,9 +62,13 @@ import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
   B_MEMBER,
+  GATEWAY_WEBHOOK_SECRET,
+  SIGNATURE_HEADER,
   apiLogTail,
   mintWalletTokenFor,
+  nowSeconds,
   psql,
+  signCallback,
   reconcileWalletLedger,
   scalar,
   signInDashboard,
@@ -224,14 +230,16 @@ async function servedBoost() {
 interface BoostBody {
   visit: number;
   stamp?: number;
+  /** 0 unless a spec is testing the refusal. `undefined` in `omitTopup` sends no key at all. */
+  topup?: number;
   startsAt?: string | null;
   endsAt?: string | null;
 }
 
-const putBoosts = (b: BoostBody, token = manager) =>
+const putBoosts = (b: BoostBody, token = manager, omitTopup = false) =>
   treq<any>('PUT', `/v1/salons/${SALON}/promotions/boosts`, {
     token,
-    body: { boosts: { [BRANCH]: { topup: 0, stamp: 1, ...b } } },
+    body: { boosts: { [BRANCH]: omitTopup ? { stamp: 1, ...b } : { topup: 0, stamp: 1, ...b } } },
   });
 
 async function publish(b: BoostBody): Promise<void> {
@@ -269,6 +277,43 @@ async function charge(label: string): Promise<{ earned: number; row: number; id:
   const row = Number(scalar(`select coalesce(loyalty_visits_earned, -1) from transaction where id = '${id}'`));
   expect(res.body.loyalty?.mode).toBe('tiers');
   return { earned: res.body.loyalty.visitsEarned as number, row, id };
+}
+
+const balance = (): number => Number(scalar(`select balance_fils from member where id = '${MEMBER}'`));
+
+const TOPUP_FILS = 10_000;
+
+/**
+ * A real top-up: `POST /topups`, then the processor's signed callback over real HTTP,
+ * the way `gateway.test.ts` settles one. Returns the intent's money columns as stored.
+ */
+async function settleTopUp(label: string): Promise<{ amount: number; bonus: number; promo: number; credit: number }> {
+  const open = await treq<{ id: string }>('POST', '/topups', {
+    token: wallet,
+    idempotencyKey: key(label),
+    body: { amountFils: TOPUP_FILS, method: 'knet' },
+  });
+  precondition(open.status === 200, `could not open a top-up: ${open.status} ${open.raw}`);
+  const pspReference = scalar(`select coalesce(psp_reference, '') from topup_intent where id = '${open.body.id}'`);
+  precondition(pspReference !== '', `intent ${open.body.id} has no psp_reference`);
+  const rawBody = JSON.stringify({
+    eventId: `EVT-bst-${label}-${RUN}-${Date.now()}-${n++}`,
+    pspReference,
+    status: 'succeeded',
+    amountFils: TOPUP_FILS,
+  });
+  const settled = await treq('POST', '/webhooks/sandbox', {
+    token: null,
+    rawBody,
+    headers: { [SIGNATURE_HEADER]: signCallback(rawBody, nowSeconds(), GATEWAY_WEBHOOK_SECRET) },
+  });
+  precondition(settled.status === 200, `the settling callback failed: ${settled.status} ${settled.raw}`);
+  const [status, amount, bonus, promo, credit] = scalar(
+    `select concat_ws('|', status, amount_fils, bonus_fils, promo_bonus_fils, credit_fils)
+       from topup_intent where id = '${open.body.id}'`,
+  ).split('|');
+  precondition(status === 'succeeded', `the top-up ${open.body.id} did not settle: ${status}`);
+  return { amount: Number(amount), bonus: Number(bonus), promo: Number(promo), credit: Number(credit) };
 }
 
 /** Assert a charge earned `visits`, in the reply and on the row. */
@@ -446,5 +491,67 @@ describe('perms.marketing, enforced on the server, on both doors', () => {
     // The mirror: the same call with the permission is not refused, so the 403 was the gate.
     const granted = await stop(manager);
     expect(granted.status, granted.raw).toBe(200);
+  });
+});
+
+// ================================================================ no top-up --
+
+describe('a branch boost pays no top-up bonus — refused, held at 0, served 0, and paid nowhere (0068)', () => {
+  it('a non-zero topup is 400 boost_topup_removed and nothing is written; 0 and absent are accepted', async () => {
+    await publish({ visit: 2, endsAt: inDays(1) });
+    const before = boostRow();
+
+    const refused = await putBoosts({ visit: 2, topup: 10, endsAt: inDays(1) });
+    expect(refused.status, refused.raw).toBe(400);
+    expect(refused.body.error).toBe('boost_topup_removed');
+    expect(boostRow(), 'a refused publish changed the stored boost').toEqual(before);
+
+    // The read object's boosts sent straight back carry `topup: 0`, and a client that
+    // no longer knows the field sends none. Both publish.
+    expect((await putBoosts({ visit: 3, topup: 0, endsAt: inDays(1) })).status).toBe(200);
+    expect(boostRow()).toMatchObject({ visit: 3, topup: 0 });
+    const absent = await putBoosts({ visit: 2, endsAt: inDays(1) }, manager, true);
+    expect(absent.status, absent.raw).toBe(200);
+    expect(boostRow()).toMatchObject({ visit: 2, topup: 0 });
+    expect((await servedBoost()).topup, 'the served topup is not 0').toBe(0);
+  });
+
+  it('no boost row anywhere holds a top-up, and the database refuses one written behind the API', () => {
+    expect(
+      scalar(`select count(*) from boost where topup <> 0`),
+      'a boost row carries a non-zero topup after 0068 zeroed them all',
+    ).toBe('0');
+    let refusal = '';
+    try {
+      psql(`UPDATE boost SET topup = 10 WHERE salon_id = '${SALON}' AND branch_id = '${BRANCH}';`);
+    } catch (err) {
+      refusal = String(err);
+    }
+    expect(refusal, 'a topup of 10 was stored: boost_topup_removed is not holding it at 0').toContain(
+      'boost_topup_removed',
+    );
+    expect(boostRow().topup).toBe(0);
+  });
+
+  it('a charge at a boosted branch doubles the visit and credits her nothing: the debit is the price, to the fil', async () => {
+    await publish({ visit: 2, endsAt: inDays(1) });
+    const before = balance();
+    const c = await charge('no-bonus-charge');
+    expect(c.earned).toBe(2);
+    expect(before - balance(), 'the charge moved her balance by something other than the price').toBe(PRICE_FILS);
+    expect(
+      scalar(`select concat_ws('|', amount_fils, bonus_fils, promo_bonus_fils) from transaction where id = '${c.id}'`),
+      'the charge row carries a bonus',
+    ).toBe(`${-PRICE_FILS}|0|0`);
+  });
+
+  it('a top-up while a 2x boost runs at her only branch is credited exactly what she paid', async () => {
+    await publish({ visit: 2, endsAt: inDays(1) });
+    const before = balance();
+    const t = await settleTopUp('no-bonus-topup');
+    // Bronze is 0% here and the salon has no happy hour, so the only thing that could
+    // add a fil is a boost bonus — which 0068 removed.
+    expect(t).toEqual({ amount: TOPUP_FILS, bonus: 0, promo: 0, credit: TOPUP_FILS });
+    expect(balance() - before, 'the top-up credited a bonus').toBe(TOPUP_FILS);
   });
 });
