@@ -574,6 +574,19 @@ afterAll(async () => {
   retireBranches(SALON_B, branchIdsNamed(SALON_B, PROBE_BRANCH_PREFIX));
 
   /*
+   * SALON B'S BOOSTS BACK TO THE IDENTITY, stop record and all. The PUT row's control
+   * scheduled a 2x a month out and the STOP row's control stopped it; a run that died
+   * between the two would leave a boost that turns live in thirty days on a long-lived
+   * database. Neutral with no window and no stop satisfies all four 0067 CHECKs, and is
+   * exactly what salon B held before this file ran.
+   */
+  psql(`
+    UPDATE boost SET visit = 1, topup = 0, stamp = 1, starts_at = NULL, ends_at = NULL,
+                     stopped_at = NULL, stopped_by = NULL, stopped_by_staff_id = NULL
+     WHERE salon_id = '${SALON_B}';
+  `);
+
+  /*
    * THE BOOKING POLICY THE PUT CONTROL PUBLISHED, REMOVED, notices first for the FK.
    * Left standing it would put a notice in every salon B member's bell, which
    * `member-bell.test.ts` counts. `booking_policy` is append-only for `avo_app`, not for
@@ -717,6 +730,25 @@ describe('tripwires — the principals are who this suite thinks they are', () =
 });
 
 // ------------------------------------------------- every salon-scoped route --
+
+/**
+ * Salon A's branch whose SEEDED boost is running — 2x visits, no window
+ * (`api/src/db/seed.ts`). The stop's attack half addresses it, so a tenancy hole would
+ * stop a boost that is really paying. Not a harness constant: this file is its only reader.
+ */
+const A_BOOSTED_BRANCH = 'BR-KWC';
+
+/**
+ * The PUT row's body at salon B: scheduled, never live during a run. See that row.
+ * `topup: 0` — lane A is removing the boost's top-up bonus (migration 0068).
+ */
+const TENANCY_SCHEDULED_BOOST = {
+  visit: 2,
+  topup: 0,
+  stamp: 1,
+  startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  endsAt: new Date(Date.now() + 31 * 86_400_000).toISOString(),
+};
 
 interface SalonRoute {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -1691,9 +1723,31 @@ const SALON_ROUTES: SalonRoute[] = [
   {
     method: 'PUT',
     template: '/v1/salons/{id}/promotions/boosts',
-    // The identity boost — no multiplier anywhere. Proves the route runs without
-    // making any other suite's money literals depend on this one having run.
-    body: { boosts: { [B_BRANCH]: { visit: 1, topup: 0, stamp: 1 } } },
+    /**
+     * A SCHEDULED boost, and it was the identity until migration 0067. A 2x that starts
+     * thirty days from now and ends a day after that: `isBoostLive` is false for the whole
+     * run, so no charge anywhere sees a multiplier and no other suite's money literals
+     * depend on this row having run — the property the identity body existed for.
+     *
+     * It is not the identity any more because the STOP row below needs something to
+     * stop. A neutral branch answers `409 no_boost_running`, which is the handler's own
+     * logic past both guards but is not the 200 this table's control asserts everywhere
+     * else; a scheduled boost can be stopped (`routes/platform.ts`: a stop "cancels it
+     * before it starts"), so the pair gives the stop a real 200 without ever putting a
+     * live multiplier on salon B. `afterAll` returns salon B's boost rows to the identity
+     * whatever happened, so a run that dies between the two rows leaves nothing due.
+     */
+    body: { boosts: { [B_BRANCH]: TENANCY_SCHEDULED_BOOST } },
+  },
+  {
+    /**
+     * Lane A's `edc4238`. MUST STAY DIRECTLY AFTER THE PUT: its control stops the
+     * scheduled boost that row's control published at salon B. The attack half addresses
+     * salon A's `BR-KWC`, whose seeded 2x is RUNNING, so a missing salon guard would
+     * really stop a live boost — the dedicated describe below proves the row survives.
+     */
+    method: 'POST',
+    template: '/v1/salons/{id}/promotions/boosts/{branchId}/stop',
   },
   {
     method: 'POST',
@@ -2493,7 +2547,15 @@ const url = (r: SalonRoute, salonId: string) =>
      * `unknown_social_link` for anything outside the four, and this substitution is
      * what keeps the control half addressing a link rather than a typo.
      */
-    .replace('{linkId}', PROBE_SOCIAL_TABLE);
+    .replace('{linkId}', PROBE_SOCIAL_TABLE)
+    /**
+     * `{branchId}` is the boost STOP's subject, and it is not `{bid}`: that one is the
+     * branch writes' disposable branch, which carries no boost. Salon A gets `BR-KWC`,
+     * the branch whose seeded boost is running; salon B gets the branch the PUT row's
+     * control scheduled a boost on. The brace name is the registered parameter, per the
+     * `{deviceId}` note above.
+     */
+    .replace('{branchId}', salonId === SALON_B ? B_BRANCH : A_BOOSTED_BRANCH);
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -2536,6 +2598,56 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
       );
     });
   }
+});
+
+/**
+ * ===========================================================================
+ * SALON B CANNOT STOP SALON A'S BOOST — the row, not only the status.
+ * ===========================================================================
+ * The table above asserts the 403 and its copy. A stop is a WRITE to a running
+ * promotion, so the claim that matters is that salon A's boost is still paying
+ * afterwards: a guard that answered 403 after the UPDATE had run would pass the table
+ * and still have stopped it. And there is a second axis the table cannot ask: salon B's
+ * manager with her OWN salon in the path and salon A's branch beside it. The handler
+ * scopes its lookup by `(salon_id, branch_id)`; a lookup by branch alone would stop
+ * salon A's boost from salon B's URL, and answer 200.
+ */
+describe("salon B cannot stop salon A's boost — by salon A's URL or by her own", () => {
+  const rowOfA = () =>
+    scalar(
+      `select concat_ws('|', visit, topup, stamp, coalesce(starts_at::text, '-'), coalesce(ends_at::text, '-'),
+                        coalesce(stopped_at::text, '-'), coalesce(stopped_by, '-'), updated_at::text)
+         from boost where salon_id = '${SALON_A}' and branch_id = '${A_BOOSTED_BRANCH}'`,
+    );
+
+  it(`salon A's ${A_BOOSTED_BRANCH} boost is running, so a hole here would stop something real`, () => {
+    const [visit, , stamp, , endsAt, stoppedAt] = rowOfA().split('|');
+    precondition(
+      (Number(visit) > 1 || Number(stamp) > 1) && stoppedAt === '-' && endsAt === '-',
+      `salon A's ${A_BOOSTED_BRANCH} boost is not the seeded running 2x (${rowOfA()}), so the ` +
+        'refusals below would be refusing to stop nothing',
+    );
+  });
+
+  it("salon A's URL: 403, and salon A's boost row is byte-identical afterwards", async () => {
+    const before = rowOfA();
+    const res = await treq<any>('POST', `/v1/salons/${SALON_A}/promotions/boosts/${A_BOOSTED_BRANCH}/stop`, {
+      token: bDashboard,
+    });
+    expect(res.status, res.raw).toBe(403);
+    expect(res.body.message).toBe('That salon is not yours.');
+    expect(rowOfA(), "salon B's refused stop wrote to salon A's boost").toBe(before);
+  });
+
+  it("her own URL with salon A's branch: 404 unknown_branch, and salon A's boost is untouched", async () => {
+    const before = rowOfA();
+    const res = await treq<any>('POST', `/v1/salons/${SALON_B}/promotions/boosts/${A_BOOSTED_BRANCH}/stop`, {
+      token: bDashboard,
+    });
+    expect(res.status, `a stop under salon B's id reached salon A's branch: ${res.raw}`).toBe(404);
+    expect(res.body.error).toBe('unknown_branch');
+    expect(rowOfA(), "a stop under salon B's id changed salon A's boost").toBe(before);
+  });
 });
 
 /**
@@ -4314,6 +4426,8 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'PUT /salons/:id/loyalty',
       'GET /v1/salons/:id/promotions',
       'PUT /v1/salons/:id/promotions/boosts',
+      // Migration 0067: a second path parameter with a segment after it.
+      'POST /v1/salons/:id/promotions/boosts/:branchId/stop',
       'POST /v1/salons/:id/promotions/happy-hours',
       'PATCH /v1/salons/:id/promotions/happy-hours/:hid',
       'DELETE /v1/salons/:id/promotions/happy-hours/:hid',

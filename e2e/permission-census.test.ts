@@ -1337,6 +1337,13 @@ const PINNED_COVERAGE: string[] = [
   'PUT /salons/:id/booking-policy → loyalty',
   'PUT /salons/:id/loyalty → salons',
   'PUT /v1/salons/:id/promotions/boosts → marketing',
+  /**
+   * Lane A's `edc4238` (migration 0067): stop one branch's boost now. The same gate as
+   * the PUT, pasted from the census output. Its GRANTED mirror is left to run: the
+   * probe's bogus `:branchId` is a 404 `unknown_branch`, so granting stops nothing.
+   * `boosts.test.ts` drives the refusal against a real running boost and checks the row.
+   */
+  'POST /v1/salons/:id/promotions/boosts/:branchId/stop → marketing',
 ];
 
 describe('the census still reaches every route it reached when this was pinned', () => {

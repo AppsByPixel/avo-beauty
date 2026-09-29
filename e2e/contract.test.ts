@@ -240,6 +240,32 @@ let n = 0;
 const key = (label: string) => `contract-${label}-${Date.now()}-${n++}`;
 
 let dashboard = '';
+
+/**
+ * Salon A's boost set as served before this file published a window over it, in the
+ * PUT's body shape. `undefined` until `beforeAll` has read it, so a hook that died early
+ * does not "restore" an empty set and reset every branch to neutral.
+ */
+let boostsBefore: Record<string, unknown> | undefined;
+
+/** A served `boosts` record → the PUT body. The stop fields are read-only, so they go. */
+function boostBodyOf(served: Record<string, any>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(served ?? {}).map(([branchId, b]) => [
+      branchId,
+      { visit: b.visit, topup: b.topup, stamp: b.stamp, startsAt: b.startsAt ?? null, endsAt: b.endsAt ?? null },
+    ]),
+  );
+}
+
+/** Thirty days out, one day long: never live during a run. See `beforeAll`. */
+const CT_SCHEDULED_BOOST = {
+  visit: 2,
+  topup: 0,
+  stamp: 1,
+  startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  endsAt: new Date(Date.now() + 31 * 86_400_000).toISOString(),
+};
 let scanner = '';
 let artistScanner = '';
 let member = '';
@@ -2467,6 +2493,36 @@ beforeAll(async () => {
     await treq<any>('GET', `/salons/${SALON_B}/booking-policy`, { token: bStaff }),
   );
 
+  // ---- a boost with a window, so BoostSchema's bounds are witnessed non-null ------
+  /**
+   * Migration 0067 put `startsAt` / `endsAt` / `stoppedAt` / `stoppedBy` on every boost,
+   * all `.nullable()`. The seed's boosts carry no window, so without this the promotions
+   * probe would parse four nulls per branch and a schema narrowed to `z.null()` — or a
+   * serialiser that hard-coded `endsAt: null` — would read green. The `customReward`
+   * blind spot again.
+   *
+   * So salon A's set is published back exactly as served, plus a SCHEDULED 2x on
+   * `A_BRANCH` that starts thirty days from now: both bounds non-null, and `isBoostLive`
+   * false for the whole run, so no charge in this file or after it sees a multiplier it
+   * did not see before. `BR-KWC`'s running 2x is sent back unchanged, so it keeps paying
+   * and serves `null` bounds beside it — both halves of the nullable in one sample.
+   * `afterAll` publishes the served set back as it was.
+   */
+  const promotionsBefore = await treq<any>('GET', `/v1/salons/${SALON_A}/promotions`, { token: dashboard });
+  if (promotionsBefore.status !== 200) {
+    throw new Error(`GET /v1/salons/${SALON_A}/promotions: ${promotionsBefore.status} ${promotionsBefore.raw}`);
+  }
+  boostsBefore = boostBodyOf(promotionsBefore.body.boosts);
+  const windowed = await treq<any>('PUT', `/v1/salons/${SALON_A}/promotions/boosts`, {
+    token: dashboard,
+    body: { boosts: { ...boostsBefore, [A_BRANCH]: CT_SCHEDULED_BOOST } },
+  });
+  if (windowed.status !== 200) {
+    throw new Error(
+      `PUT /v1/salons/${SALON_A}/promotions/boosts (a scheduled boost): ${windowed.status} ${windowed.raw}`,
+    );
+  }
+
   // ---- every GET, captured once ------------------------------------------------
   const gets: Array<[string, string, string]> = [
     // Her read, at a salon with no policy: `{ policy: null }`.
@@ -2587,6 +2643,25 @@ afterAll(async () => {
    * its slot reservation cost four no-show specs before it was returned.
    */
   psql(`DELETE FROM merchant_notification WHERE id = '${BELL_NOTIFICATION}';`);
+  /**
+   * SALON A'S BOOSTS, AS THEY WERE SERVED BEFORE THIS FILE. The scheduled 2x on
+   * `A_BRANCH` would turn live in thirty days on a long-lived database. Through the
+   * real PUT so the set is re-published whole; the stored row is then checked in SQL.
+   */
+  if (boostsBefore) {
+    const restored = await treq<any>('PUT', `/v1/salons/${SALON_A}/promotions/boosts`, {
+      token: dashboard,
+      body: { boosts: boostsBefore },
+    });
+    expect(restored.status, `salon A's boosts could not be put back: ${restored.raw}`).toBe(200);
+    expect(
+      scalar(
+        `select count(*) from boost where salon_id = '${SALON_A}' and branch_id = '${A_BRANCH}'
+            and (starts_at is not null or ends_at is not null)`,
+      ),
+      `salon A's ${A_BRANCH} still carries the scheduled boost this file published`,
+    ).toBe('0');
+  }
   // Salmiya follows the salon again. See CT_BRANCH_HOURS.
   psql(`UPDATE branch SET business_hours = NULL WHERE id = '${A_BRANCH}' AND salon_id = '${SALON_A}';`);
   /**
@@ -4031,6 +4106,55 @@ describe('artistIds and branch hours — the samples reach the values the probes
     expect(pick(kept.find((b) => b.id === follower!.id)), 'SalonSchema changed the fallback').toEqual(
       pick(follower),
     );
+  });
+});
+
+// ===========================================================================
+// Migration 0067 — a boost with a window
+// ===========================================================================
+
+/**
+ * `BoostSchema.startsAt` / `endsAt` ARE WITNESSED NON-NULL, AND NULL BESIDE THEM.
+ *
+ * The generic probe parses and strip-checks the promotion set. This asks the question it
+ * cannot: did the sample reach a boost whose bounds are instants, and does the wire say
+ * the instants the table holds. Read against the column in SQL, not off the API's reply.
+ */
+describe('boost windows — the promotions sample reaches a non-null endsAt, not only null', () => {
+  it(`GET /v1/salons/${SALON_A}/promotions serves ${A_BRANCH}'s scheduled boost with both bounds, and PromotionSetSchema keeps them`, () => {
+    const res = response(`GET /v1/salons/${SALON_A}/promotions`);
+    expect(res.status, res.raw).toBe(200);
+    const served = res.body.boosts?.[A_BRANCH];
+    expect(served, `${A_BRANCH} is not in the promotion set\n${res.raw.slice(0, 800)}`).toBeDefined();
+    expect(served.endsAt, 'the windowed boost served endsAt: null — the serialiser dropped the bound').not.toBeNull();
+    expect(served.startsAt).not.toBeNull();
+    expect(Date.parse(served.endsAt)).toBe(Date.parse(CT_SCHEDULED_BOOST.endsAt));
+    expect(Date.parse(served.startsAt)).toBe(Date.parse(CT_SCHEDULED_BOOST.startsAt));
+    expect(served.stoppedAt).toBeNull();
+    expect(served.stoppedBy).toBeNull();
+
+    const [startsAt, endsAt] = scalar(
+      `select concat_ws('|', extract(epoch from starts_at) * 1000, extract(epoch from ends_at) * 1000)
+         from boost where salon_id = '${SALON_A}' and branch_id = '${A_BRANCH}'`,
+    ).split('|');
+    expect(Math.round(Number(endsAt)), 'the wire and boost.ends_at disagree').toBe(Date.parse(served.endsAt));
+    expect(Math.round(Number(startsAt)), 'the wire and boost.starts_at disagree').toBe(Date.parse(served.startsAt));
+
+    // Both values of the nullable in one sample: the unwindowed boosts serve null.
+    const others = Object.entries(res.body.boosts as Record<string, any>).filter(([id]) => id !== A_BRANCH);
+    expect(others.length, 'salon A has no other boost to serve null bounds beside it').toBeGreaterThan(0);
+    for (const [id, b] of others) {
+      expect([b.startsAt, b.endsAt], `${id} carries a window this file did not publish`).toEqual([null, null]);
+    }
+
+    const parsed = PromotionSetSchema.safeParse(res.body);
+    expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+    const kept = (parsed as { data: { boosts: Record<string, { startsAt: string | null; endsAt: string | null }> } })
+      .data.boosts[A_BRANCH]!;
+    expect([kept.startsAt, kept.endsAt], 'PromotionSetSchema changed the bounds it parsed').toEqual([
+      served.startsAt,
+      served.endsAt,
+    ]);
   });
 });
 
