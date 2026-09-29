@@ -814,6 +814,14 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/artists/bookable [requireSalonScoped]',
   'GET /salons/:id/audit → dashboard',
   'GET /salons/:id/bookings → appointments',
+  /**
+   * THE SALON'S BOOKING POLICY (migration 0066, lane A's 54308ea). The read has no
+   * permission ON PURPOSE: the policy is shown to every customer before she books, so
+   * it takes `GET /salons/{id}`'s gate, signed in and this salon's, and tenancy is
+   * the control (`tenancy.test.ts` drives both halves). The write is `perms.loyalty`,
+   * the deposit settings' gate; `booking-policy.test.ts` calls it with loyalty OFF.
+   */
+  'GET /salons/:id/booking-policy [requireSalonScoped]',
   'GET /salons/:id/branches/:bid/closure-preview → loyalty',
   /**
    * THE MERCHANT'S CUSTOMER BOOK — `api/src/routes/customers.ts`, dev `e046e7b`.
@@ -1326,6 +1334,7 @@ const PINNED_COVERAGE: string[] = [
    * probe and the census correctly reports none. If a `PUT … → loyalty` line ever
    * comes back here, the merchant has a permission that opens this endpoint again.
    */
+  'PUT /salons/:id/booking-policy → loyalty',
   'PUT /salons/:id/loyalty → salons',
   'PUT /v1/salons/:id/promotions/boosts → marketing',
 ];
