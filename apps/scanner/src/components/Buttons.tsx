@@ -17,13 +17,13 @@
 import {
   Platform,
   Pressable,
-  StyleSheet,
   Text,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { color, dark, MIN_TAP_TARGET, onBrandFill, radius, ui } from '../theme';
+import { brandedStyles } from '../theme/branded';
 
 /**
  * interaction-spec.md §2 — the focus ring, and WEB ONLY.
@@ -186,7 +186,7 @@ export function LinkButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   base: {
     minHeight: MIN_TAP_TARGET,
     borderRadius: radius.button,
@@ -223,4 +223,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginVertical: -10,
   },
-});
+}));

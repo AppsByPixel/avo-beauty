@@ -34,7 +34,7 @@ export interface SalonLoyalty {
   /** Null at a tiers salon. */
   stampTarget: number | null;
   name: string;
-  /** The white-label hex. Applied at the NEXT launch — see src/theme/sealed.ts. */
+  /** The white-label hex. Applied live by `adoptSalonIdentity` — see src/theme/live.ts. */
   brandColor: string;
   /**
    * `Salon.timezone`, IANA — the clock the Charges and Bookings screens read

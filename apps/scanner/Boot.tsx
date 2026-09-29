@@ -1,22 +1,30 @@
 /**
- * The root component, and the only thing that runs before the palette is fixed.
+ * The root component: the cached salon identity, applied before the first frame.
  *
  * WHAT IT IS FOR
  * ==============
- * `src/theme/brand.ts` can only apply a salon's hex before the first module that
- * reads a brand token is evaluated (`src/theme/sealed.ts` says why). `App.tsx`
- * statically imports the three shells and `src/theme` itself, and every screen
- * builds its stylesheets at module scope — so by the time `App()` is first called
- * the palette is already baked. A hook inside App, the shape `useBrandTheme`
- * takes on the web, is structurally unable to work here.
+ * A salon's hex reaches the palette two ways. Live, from the salon read after
+ * each staff sign-in (`ScannerFlow` → `config/brand.ts#adoptSalonIdentity` →
+ * `src/theme/live.ts`, which rebuilds every brand stylesheet in place). And
+ * here, from the identity cached by a previous sign-in — the only way the PIN
+ * screen, which is BEFORE any principal, can be in the salon's colour at all.
  *
  * So the entry point is this, and `App` is reached through a DYNAMIC import that
- * is not started until the hex has been resolved and applied.
+ * is not started until the cached hex has been applied: every stylesheet is
+ * built once, from the right palette, and the first frame is right.
  *
- * The salon NAME is adopted here too, but for convenience rather than necessity:
+ * This used to be load-bearing for white-labelling itself — the palette was
+ * sealed by the first stylesheet, so a static import here that reached the theme
+ * would have un-branded the app for good. Since `src/theme/live.ts` a late hex
+ * repaints, so what the ordering protects now is the first frame, and
+ * `src/theme/brandBootOrder.test.ts` still holds it.
+ *
+ * The salon NAME is adopted here too, for the same first-frame reason:
  * `config/brand.ts` reads it at render time, so it could be adopted at any point.
- * Doing it here means the PIN screen's first frame already carries the real name
- * instead of the build fallback.
+ *
+ * A DEVICE THAT HAS NEVER SIGNED IN has nothing cached, so its PIN screen shows
+ * the build fallback name and the token file's default palette; the first
+ * sign-in's salon read repaints it.
  *
  * WHAT RENDERS IN BETWEEN
  * =======================
@@ -24,11 +32,11 @@
  * the device binding is read, and for the same stated reason: "Reading one key out
  * of AsyncStorage. A spinner here would flash."
  *
- * THE IMPORT LIST BELOW IS LOAD-BEARING
- * =====================================
- * Every static import here is evaluated before `resolve()` runs. Adding one that
- * transitively reaches `src/theme/index.ts` silently disables white-labelling for
- * the whole app, which is why the blank's colour is read straight off
+ * THE IMPORT LIST BELOW DECIDES THE FIRST FRAME
+ * ==============================================
+ * Every static import here is evaluated before the cached hex is applied. One
+ * that transitively reaches `src/theme/index.ts` builds stylesheets in the
+ * default palette first, which is why the blank's colour is read straight off
  * `@avo/tokens/native` and why `src/theme/brandBootOrder.test.ts` asserts the
  * entry's static import graph cannot reach the theme.
  */
@@ -53,7 +61,8 @@ export default function Boot() {
         its salon id from enrolment, so the cached identity can be checked against
         it and a record belonging to a different salon is discarded rather than
         shown. A device that has never signed in successfully has nothing cached,
-        so the build fallback name and the default palette stand for that session.
+        so the build fallback name and the default palette stand until its first
+        sign-in reads the salon (ScannerFlow), which applies both live.
       */
       const binding = await readDeviceBinding();
       const identity = await readSalonIdentity(binding?.salonId);
@@ -74,7 +83,6 @@ export default function Boot() {
 }
 
 const styles = StyleSheet.create({
-  // `canvas`, not a brand token: reading a brand token here would seal the
-  // palette in the one file that must not.
+  // `canvas`, not a brand token: the blank is drawn before the brand is known.
   blank: { flex: 1, backgroundColor: theme.color.canvas },
 });

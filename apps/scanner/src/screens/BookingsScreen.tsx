@@ -37,16 +37,18 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import { formatFils, type Fils } from '@avo/types';
 import { ApiError } from '../api/client';
 import { fetchMyBookings, type ArtistBooking } from '../api/artist';
 import { copy } from '../copy/en';
 import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
+import { onRepaint } from '../theme/live';
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, Refusal, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
 import { clockLabel, groupByDay } from '../domain/salonTime';
+import { brandedStyles } from '../theme/branded';
 
 interface Props {
   accessToken: string;
@@ -442,6 +444,13 @@ export const SOURCE_PILL: Record<
     text: color.textMutedStrong,
   },
 };
+
+// A module-scope object, so it copied the brand at import like a stylesheet
+// does: re-derived on a repaint (theme/live.ts) so a salon's hex reaches it.
+onRepaint(() => {
+  SOURCE_PILL.google_calendar.bg = color.brandTint;
+  SOURCE_PILL.google_calendar.text = color.brandDeep;
+});
 
 /**
  * WHOSE APPOINTMENT THIS IS, WHEN IT MAY NOT BE A MEMBER'S.
@@ -965,7 +974,7 @@ function tierLabel(tier: NonNullable<ArtistBooking['memberTier']>): string {
   return tier.charAt(0).toUpperCase() + tier.slice(1);
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface, paddingTop: 66 },
   header: {
     flexDirection: 'row',
@@ -1119,4 +1128,4 @@ const styles = StyleSheet.create({
   actionCallText: { color: color.ink },
   actionWa: { backgroundColor: color.success },
   actionWaText: { color: color.whatsappOnGreen },
-});
+}));

@@ -32,6 +32,7 @@ import {
 } from '@expo-google-fonts/inter';
 import { StatusBar } from 'expo-status-bar';
 import { color } from './src/theme';
+import { useBrandRepaint } from './src/theme/live';
 import { readDeviceBinding, type DeviceBinding } from './src/state/device';
 import { SessionProvider, useSession } from './src/state/session';
 import { EnrolScreen } from './src/screens/EnrolScreen';
@@ -39,6 +40,14 @@ import { PinScreen } from './src/screens/PinScreen';
 import { ScannerFlow } from './src/screens/ScannerFlow';
 
 export default function App() {
+  /*
+    THE SALON'S BRAND, LIVE. When a sign-in's salon read applies the hex,
+    `src/theme/live.ts` rebuilds every brand stylesheet in place and bumps this;
+    the re-render here reaches every screen, because each is created in this
+    tree's render and nothing below is memoised. A repaint, not a re-mount: a
+    charge in progress keeps its state.
+  */
+  useBrandRepaint();
   const [fontsLoaded] = useFonts({
     Fraunces_400Regular,
     Fraunces_500Medium,

@@ -37,6 +37,7 @@ import { deepLinkAction } from '../domain/deepLink';
 import { useReducedMotion } from '../motion/useReducedMotion';
 import { color, dark, display, ui } from '../theme';
 import { DarkButton, LinkButton, PrimaryButton } from '../components/Buttons';
+import { brandedStyles } from '../theme/branded';
 
 const FRAME = 240;
 /** design:194 — the line travels 214px inside a 240px frame. */
@@ -245,7 +246,7 @@ function Corner({ style }: { style: object }) {
   return <View style={[styles.corner, style]} />;
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   // design:183 — #131511, padding 76/26/34.
   screen: {
     flex: 1,
@@ -315,4 +316,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-});
+}));

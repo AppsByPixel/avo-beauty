@@ -45,7 +45,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { fils } from '@avo/types';
 import { ApiError } from '../api/client';
 import { fetchTodaysCharges, type ChargeRow } from '../api/charges';
@@ -64,6 +64,7 @@ import {
 } from '../components/States';
 import { VoidSheet } from '../components/VoidSheet';
 import { chargeTime, salonWeekday } from '../domain/salonTime';
+import { brandedStyles } from '../theme/branded';
 
 const VOID_WINDOW_MS = 15 * 60_000;
 
@@ -376,7 +377,7 @@ function isVoidable(row: ChargeRow): boolean {
   return Date.now() - new Date(row.createdAt).getTime() < VOID_WINDOW_MS;
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 66, paddingHorizontal: 22, paddingBottom: 26, flexGrow: 1 },
   header: {
@@ -446,4 +447,4 @@ const styles = StyleSheet.create({
   whoName: { flex: 1 },
   whoRole: { color: color.textMutedSoft },
   askAction: { alignSelf: 'stretch', marginTop: 18 },
-});
+}));

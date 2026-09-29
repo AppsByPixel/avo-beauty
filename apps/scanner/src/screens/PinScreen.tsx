@@ -30,7 +30,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Pressable,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -44,6 +43,7 @@ import { useSession } from '../state/session';
 import type { DeviceBinding } from '../state/device';
 import { color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
+import { brandedStyles } from '../theme/branded';
 
 const PIN_LENGTH = 4;
 
@@ -267,7 +267,7 @@ export function PinScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   // design:73 — padding 74/26/30, on the light surface.
   screen: {
     flex: 1,
@@ -335,4 +335,4 @@ const styles = StyleSheet.create({
   // overlapped the footnote's text in the first simulator run.
   footnote: { color: color.textMutedSoft, textAlign: 'center', marginTop: 22 },
   reconfigure: { alignItems: 'center', marginTop: 16 },
-});
+}));

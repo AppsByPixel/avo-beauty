@@ -54,7 +54,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { fils, formatMoney, type Fils } from '@avo/types';
 import { ApiError, newIdempotencyKey } from '../api/client';
@@ -76,6 +76,7 @@ import { LinkButton, PrimaryButton } from '../components/Buttons';
 import { figureOf, Money } from '../components/Money';
 import { OfflineBanner } from '../components/States';
 import { TypedAmountCard } from '../components/TypedAmountCard';
+import { brandedStyles } from '../theme/branded';
 
 export interface ChargeAttempt {
   result: ChargeResult;
@@ -621,7 +622,7 @@ function Row({ label, amount, negative }: { label: string; amount: Fils; negativ
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 66, paddingHorizontal: 22, paddingBottom: 20 },
   header: {
@@ -753,4 +754,4 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   mutedUnit: { color: color.textMuted },
-});
+}));

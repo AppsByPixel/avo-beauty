@@ -75,9 +75,11 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
   // MOVED 402 → 408 and 475 → 482 on 2026-09-28: the typed-price gate's
   // docblock above them grew when the client moved that gate to `scanner`.
   // Same two calls, nothing added between them.
+  // MOVED 408 → 409 and 482 → 483 on 2026-09-29: one import (`brandedStyles`,
+  // theme/branded.ts) above them. Same two calls.
   it.each([
-    ['screens/MemberScreen.tsx', 408, 'the held-deposit figure'],
-    ['screens/MemberScreen.tsx', 482, 'the shortfall figure'],
+    ['screens/MemberScreen.tsx', 409, 'the held-deposit figure'],
+    ['screens/MemberScreen.tsx', 483, 'the shortfall figure'],
   ])('%s:%d — %s is drawn at 600', (rel, line) => {
     const src = fs.readFileSync(path.join(SRC, rel), 'utf8').split('\n');
     expect(src[line - 1]).toContain("ui(12.5, '600')");
@@ -140,7 +142,11 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
       // SIXTH MOVE, 704 → 724, same membership: the salon-zone slice gave
       // `BookingsScreen` a `timeZone` prop and `BookingCard` a multi-line
       // signature above this call. Nothing about a font weight changed.
-      "screens/BookingsScreen.tsx:724 ui(10,'700')",
+      //
+      // SEVENTH MOVE, 724 → 733, same membership: the live-brand slice
+      // (2026-09-29) added one import and the `onRepaint` that keeps
+      // `SOURCE_PILL`'s brand colours current. No weight changed.
+      "screens/BookingsScreen.tsx:733 ui(10,'700')",
     ]);
   });
 });

@@ -18,11 +18,12 @@
  * Layouts and copy come from design/AVO States.dc.html; each is cited.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { BRAND_BORDER, color, display, radius, ui } from '../theme';
 import { copy } from '../copy/en';
 import { PrimaryButton, SecondaryButton } from './Buttons';
+import { brandedStyles } from '../theme/branded';
 
 // ------------------------------------------------------------------ loading --
 
@@ -270,7 +271,7 @@ export function OfflineBanner({ label }: { label: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   rows: { gap: 10 },
   card: {
     backgroundColor: color.white,
@@ -336,4 +337,4 @@ const styles = StyleSheet.create({
   },
   offlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: OFFLINE_DOT },
   offlineText: { color: color.textMutedStrong, flex: 1, lineHeight: 18 },
-});
+}));
