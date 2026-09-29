@@ -365,7 +365,7 @@ export const promotions: PromotionSet = {
     // A running boost with an end, so a consumer sees a non-null window.
     [BRANCH_KUWAIT_CITY]: {
       visit: 2,
-      topup: 10,
+      topup: 0, // branch boosts pay no top-up bonus (DECISIONS; migration 0068)
       stamp: 1,
       startsAt: null,
       endsAt: '2027-01-01T00:00:00+03:00',
