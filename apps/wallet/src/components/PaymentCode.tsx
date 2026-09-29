@@ -53,6 +53,14 @@
  * absolute` resolves against the wallet card, so a "full-screen" overlay came up
  * clipped inside the card with the branch chips showing through it. `Shell` had
  * written that down; this had to rediscover it.
+ *
+ * WHICH PARTS FOLLOW THE TIER METAL (2026-09-29). The dashed offline / failed
+ * panel is translucent and sits ON the card's gradient, so its fill, border and
+ * words take the card's ink from `useCardInk()` — white on the brand card and on
+ * black, dark `cardText` on bronze, silver and gold. The live panel does NOT:
+ * it is an opaque white surface of its own, the QR must stay ink-on-white to
+ * scan, and its label, id and brandDeep hint are measured against that white,
+ * not against the metal. It is the same white panel on every card.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -60,6 +68,7 @@ import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { color, radius, text, MIN_TAP_TARGET, WHITE } from '../theme';
+import { useCardInk } from '../theme/cardInk';
 import { useCopy, useLanguage } from '../i18n/language';
 import { toEasternDigits } from '../i18n/digits';
 import type { PaymentCodeView } from '../domain/paymentCode';
@@ -108,14 +117,16 @@ function MemberId({ memberId, prefix }: { memberId: string; prefix: string }) {
 
 export function PaymentCode({ memberId, view, secondsRemaining, onEnlarge, onRetry }: Props) {
   const { lang, copy } = useLanguage();
+  const ink = useCardInk();
 
   if (view.kind === 'unavailable') {
+    const panel = [styles.unavailable, { backgroundColor: ink.panelBg, borderColor: ink.panelBorder }];
     const body = (
       <>
-        <Text style={[text('body', lang, '600'), styles.unavailableTitle]}>
+        <Text style={[text('body', lang, '600'), styles.unavailableTitle, { color: ink.panelTitle }]}>
           {view.reason === 'offline' ? copy.qrOfflineTitle : copy.qrFailedTitle}
         </Text>
-        <Text style={[text('bodyS', lang), styles.unavailableBody]}>
+        <Text style={[text('bodyS', lang), styles.unavailableBody, { color: ink.panelBody }]}>
           {view.reason === 'offline' ? copy.qrOfflineBody : copy.qrFailedBody}
         </Text>
       </>
@@ -126,13 +137,13 @@ export function PaymentCode({ memberId, view, secondsRemaining, onEnlarge, onRet
         accessibilityRole="button"
         accessibilityLabel={copy.qrFailedTitle}
         accessibilityHint={copy.qrFailedBody}
-        style={styles.unavailable}
+        style={panel}
         testID="payment-code-retry"
       >
         {body}
       </Pressable>
     ) : (
-      <View style={styles.unavailable} accessibilityRole="summary" testID="payment-code-offline">
+      <View style={panel} accessibilityRole="summary" testID="payment-code-offline">
         {body}
       </View>
     );
@@ -248,15 +259,15 @@ const styles = StyleSheet.create({
     marginTop: 18,
     // The failed panel is now a control, so it carries the tap-target floor.
     minHeight: MIN_TAP_TARGET,
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    // Fill and border are the card's ink at the call site: white at 0.14 / 0.4 on
+    // the brand card and on black, `cardText` at 0.06 / 0.4 on a metal.
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: 'rgba(255,255,255,0.4)',
     borderRadius: radius.card,
     paddingVertical: 20,
     paddingHorizontal: 16,
     alignItems: 'center',
   },
-  unavailableTitle: { color: WHITE, textAlign: 'center' },
-  unavailableBody: { color: 'rgba(255,255,255,0.85)', marginTop: 5, textAlign: 'center' },
+  unavailableTitle: { textAlign: 'center' },
+  unavailableBody: { marginTop: 5, textAlign: 'center' },
 });

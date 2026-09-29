@@ -10,12 +10,20 @@
  * interaction-spec.md §2 documents the two translucent pills on this card
  * (rgba(255,255,255,0.18) tier pill, 0.22 progress track) as intentional
  * exceptions at roughly 3:1. They are reproduced as designed.
+ *
+ * THE CARD NOW TAKES HER TIER'S METAL (2026-09-29). In tiers mode, once the
+ * server has given her a tier, the gradient is that tier's `cardFrom -> cardTo`
+ * and every word, bar and dot on it is drawn in `cardText`. Stamps mode and a
+ * member with no tier yet keep the brand card above, unchanged. The palette,
+ * and why the metals get dark overlays and solid text, is `theme/cardInk.ts`.
+ * The payment code panel inside reads the same palette through `CardInkProvider`.
  */
 
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { fils, type Fils } from '@avo/types';
-import { cardGradient, frauncesLineHeight, radius, shadow, text, WHITE } from '../theme';
+import { frauncesLineHeight, radius, shadow, text } from '../theme';
+import { CardInkProvider, cardInkFor, useCardInk } from '../theme/cardInk';
 import { useLanguage } from '../i18n/language';
 import { Money } from './Money';
 import { type LoyaltyProgress } from '../domain/loyalty';
@@ -36,76 +44,97 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
   // wire, this card fails loudly instead of rendering "24.500" from a number
   // that was never integer fils.
   const balance: Fils = fils(balanceFils);
+  // The tier is the SERVER's (`progress.current` is `member.tier`); nothing here
+  // decides one. A climb re-colours the card on the next read of the member.
+  const ink = cardInkFor(progress);
 
   return (
-    <LinearGradient
-      colors={[cardGradient.from, cardGradient.to]}
-      start={{ x: 0.15, y: 0 }}
-      end={{ x: 0.85, y: 1 }}
-      style={styles.card}
-    >
-      <View style={styles.head}>
-        {/*
-          `letterSpacing: 1.5` below is dropped in Arabic by the same rule that
-          drops it from the `label` token: tracking breaks the cursive joins and
-          the word stops reading as a word. See theme/index.ts § text().
-        */}
-        <Text style={[text('label', lang), lang === 'ar' ? styles.headLabelAr : styles.headLabel]}>
-          {copy.balanceLabel}
-        </Text>
-        {pill ? (
-          <View style={styles.pill}>
-            <Text style={[text('bodyS', lang, '600'), styles.pillText]}>{pill}</Text>
-          </View>
+    <CardInkProvider value={ink}>
+      <LinearGradient
+        colors={[ink.from, ink.to]}
+        start={{ x: 0.15, y: 0 }}
+        end={{ x: 0.85, y: 1 }}
+        style={styles.card}
+      >
+        <View style={styles.head}>
+          {/*
+            `letterSpacing: 1.5` below is dropped in Arabic by the same rule that
+            drops it from the `label` token: tracking breaks the cursive joins and
+            the word stops reading as a word. See theme/index.ts § text().
+          */}
+          <Text
+            style={[
+              text('label', lang),
+              lang === 'ar' ? styles.headLabelAr : styles.headLabel,
+              { color: ink.text, opacity: ink.labelOpacity },
+            ]}
+          >
+            {copy.balanceLabel}
+          </Text>
+          {pill ? (
+            <View style={[styles.pill, { backgroundColor: ink.pillBg }]}>
+              <Text style={[text('bodyS', lang, '600'), { color: ink.text }]}>{pill}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.balanceRow}>
+          {/*
+            `text('displayXL')` WITH NO LANGUAGE, AND IT HAS TO BE. `Money` draws
+            the figure with `fontFamily: moneyFigureFace()` layered over whatever
+            `figureStyle` carries, so the family here is overwritten either way —
+            but passing `lang` would still be wrong as a statement of intent. In
+            Arabic `text('displayXL', 'ar')` resolves to IBM Plex Sans Arabic, and
+            the figure is Western digits in the display face in both languages
+            (non-negotiable #12). This call supplies the SIZE. The unit beside it
+            is the half that changes script, and `Money` resolves its face from
+            the language itself — this card supplies only the unit's size and
+            weight.
+          */}
+          <Money
+            amount={balance}
+            color={ink.text}
+            figureStyle={text('displayXL')}
+            unitStyle={[styles.unit, { opacity: ink.unitOpacity }]}
+            unitWeight="500"
+          />
+        </View>
+
+        {lastUpdated ? (
+          <Text style={[text('bodyS', lang), styles.stamp, { color: ink.stampText }]}>
+            {lastUpdated}
+          </Text>
         ) : null}
-      </View>
 
-      <View style={styles.balanceRow}>
-        {/*
-          `text('displayXL')` WITH NO LANGUAGE, AND IT HAS TO BE. `Money` draws
-          the figure with `fontFamily: moneyFigureFace()` layered over whatever
-          `figureStyle` carries, so the family here is overwritten either way —
-          but passing `lang` would still be wrong as a statement of intent. In
-          Arabic `text('displayXL', 'ar')` resolves to IBM Plex Sans Arabic, and
-          the figure is Western digits in the display face in both languages
-          (non-negotiable #12). This call supplies the SIZE. The unit beside it
-          is the half that changes script, and `Money` resolves its face from
-          the language itself — this card supplies only the unit's size and
-          weight.
-        */}
-        <Money
-          amount={balance}
-          color={WHITE}
-          figureStyle={text('displayXL')}
-          unitStyle={styles.unit}
-          unitWeight="500"
-        />
-      </View>
+        {progress ? <Progress progress={progress} /> : null}
 
-      {lastUpdated ? (
-        <Text style={[text('bodyS', lang), styles.stamp]}>{lastUpdated}</Text>
-      ) : null}
-
-      {progress ? <Progress progress={progress} /> : null}
-
-      {children}
-    </LinearGradient>
+        {children}
+      </LinearGradient>
+    </CardInkProvider>
   );
 }
 
 function Progress({ progress }: { progress: LoyaltyProgress }) {
   const { lang, copy } = useLanguage();
+  const ink = useCardInk();
+  const legendInk = { color: ink.text, opacity: ink.legendOpacity };
 
   if (progress.mode === 'stamps') {
     return (
       <View>
         <View style={styles.stampRow}>
           {Array.from({ length: progress.target }, (_, i) => (
-            <View key={i} style={[styles.stampDot, i < progress.have && styles.stampDotFilled]} />
+            <View
+              key={i}
+              style={[
+                styles.stampDot,
+                { backgroundColor: i < progress.have ? ink.stampDotFilled : ink.stampDot },
+              ]}
+            />
           ))}
         </View>
         <View style={styles.progressLegend}>
-          <Text style={[text('bodyS', lang), styles.legendText]}>
+          <Text style={[text('bodyS', lang), legendInk]}>
             {copy.stampsHint(progress.have, progress.target)}
           </Text>
           {/*
@@ -118,7 +147,7 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
             carries the full account.
           */}
           {progress.reward ? (
-            <Text style={[text('bodyS', lang), styles.legendText]}>{progress.reward}</Text>
+            <Text style={[text('bodyS', lang), legendInk]}>{progress.reward}</Text>
           ) : null}
         </View>
       </View>
@@ -128,7 +157,7 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
   return (
     <View>
       <View
-        style={styles.track}
+        style={[styles.track, { backgroundColor: ink.track }]}
         accessibilityRole="progressbar"
         accessibilityValue={{ min: 0, max: 100, now: Math.round(progress.fraction * 100) }}
       >
@@ -139,16 +168,21 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
           and the reason it takes no language conditional is measured, not
           assumed. See i18n/rtl.ts.
         */}
-        <View style={[styles.trackFill, { width: `${progress.fraction * 100}%` }]} />
+        <View
+          style={[
+            styles.trackFill,
+            { width: `${progress.fraction * 100}%`, backgroundColor: ink.fill },
+          ]}
+        />
       </View>
       <View style={styles.progressLegend}>
-        <Text style={[text('bodyS', lang), styles.legendText]}>
+        <Text style={[text('bodyS', lang), legendInk]}>
           {progress.next
             ? copy.tierHint(progress.visitsToNext, progress.next)
             : copy.tierName[progress.current]}
         </Text>
         {/* The ladder arrow follows the reading direction — → in EN, ← in AR. */}
-        <Text style={[text('bodyS', lang), styles.legendText]}>
+        <Text style={[text('bodyS', lang), legendInk]}>
           {copy.tierLadder(progress.current, progress.next)}
         </Text>
       </View>
@@ -191,17 +225,19 @@ const styles = StyleSheet.create({
     boxShadow: shadow.walletCard,
   },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headLabel: { color: WHITE, opacity: 0.85, letterSpacing: 1.5 },
-  headLabelAr: { color: WHITE, opacity: 0.85 },
+  // Colour and opacity come from the card's ink at the call site: white at 0.85
+  // on the brand card and on black, solid `cardText` on a metal.
+  headLabel: { letterSpacing: 1.5 },
+  headLabelAr: {},
   pill: {
     paddingVertical: 5,
     paddingHorizontal: 11,
     borderRadius: radius.pill,
     // interaction-spec.md §2, documented exception — translucent white on the
-    // gradient, ~3:1. Keep it; do not "fix" it to an opaque fill.
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    // gradient, ~3:1. Keep it; do not "fix" it to an opaque fill. The fill is
+    // `ink.pillBg` at the call site: exactly rgba(255,255,255,0.18) on the brand
+    // card and on black, `cardText` at 0.08 on a metal (see cardInk.test.ts).
   },
-  pillText: { color: WHITE },
   // 12 / 16 are the design's margins; the subtraction is the half-leading
   // `Money` adds to make the figure fit its face. See BALANCE_HALF_LEADING.
   balanceRow: {
@@ -220,17 +256,20 @@ const styles = StyleSheet.create({
   // now passes `unitWeight="500"` — the same Inter_500Medium and
   // IBMPlexSansArabic_500Medium, chosen in the one place every caller goes
   // through.
-  unit: { fontSize: 17, opacity: 0.82 },
-  stamp: { color: 'rgba(255,255,255,0.78)', marginTop: -10, marginBottom: 16 },
+  // Opacity is `ink.unitOpacity` at the call site: 0.82 on light ink, 1 on a metal.
+  unit: { fontSize: 17 },
+  // Colour is `ink.stampText`: white at 0.78 on light ink, solid on a metal.
+  stamp: { marginTop: -10, marginBottom: 16 },
 
-  track: { height: 6, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },
+  // Fill is `ink.track`: white at 0.22 on light ink, `cardText` at 0.18 on a metal.
+  track: { height: 6, borderRadius: radius.pill, overflow: 'hidden' },
   // alignSelf: 'flex-start' is the CROSS-axis start of this column container,
   // which is the LEFT in English and the RIGHT in Arabic. Do not "fix" it to
   // flex-end for RTL — that double-flips it. Measured, see i18n/rtl.ts.
   trackFill: {
     height: '100%',
     borderRadius: radius.pill,
-    backgroundColor: WHITE,
+    // `ink.fill` at the call site: solid ink, so it reads against its track.
     alignSelf: 'flex-start',
   },
   progressLegend: {
@@ -239,14 +278,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 10,
   },
-  legendText: { color: WHITE, opacity: 0.88 },
 
   stampRow: { flexDirection: 'row', gap: 7 },
   stampDot: {
     flex: 1,
     height: 20,
     borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.22)',
+    // `ink.stampDot` / `ink.stampDotFilled` at the call site.
   },
-  stampDotFilled: { backgroundColor: WHITE },
 });
