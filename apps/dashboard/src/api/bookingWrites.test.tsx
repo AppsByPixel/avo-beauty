@@ -167,7 +167,7 @@ describe('the five endpoints are addressed BARE, not under /v1', () => {
     });
     const { result } = renderHook(() => useCancelBooking(), { wrapper: wrapper() });
     await act(async () => {
-      result.current.mutate({ bookingId: BOOKING_ID });
+      result.current.mutate({ bookingId: BOOKING_ID, idempotencyKey: 'KEY-CANCEL' });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -186,14 +186,16 @@ describe('the five endpoints are addressed BARE, not under /v1', () => {
   });
 
   /**
-   * THE FOUR TRANSITIONS TAKE NO KEY, AND THAT IS THE SERVER'S SHAPE.
-   * `api/src/routes/bookings.ts § IDEMPOTENCY` — they name ONE resource with ONE
-   * live state and rely on `FOR UPDATE`, which holds for two DIFFERENT keys as
-   * well as for one repeated. Pinned as a NEGATIVE because "add a key to be
-   * safe" is exactly the well-meant change that would reach an endpoint that
-   * does not read one.
+   * THE CANCEL TAKES A KEY NOW; THE OTHER THREE TRANSITIONS STILL DO NOT.
+   * The salon's cancel returns a deposit, and the ruling of 2026-09-29
+   * (DECISIONS, "The salon's cancel takes an Idempotency-Key") is that the
+   * dashboard sends one and the API requires it — #4. Reschedule, reassign and
+   * complete move no money and rely on `FOR UPDATE`
+   * (`api/src/routes/bookings.ts § IDEMPOTENCY`). Still pinned as a NEGATIVE for
+   * those three, because "add a key to be safe" is the well-meant change that
+   * would reach an endpoint that does not read one.
    */
-  it('sends an Idempotency-Key on the create and on none of the other four', async () => {
+  it('sends an Idempotency-Key on the create and the cancel, and on none of the other three', async () => {
     authedRequest.mockResolvedValue({ booking: WRITTEN });
     const create = renderHook(() => useCreateBooking(), { wrapper: wrapper() });
     await act(async () => {
@@ -210,10 +212,23 @@ describe('the five endpoints are addressed BARE, not under /v1', () => {
     await waitFor(() => expect(create.result.current.isSuccess).toBe(true));
     expect(sentCall().options.idempotencyKey).toBe('KEY-CREATE');
 
+    authedRequest.mockClear();
+    authedRequest.mockResolvedValue({
+      booking: WRITTEN,
+      refundedFils: 0,
+      balanceAfterFils: null,
+      transactionId: null,
+    });
+    const cancel = renderHook(() => useCancelBooking(), { wrapper: wrapper() });
+    await act(async () => {
+      cancel.result.current.mutate({ bookingId: BOOKING_ID, idempotencyKey: 'KEY-CANCEL' });
+    });
+    await waitFor(() => expect(cancel.result.current.isSuccess).toBe(true));
+    expect(sentCall().options.idempotencyKey).toBe('KEY-CANCEL');
+
     for (const [hook, vars] of [
       [useRescheduleBooking, { bookingId: BOOKING_ID, startsAt: STARTS_AT }],
       [useReassignArtist, { bookingId: BOOKING_ID, artistId: 'AR-9f8e7d6c5b' }],
-      [useCancelBooking, { bookingId: BOOKING_ID }],
       [useCompleteBooking, { bookingId: BOOKING_ID }],
     ] as const) {
       authedRequest.mockClear();
@@ -364,7 +379,7 @@ describe('the server refuses independently, and the client carries its sentence'
     ['create', useCreateBooking, { artistId: 'A', serviceId: 'S', startsAt: STARTS_AT, memberId: 'M', guestName: null, guestPhone: null, idempotencyKey: 'K' }],
     ['reschedule', useRescheduleBooking, { bookingId: BOOKING_ID, startsAt: STARTS_AT }],
     ['reassign', useReassignArtist, { bookingId: BOOKING_ID, artistId: 'AR-9f8e7d6c5b' }],
-    ['cancel', useCancelBooking, { bookingId: BOOKING_ID }],
+    ['cancel', useCancelBooking, { bookingId: BOOKING_ID, idempotencyKey: 'K' }],
     ['complete', useCompleteBooking, { bookingId: BOOKING_ID }],
   ])('%s surfaces a 403 with the server\'s own sentence', async (_name, hook, vars) => {
     authedRequest.mockRejectedValue(FORBIDDEN);

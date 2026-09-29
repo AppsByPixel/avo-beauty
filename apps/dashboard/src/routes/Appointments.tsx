@@ -400,16 +400,26 @@ export function Appointments() {
    * refetch should not be able to have three half-filled forms open in it at
    * once, each one a control a merchant might complete against the wrong row.
    *
-   * NO IDEMPOTENCY KEY ON ANY OF THE FOUR, and that is the server's shape rather
-   * than an omission here. `api/src/routes/bookings.ts § IDEMPOTENCY` is
-   * explicit: these four name ONE resource with ONE live state and rely on
-   * `FOR UPDATE` — a second request blocks on the row lock, re-reads a status
-   * that is no longer `deposit_held`, and is answered `already_cancelled` /
-   * `already_completed` / `not_changeable`. That is stronger than a key, because
-   * it holds for two DIFFERENT keys as well as for one repeated. The CREATE is
-   * the one that takes a key, and `AppointmentForm.tsx § submissionKey` owns it.
+   * THE CANCEL CARRIES AN IDEMPOTENCY KEY, AND IT LIVES IN THIS OBJECT. The
+   * salon's cancel returns a deposit, and the ruling of 2026-09-29 (DECISIONS,
+   * "The salon's cancel takes an Idempotency-Key") is that it sends one and the
+   * API requires it. The key is minted when the step OPENS — one per cancel
+   * attempt — and held in the same object as the booking id, so a retry after a
+   * failure resends the same key (and gets the first answer back if the first
+   * request did land), while opening any other step, or this one again after
+   * dismissing it, is a new attempt with a new key. The armed no-show above is
+   * the same arrangement for the same reason.
+   *
+   * Reschedule, reassign and complete still take none: they move no money, and
+   * `api/src/routes/bookings.ts § IDEMPOTENCY` relies on `FOR UPDATE` for them —
+   * a second request re-reads a status that is no longer `deposit_held` and is
+   * answered by name. A key is minted for every step because one object shape is
+   * simpler than a conditional one; only the cancel sends it. The CREATE's key is
+   * `AppointmentForm.tsx § submissionKey`'s.
    */
-  const [open, setOpen] = useState<{ id: string; kind: ControlKind } | null>(null);
+  const [open, setOpen] = useState<{ id: string; kind: ControlKind; key: string } | null>(
+    null,
+  );
   const [adding, setAdding] = useState(false);
 
   const reschedule = useRescheduleBooking();
@@ -624,7 +634,7 @@ export function Appointments() {
         mark.reset();
         resetWrites();
         setArmed(null);
-        setOpen({ id: booking.id, kind });
+        setOpen({ id: booking.id, kind, key: crypto.randomUUID() });
       },
       onDismiss: () => {
         resetWrites();
@@ -640,8 +650,14 @@ export function Appointments() {
         reschedule.mutate({ bookingId: booking.id, startsAt }, { onSuccess: () => setOpen(null) }),
       onReassign: (artistId) =>
         reassign.mutate({ bookingId: booking.id, artistId }, { onSuccess: () => setOpen(null) }),
-      onCancel: () =>
-        cancelBooking.mutate({ bookingId: booking.id }, { onSuccess: () => setOpen(null) }),
+      onCancel: () => {
+        // The key this step was opened with — the same one on every retry of it.
+        if (!open || open.id !== booking.id) return;
+        cancelBooking.mutate(
+          { bookingId: booking.id, idempotencyKey: open.key },
+          { onSuccess: () => setOpen(null) },
+        );
+      },
       onComplete: () =>
         complete.mutate({ bookingId: booking.id }, { onSuccess: () => setOpen(null) }),
     },
