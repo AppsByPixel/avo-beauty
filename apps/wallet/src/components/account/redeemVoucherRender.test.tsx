@@ -21,6 +21,7 @@
  */
 
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { tapAndSettle } from '../../testing/tapAndSettle';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `vi.hoisted`, the idiom `state/useShopCheckout.test.tsx` established here:
@@ -165,7 +166,10 @@ describe('what the sheet sends', () => {
     redeemVoucher.mockResolvedValueOnce(REDEMPTION);
     const { getByTestId } = mount();
     fireEvent.change(getByTestId('voucher-code'), { target: { value: '26LJN8HAGKMD' } });
-    fireEvent.click(getByTestId('voucher-submit'));
+    // The refusal answers inside act, so the button's responder is re-armed
+    // before the retry tap. The `aria-disabled` wait below narrowed this race
+    // and could not close it: src/testing/tapAndSettle.ts says why.
+    await tapAndSettle(getByTestId('voucher-submit'));
     await waitFor(() => expect(getByTestId('voucher-error').textContent).toContain('connection'));
 
     /**
@@ -205,7 +209,7 @@ describe('what the sheet sends', () => {
     redeemVoucher.mockResolvedValueOnce(REDEMPTION);
     const { getByTestId } = mount();
     fireEvent.change(getByTestId('voucher-code'), { target: { value: '26LJN8HAGKMD' } });
-    fireEvent.click(getByTestId('voucher-submit'));
+    await tapAndSettle(getByTestId('voucher-submit'));
     await waitFor(() => expect(redeemVoucher).toHaveBeenCalledTimes(1));
 
     // The same race as the spec above, which had simply not fired yet: the call
@@ -327,7 +331,7 @@ describe('the error state', () => {
     redeemVoucher.mockRejectedValue(refusal());
     const { getByTestId } = mount();
     fireEvent.change(getByTestId('voucher-code'), { target: { value: '5NWBVRNHLA8H' } });
-    fireEvent.click(getByTestId('voucher-submit'));
+    await tapAndSettle(getByTestId('voucher-submit'));
     /*
       WAIT FOR THE BUTTON, NOT FOR THE CALL AND NOT FOR THE MESSAGE.
 

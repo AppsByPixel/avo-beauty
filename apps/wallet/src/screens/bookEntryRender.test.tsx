@@ -29,6 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { tapAndSettle } from '../testing/tapAndSettle';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookableArtist, Language, Member, Salon } from '@avo/types';
 
@@ -211,7 +212,7 @@ describe('Back leaves from the first step, whichever it is', () => {
     draw(salonWith([KWC, SAL]));
     // No "All branches" default since 2026-09-29: she chooses a branch first.
     await waitFor(() => expect(screen.getByTestId(`book-branch-${KWC.id}`)).toBeTruthy());
-    fireEvent.click(screen.getByTestId(`book-branch-${KWC.id}`));
+    await tapAndSettle(screen.getByTestId(`book-branch-${KWC.id}`));
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
     fireEvent.click(screen.getByTestId('book-next'));
     await waitFor(() => expect(screen.getByText(en.chooseService)).toBeTruthy());
@@ -268,7 +269,7 @@ describe('the Book flow in Arabic — non-negotiable #12', () => {
     draw(salonWith([KWC, SAL]), 'ar');
     await waitFor(() => expect(screen.getByTestId(`book-branch-${KWC.id}`)).toBeTruthy());
     expect(isDisabled('book-next')).toBe(true);
-    fireEvent.click(screen.getByTestId(`book-branch-${KWC.id}`));
+    await tapAndSettle(screen.getByTestId(`book-branch-${KWC.id}`));
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
 
     expect(document.documentElement.dir).toBe('rtl');

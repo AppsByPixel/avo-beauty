@@ -29,6 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { tapAndSettle } from '../testing/tapAndSettle';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookableArtist, Language, Member, Salon } from '@avo/types';
 
@@ -158,7 +159,7 @@ describe('the branch step is the service list, design-wise', () => {
     const branchTitleClass = titleOf(`book-branch-${KWC.id}`).className;
     expect(branchRow.textContent).toBe(KWC.name);
 
-    fireEvent.click(branchRow);
+    await tapAndSettle(branchRow);
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
     fireEvent.click(screen.getByTestId('book-next'));
     await waitFor(() => expect(screen.getByTestId('book-service-SV-1')).toBeTruthy());
@@ -172,7 +173,7 @@ describe('the branch step is the service list, design-wise', () => {
 
   it('a selected branch looks exactly like a selected service', async () => {
     await onBranchStep();
-    fireEvent.click(screen.getByTestId(`book-branch-${KWC.id}`));
+    await tapAndSettle(screen.getByTestId(`book-branch-${KWC.id}`));
     await waitFor(() => expect(isSelected(`book-branch-${KWC.id}`)).toBe(true));
     const selectedBranchClass = screen.getByTestId(`book-branch-${KWC.id}`).className;
 
@@ -241,7 +242,7 @@ describe('choosing a branch', () => {
   it('selects the row, filters the roster to it, and Continue advances to services', async () => {
     await onBranchStep();
     expect(count()).toBe(en.bookStep(1, 5));
-    fireEvent.click(screen.getByTestId(`book-branch-${SAL.id}`));
+    await tapAndSettle(screen.getByTestId(`book-branch-${SAL.id}`));
     await waitFor(() => expect(isSelected(`book-branch-${SAL.id}`)).toBe(true));
     expect(isSelected(`book-branch-${KWC.id}`)).toBe(false);
     await waitFor(() =>
@@ -289,7 +290,7 @@ describe('the branch rows in Arabic — non-negotiable #12', () => {
     expect(screen.getByTestId('book-branch-unassigned').textContent).toBe(ar.branchFilterOther);
     expect(ar.branchFilterOther).toBe('مصففات أخريات');
 
-    fireEvent.click(screen.getByTestId('book-branch-unassigned'));
+    await tapAndSettle(screen.getByTestId('book-branch-unassigned'));
     await waitFor(() => expect(screen.getByText(ar.branchFilterOtherNote)).toBeTruthy());
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
     fireEvent.click(screen.getByTestId('book-next'));
