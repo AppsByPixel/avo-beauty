@@ -310,6 +310,25 @@ function pathFor(r: GatedRoute): string {
   return out;
 }
 
+/**
+ * Gated routes whose handler REQUIRES an Idempotency-Key (#4), read after the gate.
+ *
+ * Their granted mirror sends one. Without it the mirror is answered 400
+ * `idempotency_key_required`, which is "not refused for authority" and so passes — but
+ * it stops one statement after the gate, and says nothing about the handler reaching the
+ * lookup. With a key the bogus `:bookingId` is a 404, which is the same evidence every
+ * other mirror gives. The REFUSAL probe still sends none: gate before key is pinned in
+ * `tenancy.test.ts`, and a 403 here with no key is part of that claim.
+ *
+ * The salon's cancel joined the no-show here in lane A's f8e1252: it returns money.
+ */
+const MIRROR_SENDS_KEY = new Set([
+  'POST /salons/:id/bookings/:bookingId/cancel',
+  'POST /salons/:id/bookings/:bookingId/no-show',
+]);
+let mirrorKeys = 0;
+const mirrorKey = () => `census-mirror-${Date.now()}-${mirrorKeys++}`;
+
 /** An empty object for verbs that take a body. A missing body is a different refusal. */
 const bodyFor = (r: GatedRoute): unknown =>
   r.method === 'GET' || r.method === 'DELETE' ? undefined : {};
@@ -1337,6 +1356,13 @@ const PINNED_COVERAGE: string[] = [
   'PUT /salons/:id/booking-policy → loyalty',
   'PUT /salons/:id/loyalty → salons',
   'PUT /v1/salons/:id/promotions/boosts → marketing',
+  /**
+   * Lane A's `edc4238` (migration 0067): stop one branch's boost now. The same gate as
+   * the PUT, pasted from the census output. Its GRANTED mirror is left to run: the
+   * probe's bogus `:branchId` is a 404 `unknown_branch`, so granting stops nothing.
+   * `boosts.test.ts` drives the refusal against a real running boost and checks the row.
+   */
+  'POST /v1/salons/:id/promotions/boosts/:branchId/stop → marketing',
 ];
 
 describe('the census still reaches every route it reached when this was pinned', () => {
@@ -1705,6 +1731,7 @@ describe('and each of those stops refusing once that one permission is granted',
         const res = await treq<any>(route.method, pathFor(route), {
           token: tokenFor(route),
           body: bodyFor(route),
+          ...(MIRROR_SENDS_KEY.has(nameOf(route)) ? { idempotencyKey: mirrorKey() } : {}),
         });
 
         /**
@@ -1720,6 +1747,10 @@ describe('and each of those stops refusing once that one permission is granted',
           `${nameOf(route)} still refuses perms.${route.permission} after it was GRANTED, so ` +
             `the refusal in the ledger above proves nothing about a gate.\n${res.raw}`,
         ).toBe(false);
+        if (MIRROR_SENDS_KEY.has(nameOf(route))) {
+          // Past the gate AND the key, to the lookup of a booking that does not exist.
+          expect(res.status, `${nameOf(route)} with its key did not reach the lookup: ${res.raw}`).toBe(404);
+        }
       } finally {
         revokeAllMerchant();
       }

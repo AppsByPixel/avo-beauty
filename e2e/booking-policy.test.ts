@@ -44,10 +44,11 @@
  *
  * THE GRACE IS SET FOR THIS FILE'S API, NOT READ FROM A DEFAULT
  * --------------------------------------------------------------
- * `BOOKING_SETTLE_GRACE_MINUTES` defaulted to 0 in 54308ea and lane A is moving it to 60
- * in parallel. A spec that assumed either would go red the day the other landed, and a
- * spec that assumed the one it was written against would be asserting env.ts rather than
- * the settle rule. So the API this file boots is given `SETTLE_GRACE_MINUTES` — 45 unless
+ * `BOOKING_SETTLE_GRACE_MINUTES` defaulted to 0 in 54308ea and has defaulted to 60 since
+ * lane A's `96fcb35` (merged in `edc4238`). This file went through that change without a
+ * red, which is the design working: a spec that assumed either default would have gone
+ * red the day the other landed, and would have been asserting env.ts rather than the
+ * settle rule. So the API this file boots is given `SETTLE_GRACE_MINUTES` — 45 unless
  * the operator sets one, which is neither default — and every spec reads the constant,
  * and the first sweep spec checks the API really stamped `endsAt + grace`, so a boot that
  * ignored it would fail by name rather than by arithmetic.
@@ -90,7 +91,7 @@ import {
 
 /**
  * The slot-end grace THIS FILE'S API runs with. 45 is neither the 0 that shipped nor
- * the 60 lane A is moving to, so a green run proves the variable is read. An operator
+ * the 60 it defaults to since `96fcb35`, so a green run proves the variable is read. An operator
  * who exports one is honoured, and the specs follow it.
  */
 const SETTLE_GRACE_MINUTES = Number(process.env.BOOKING_SETTLE_GRACE_MINUTES ?? 45);
@@ -833,7 +834,11 @@ describe('booking policy — publish, stamp, settle', () => {
     startIn(S_CANCEL.id, 2 * 60);
     const before = balanceOf(HER);
     const revenueBefore = salonRevenue();
-    const res = await treq<any>('POST', `/salons/${SALON}/bookings/${S_CANCEL.id}/cancel`, { token: staff });
+    // A key since lane A's f8e1252: the salon's cancel returns money, so #4 applies.
+    const res = await treq<any>('POST', `/salons/${SALON}/bookings/${S_CANCEL.id}/cancel`, {
+      token: staff,
+      idempotencyKey: key('salon-cancel'),
+    });
     expect(res.status, res.raw).toBe(200);
     expect(res.body.refundedFils).toBe(DEPOSIT);
     expect(res.body.booking.policy.noShow, 'the fixture is not a keep booking').toBe('keep');
