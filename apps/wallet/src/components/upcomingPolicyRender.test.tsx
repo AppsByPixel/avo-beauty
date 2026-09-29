@@ -177,11 +177,11 @@ describe('once settled, where the deposit went — the server’s figures', () =
 // ═════════════════════════════════════════════ 3. the preview at each cut-off ══
 
 describe('before she cancels: what the stamped rule returns at this moment', () => {
-  const previewAt = (h: number, deposit = 5000, lang: Language = 'en') => {
+  const previewAt = (h: number, deposit = 5000, lang: Language = 'en', returnCapPercent: number | null = null) => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(hoursBefore(h));
     const onCancel = vi.fn();
-    draw(booking({ depositFils: deposit }), { onCancel, lang });
+    draw(booking({ depositFils: deposit, returnCapPercent }), { onCancel, lang });
     fireEvent.click(screen.getByTestId('upcoming-cancel'));
     return onCancel;
   };
@@ -219,6 +219,14 @@ describe('before she cancels: what the stamped rule returns at this moment', () 
     previewAt(1);
     expect(textOf('upcoming-preview-back')).toBe(en.cancelPreviewNothing);
     expect(textOf('upcoming-preview-kept')).toBe('The salon keeps 5.000 KD.');
+  });
+
+  it('after a late move: 30h before, capped at 50% — the card says what the server pays, not 100%', () => {
+    // She moved it 5h before the old slot (50%) to this one. The server returns
+    // min(cap, rule for the new slot) = 50%; the preview must say the same.
+    previewAt(30, 5005, 'en', 50);
+    expect(textOf('upcoming-preview-back')).toBe('If you cancel now, 2.502 KD comes back to your wallet.');
+    expect(textOf('upcoming-preview-kept')).toBe('The salon keeps 2.503 KD.');
   });
 
   it('Arabic, 5h before', () => {

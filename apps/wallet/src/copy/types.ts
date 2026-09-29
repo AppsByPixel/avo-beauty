@@ -106,7 +106,6 @@ export interface Copy {
   standardEarning: string;
   visitsMultiplier(n: number): string;
   stampsMultiplier(n: number): string;
-  topupBoost(percent: number): string;
 
   // top-up card
   topupTitle: string;

@@ -80,6 +80,57 @@ describe('rounding: DOWN to the fil, and the salon keeps the remainder', () => {
   });
 });
 
+/**
+ * AFTER A LATE MOVE — `BookingSchema.returnCapPercent` (trunk 7646bb8).
+ *
+ * Lane A's reading, accepted (DECISIONS.md, "Reschedule loophole"): a late
+ * reschedule locks in the percent she held at the moment she moved, and a later
+ * cancel returns the SMALLER of that and the new slot's rule — the server's
+ * `cancellationOutcome(rules, startsAt, now, deposit, capPercent)`. Without the
+ * cap, a move from 5 hours out (50%) to next week reads 100% here while the
+ * server pays 50%: a preview that promises twice what comes back.
+ */
+describe('the preview after a late move takes the same minimum as the server', () => {
+  it('moved at 50%, the new slot 48h out: 50% back, not 100%', () => {
+    const p = cancelPreview(RULES, START, at(48), 5000, 50);
+    expect(p.returnPercent).toBe(50);
+    expect(p.returnedFils).toBe(2500);
+    expect(p.keptFils).toBe(2500);
+    // When the cap binds, the rule is the stamped one whose percent it equals.
+    expect(p.rule).toEqual({ hoursBefore: 2, returnPercent: 50 });
+  });
+
+  it('moved later than every cut-off: a cap of 0 returns nothing, however far out she is now', () => {
+    const p = cancelPreview(RULES, START, at(700), 5000, 0);
+    expect(p).toEqual({ rule: null, returnPercent: 0, returnedFils: 0, keptFils: 5000 });
+  });
+
+  it('the cap never raises a return — the new slot’s rule wins when it is lower', () => {
+    const p = cancelPreview(RULES, START, at(1), 5000, 50);
+    expect(p.returnPercent).toBe(0);
+    expect(p.returnedFils).toBe(0);
+  });
+
+  it('a cap equal to the rule changes nothing, and a null cap is the plain rule', () => {
+    expect(cancelPreview(RULES, START, at(48), 5000, 100)).toEqual(cancelPreview(RULES, START, at(48), 5000));
+    expect(cancelPreview(RULES, START, at(48), 5000, null).returnPercent).toBe(100);
+  });
+
+  it('a capped split rounds down to the fil like any other: 50% of 5.005 KD is 2.502', () => {
+    const p = cancelPreview(RULES, START, at(48), 5005, 50);
+    expect(p.returnedFils).toBe(2502);
+    expect(p.keptFils).toBe(2503);
+  });
+
+  it('a cap that matches no stamped rule reports no rule, and still applies', () => {
+    const p = cancelPreview(RULES, START, at(48), 1001, 33);
+    expect(p.rule).toBeNull();
+    expect(p.returnPercent).toBe(33);
+    expect(p.returnedFils).toBe(330);
+    expect(p.keptFils).toBe(671);
+  });
+});
+
 describe('the summary, in both languages', () => {
   it('English: the brief’s own sentence', () => {
     expect(policySummary({ noShow: 'keep', cancellation: RULES }, en)).toEqual({

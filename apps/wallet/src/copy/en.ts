@@ -133,7 +133,8 @@ export const en: Copy = {
   standardEarning: 'Standard earning',
   visitsMultiplier: (n) => `${n}× visits`,
   stampsMultiplier: (n) => `${n}× stamps`,
-  topupBoost: (percent) => `+${percent}% top-ups`,
+  // No "+N% top-ups" chip: branch boosts lose the top-up bonus the server never
+  // paid (DECISIONS.md, 2026-09-29).
 
   // top-up card
   topupTitle: 'Top up',

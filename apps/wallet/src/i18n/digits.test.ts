@@ -147,7 +147,6 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   happyClock: ['16:32'],
   visitsMultiplier: [2],
   stampsMultiplier: [2],
-  topupBoost: [30],
   tierBonusBadge: ['silver', 10],
   tierBonusExplain: ['silver', 10],
   stampsBadge: [8],
