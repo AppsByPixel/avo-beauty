@@ -20,7 +20,7 @@
  * ---------------------------------------
  * `consumeToken` is one statement:
  *
- *   UPDATE wallet_token SET consumed_at = now(), …
+ *   UPDATE wallet_token SET consumed_at = greatest(now(), issued_at), …
  *    WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
  *   RETURNING member_id
  *
@@ -34,6 +34,43 @@
  * settles. That is a property of the statement, not of how fast the two requests
  * happen to arrive — which is what Lane D meant by "the mock wins this by
  * accident".
+ *
+ * ONE CLOCK: THE DATABASE'S
+ * -------------------------
+ * Every instant on a token — `issued_at`, `expires_at`, `consumed_at`, and the
+ * "is it still live?" comparison at peek and at consume — comes from Postgres's
+ * `now()`. None comes from the API process's `new Date()`.
+ *
+ * This was a 500 on `POST /charges`. `issued_at` was the database's `now()` and
+ * `consumed_at` was the API's `new Date()`, so the CHECK
+ * `wallet_token_consumed_after_issue` (`consumed_at >= issued_at`) compared two
+ * machines' clocks. Locally Postgres runs in a Docker VM a few ms ahead of the
+ * host; trunk's gate on `e55bf7f` recorded a `consumed_at` 4 ms BEFORE its
+ * `issued_at` and refused five charges in `e2e/loyalty-reversal.test.ts`. The
+ * same shape made `expires_at` (API clock) minus `issued_at` (database clock)
+ * the TTL plus the skew, and made peek (`Date.now()`) and consume (`now()`)
+ * disagree about whether a code was dead.
+ *
+ * WHY THE DATABASE'S CLOCK AND NOT THE API'S. The other fix — stamp `issued_at`
+ * from `new Date()` too — holds only while one process mints and consumes. In
+ * production a Vercel function mints on one instance and the scanner's charge
+ * lands on another; there is no single API clock to agree with. There is one
+ * database, it evaluates the CHECK, it holds the row lock that makes consumption
+ * single-use, and the consume's `expires_at > now()` was already on its clock.
+ * Inside the charge transaction `now()` is the transaction's start, so the peek
+ * and the consume see the same instant and cannot disagree with each other.
+ *
+ * `consumed_at` is `greatest(now(), issued_at)` rather than bare `now()`. The
+ * charge transaction begins after the mint committed — the scanner cannot hold
+ * the code before the wallet was sent it — so on a monotonic clock bare `now()`
+ * is already enough. `greatest` covers the database's own clock stepping back
+ * (an NTP correction, a failover to a replica): it records the consume at the
+ * issue instant, an error smaller than the step, instead of refusing a good
+ * charge with a customer at the counter. `memberNotifications.ts` stamps a policy
+ * notice's `read_at` with the same idiom for the same CHECK shape.
+ *
+ * `walletTokenClock.int.test.ts` freezes the API's `Date` behind the database's
+ * and mints-then-charges; it was a 500 against `consumedAt: new Date()`.
  */
 
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
@@ -97,15 +134,27 @@ export interface MintedToken {
 
 export async function mintToken(db: Db, memberId: string): Promise<MintedToken> {
   const token = mintWalletTokenValue();
-  const expiresAt = new Date(Date.now() + TOKEN_TTL_SECONDS * 1000);
 
-  await db.insert(walletToken).values({
-    memberId,
-    tokenHash: hashWalletToken(token),
-    expiresAt,
-  });
+  /**
+   * Both instants from ONE `now()` — the same value twice, since it is one
+   * statement — so `expires_at - issued_at` is exactly the TTL and the
+   * `wallet_token_expiry_is_short` CHECK is about the TTL, not about how far the
+   * API's clock is from the database's. The expiry the wallet is sent is
+   * RETURNED rather than computed here, for the same reason. See the header,
+   * § ONE CLOCK.
+   */
+  const [row] = await db
+    .insert(walletToken)
+    .values({
+      memberId,
+      tokenHash: hashWalletToken(token),
+      issuedAt: sql`now()`,
+      expiresAt: sql`now() + make_interval(secs => ${TOKEN_TTL_SECONDS})`,
+    })
+    .returning({ expiresAt: walletToken.expiresAt });
+  if (!row) throw new Error('wallet_token insert returned no row');
 
-  return { memberId, token, expiresAt };
+  return { memberId, token, expiresAt: row.expiresAt };
 }
 
 export interface PeekedToken {
@@ -164,6 +213,10 @@ export async function peekToken(
       salonId: member.salonId,
       expiresAt: walletToken.expiresAt,
       consumedAt: walletToken.consumedAt,
+      // Decided by the database, on the clock that stamped `expires_at` and that
+      // `consumeToken`'s `expires_at > now()` uses — not by `Date.now()`. On the
+      // charge's `tx` this is the same `now()` the consume sees.
+      expired: sql<boolean>`${walletToken.expiresAt} <= now()`,
     })
     .from(walletToken)
     .innerJoin(member, eq(member.id, walletToken.memberId))
@@ -181,7 +234,7 @@ export async function peekToken(
   // POST /scans leaked one salon's customer to another salon's scanner.
   if (row.salonId !== scope.salonId) throw new TokenOutsideSalonError();
 
-  if (row.expiresAt.getTime() <= Date.now()) throw tokenExpired();
+  if (row.expired) throw tokenExpired();
 
   return { id: row.id, memberId: row.memberId, salonId: row.salonId, expiresAt: row.expiresAt };
 }
@@ -207,7 +260,10 @@ export async function consumeToken(
   const rows = await exec
     .update(walletToken)
     .set({
-      consumedAt: new Date(),
+      // The database's clock, never before `issued_at`: see the header, § ONE
+      // CLOCK. `new Date()` here was the 500 — the API's clock compared with the
+      // database's by `wallet_token_consumed_after_issue`.
+      consumedAt: sql`greatest(now(), ${walletToken.issuedAt})`,
       consumedByStaffId: consumedBy.staffId,
       consumedByTransactionId: consumedBy.transactionId,
     })
