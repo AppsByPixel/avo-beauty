@@ -5149,9 +5149,13 @@ a:hover {
   border-radius: 8px;
 }
 
+/*
+ * TWO CELLS, NOT THE DESIGN'S THREE. The "Top-up bonus" stepper is gone
+ * (DECISIONS, 2026-09-29): the server never paid it. See marketing/Boosts.tsx.
+ */
 .mk__boostgrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 14px;
 }
 
@@ -5165,6 +5169,49 @@ a:hover {
   font-size: 12px;
   color: var(--avo-text-muted);
   margin-bottom: 10px;
+}
+
+/* The duration, the state pill's Stop, and its in-row confirm — new work, no design. */
+.mk__booststop {
+  margin-left: auto;
+}
+
+.mk__boostconfirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--avo-surface);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.mk__boostconfirmtext {
+  font-size: 13px;
+  flex: 1 1 240px;
+  line-height: 1.5;
+}
+
+.mk__boostwindow {
+  background: var(--avo-surface);
+  border-radius: 13px;
+  padding: 14px;
+  margin-top: 14px;
+}
+
+.mk__boostfields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.mk__boostwhen {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 
 .mk__boostsummary {
@@ -5309,6 +5356,10 @@ a:hover {
   .mk__campaigns,
   .mk__happy {
     grid-template-columns: 1fr;
+  }
+
+  .mk__boostfields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -5799,6 +5850,13 @@ a:hover {
 .approvals__statlabel {
   font-size: 13px;
   color: var(--avo-text-muted-strong);
+}
+
+.approvals__statnote {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin: 10px 0 0;
+  line-height: 1.5;
 }
 
 .approvals__statvalue {

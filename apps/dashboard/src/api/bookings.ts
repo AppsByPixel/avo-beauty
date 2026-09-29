@@ -700,8 +700,18 @@ export function useMarkNoShow(): UseMutationResult<
  * the snapshot taken at sign-in.
  *
  * ===========================================================================
- * ONLY THE CREATE TAKES AN `Idempotency-Key`, AND THAT IS THE SERVER'S SHAPE
+ * THE CREATE AND THE CANCEL TAKE AN `Idempotency-Key`; THE OTHER THREE DO NOT
  * ===========================================================================
+ * THE CANCEL JOINED THE CREATE ON 2026-09-29 (DECISIONS, "The salon's cancel
+ * takes an Idempotency-Key"). Lane D found that it returns money without one.
+ * Its status checks already stop a double refund, but a retry after a dropped
+ * response could not get the original answer back — it was told
+ * `already_cancelled` about a cancel that had succeeded. The API is being made to
+ * require the key (lane A, in parallel); the dashboard deploys first and sends it
+ * now. `useCancelBooking` takes it as a variable, minted where the cancel step
+ * opens (`Appointments.tsx § open`) and reused on every retry of that step.
+ *
+ * What follows is the reasoning for the other three, and it still holds for them.
  * The route header says why in its own words: a POST that succeeds twice makes
  * two appointments, and the exclusion constraint answers the second `slot_taken`
  * — "a confusing and slightly alarming thing to show someone who pressed the
@@ -957,18 +967,26 @@ export interface CancelResult {
   transactionId: string | null;
 }
 
+/**
+ * `idempotencyKey` IS A VARIABLE, NOT MINTED HERE — `useMarkNoShow`'s rule. A key
+ * minted inside the mutation is minted per CALL, so a retry after a failure
+ * would arrive with a fresh key and lose the replay the header exists for. The
+ * screen mints one per cancel ATTEMPT (opening the step) and holds it until the
+ * step succeeds or is dismissed. Non-negotiable #4: this POST returns a deposit.
+ */
 export function useCancelBooking(): UseMutationResult<
   CancelResult,
   unknown,
-  { bookingId: string }
+  { bookingId: string; idempotencyKey: string }
 > {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ bookingId }) =>
+    mutationFn: ({ bookingId, idempotencyKey }) =>
       authedRequest<CancelResult>('merchant', `/salons/${salonId}/bookings/${bookingId}/cancel`, {
         method: 'POST',
+        idempotencyKey,
       }),
     /*
      * PATCHED THEN INVALIDATED, exactly as the no-show is, and for its reason:
