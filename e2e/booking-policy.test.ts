@@ -834,7 +834,11 @@ describe('booking policy — publish, stamp, settle', () => {
     startIn(S_CANCEL.id, 2 * 60);
     const before = balanceOf(HER);
     const revenueBefore = salonRevenue();
-    const res = await treq<any>('POST', `/salons/${SALON}/bookings/${S_CANCEL.id}/cancel`, { token: staff });
+    // A key since lane A's f8e1252: the salon's cancel returns money, so #4 applies.
+    const res = await treq<any>('POST', `/salons/${SALON}/bookings/${S_CANCEL.id}/cancel`, {
+      token: staff,
+      idempotencyKey: key('salon-cancel'),
+    });
     expect(res.status, res.raw).toBe(200);
     expect(res.body.refundedFils).toBe(DEPOSIT);
     expect(res.body.booking.policy.noShow, 'the fixture is not a keep booking').toBe('keep');

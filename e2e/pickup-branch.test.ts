@@ -26,8 +26,8 @@
  * ---------------------------------------------------------------
  * `services/branch.ts`: a client choosing the branch is a client choosing its own
  * multiplier. That is about EARNING, and a shop order earns nothing per branch —
- * one flat visit, no boost, no happy hour. So choosing `BR-KWC` (seeded 2x visit
- * and +10 point top-up boost) must buy her nothing on a shop order. § "the boosted
+ * one flat visit, no boost, no happy hour. So choosing `BR-KWC` (the seeded 2x-visit
+ * boost) must buy her nothing on a shop order. § "the boosted
  * branch" pins that at the e2e level, on both doors. The day somebody wires the
  * promotion engine into orders, that spec is what goes red, and the pickup branch
  * must stop being the attribution branch.
@@ -79,7 +79,11 @@ type Who = keyof typeof M;
 const PRODUCT = 'PR-QAPB-01';
 const PRODUCT_FILS = 3_000;
 
-/** The seeded boosted branch — `api/src/db/seed.ts`: visit 2, topup 10, stamp 1. */
+/**
+ * The seeded boosted branch — `api/src/db/seed.ts`: visit 2, topup 0, stamp 1. The
+ * topup was 10 until migration 0068, which zeroed it and holds every boost's topup at 0
+ * with `boost_topup_removed`: a branch boost pays no top-up bonus, and never did.
+ */
 const KWC = 'BR-KWC';
 /** Created, then closed through the merchant's own verb. See the header. */
 const CLOSED_BRANCH = 'BR-ZZQA-PB-CLOSED';
@@ -285,8 +289,8 @@ beforeAll(async () => {
   );
   precondition(
     scalar(`select concat_ws('|', visit, topup) from boost where salon_id='${SALON_A}' and branch_id='${KWC}'`).trim() ===
-      '2|10',
-    `${KWC} is no longer the seeded 2x-visit, +10 top-up boost, so "the boosted branch buys nothing" proves nothing`,
+      '2|0',
+    `${KWC} is no longer the seeded 2x-visit boost (top-up 0 since migration 0068), so "the boosted branch buys nothing" proves nothing`,
   );
   precondition(
     scalar(`select salon_id from branch where id='${B_BRANCH}'`).trim() !== SALON_A,
@@ -537,8 +541,8 @@ describe("attribution — a pickup's revenue lands at the branch she collects fr
 
 describe('the boosted branch buys her nothing on a shop order — the reason choosing is safe', () => {
   /**
-   * `BR-KWC` carries the seeded 2x visit and +10 point top-up boost (asserted in
-   * `beforeAll`). A charge there earns two visits. A shop order must earn ONE,
+   * `BR-KWC` carries the seeded 2x-visit boost (asserted in `beforeAll`; its top-up
+   * has been 0 since migration 0068). A charge there earns two visits. A shop order must earn ONE,
    * wherever she collects, and a card-paid one must carry exactly the tier bonus
    * with no promotion bonus. If either spec goes red, the pickup branch has become
    * a multiplier she can pick, and it can no longer be the attribution branch.
@@ -577,7 +581,9 @@ describe('the boosted branch buys her nothing on a shop order — the reason cho
     );
     expect(amount).toBe(PRODUCT_FILS);
     expect(bonus, 'the card-paid bonus at BR-KWC is not her tier percentage').toBe((PRODUCT_FILS * pct) / 100);
-    expect(promo, "BR-KWC's +10 point top-up boost was paid on a card order collected there").toBe(0);
+    // A branch boost carries no top-up since 0068, so this is now the happy-hour half
+    // of "no promotion bonus": still the claim that collecting at KWC buys nothing.
+    expect(promo, 'a promotion bonus was paid on a card order collected at BR-KWC').toBe(0);
     expect(credit).toBe(amount + bonus);
     expect(row(sal.body.intent.id), 'the two branches priced the same basket differently').toEqual([
       amount,

@@ -2162,9 +2162,15 @@ const SALON_ROUTES: SalonRoute[] = [
      * describe below reads the balance back to prove it.
      *
      * NO BODY. The appointment is the whole request.
+     *
+     * A KEY ON THE CONTROL ONLY, since lane A's f8e1252: the cancel returns money,
+     * so it requires an Idempotency-Key (#4). The attack half sends none on purpose —
+     * `controlIdempotency`'s reason — so a salon guard that ever moved below
+     * `readIdempotencyKey` would answer 400 where this table requires 403.
      */
     method: 'POST',
     template: '/salons/{id}/bookings/{bookingId}/cancel',
+    controlIdempotency: true,
   },
   {
     /**
