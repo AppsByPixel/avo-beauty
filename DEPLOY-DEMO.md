@@ -85,19 +85,17 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | **Vercel** — project `avo-dashboard` → `avo-dashboard-coral.vercel.app` | static Vite build |
 | API | **Vercel** — project `avo-api` → `avo-api.vercel.app` | serverless function, `api/index.ts` |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0068 on 2026-09-29** |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0069 on 2026-09-29** |
 
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
-exists and is not what serves anything. **Deployed state as of 2026-09-29: both
-projects on `main`: API @ `405b20f`, dashboard @ `729609c` (the Overview layout, the
-scroll containment and the sign-in 429 copy; nothing under `api/` or `packages/` changed
-between them), database migrated to `0068`**. Live: API `avo-4579sakqb`, dashboard
-`avo-dashboard-exdknuraj` (bundle `index-BmxG6swy.js`). Rollback targets: API
-`avo-r4b3xn22n`, dashboard `avo-dashboard-6j6xmrlty` (405b20f) then `avo-dashboard-1c5t1v0ej`. **Rolling the API
-back alone is not safe against the new dashboard's writes' shapes in reverse** (the old API
-ignores an Idempotency-Key and a boost window; it is the NEW API that refuses the old
-dashboard), so roll back the dashboard first, then the API, deployed by hand from the CLI — **neither
+exists and is not what serves anything. **Deployed state as of 2026-09-29 (evening): both
+projects on `main` @ `05f26d7`, database migrated to `0069`**. Live: API `avo-o7jomml5o`,
+dashboard `avo-dashboard-q2zv147y1` (bundle `index-B57K15Lz.js`). Rollback targets: API
+`avo-4579sakqb` (405b20f), dashboard `avo-dashboard-exdknuraj` (729609c). The demo workspace
+`SAL-FOREST` (dark green, wallet card "Our colour", manager `forest`, member Maha
++96599124450) was created on the hosted DB with `db:demo-forest` and operator-chosen passwords —
+none of them is in the repo. Deployed by hand from the CLI — **neither
 project auto-deploys from git**, so a push to `main` changes nothing live.
 
 Postgres is **not on Render** deliberately: its own free database has
@@ -127,7 +125,7 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated (through `0068`, applied 2026-09-29), is seeded, and passed all
+is migrated (through `0069`, applied 2026-09-29), is seeded, and passed all
 **103** invariants on 2026-09-14.
 
 **THE OWNER PASSWORD IS IN AFTAB'S PASSWORD MANAGER, AND NOWHERE ELSE.** This
