@@ -82,10 +82,13 @@ async function branchIdsOf(salonId: string): Promise<Set<string>> {
 
 // ------------------------------------------------------------------ boosts --
 
+/**
+ * NO `topup` (migration 0068). A branch boost pays visits and stamps only, so
+ * there is no top-up value to carry. The row's column is written 0 and served 0.
+ */
 interface BoostInput {
   branchId: string;
   visit: number;
-  topup: number;
   stamp: number;
   /** Migration 0067. Null: no bound. */
   startsAt: Date | null;
@@ -95,30 +98,38 @@ interface BoostInput {
 const neutralBoost = (branchId: string): BoostInput => ({
   branchId,
   visit: 1,
-  topup: 0,
   stamp: 1,
   startsAt: null,
   endsAt: null,
 });
 
-const isNeutral = (b: { visit: number; topup: number; stamp: number }) =>
-  b.visit === 1 && b.topup === 0 && b.stamp === 1;
+const isNeutral = (b: { visit: number; stamp: number }) => b.visit === 1 && b.stamp === 1;
 
 /**
  * One branch of the `PUT …/boosts` body. The bounds are enforced here AND by the
  * CHECKs. Non-negotiable #7: the stepper stopping at 3 is a courtesy; a
  * hand-rolled PUT of `visit: 50` would multiply a customer's loyalty standing by
  * fifty.
+ *
+ * `topup` IS REFUSED UNLESS IT IS 0 OR ABSENT (migration 0068, Aftab: "Remove it
+ * from boosts"). It is refused, not ignored. A dashboard still drawing the stepper
+ * would otherwise show a merchant a bonus she set, the server silently dropped,
+ * and nobody pays, which is the defect this removes. 0 and absent are accepted,
+ * so a client can send the read object's boosts straight back: the wire still
+ * carries `topup`, always 0.
  */
 function parseBoost(branchId: string, v: Record<string, unknown>): BoostInput {
   const visit = v.visit ?? 1;
-  const topup = v.topup ?? 0;
   const stamp = v.stamp ?? 1;
+  if (v.topup !== undefined && v.topup !== null && v.topup !== 0) {
+    throw badRequest(
+      'boost_topup_removed',
+      `${branchId}: branch boosts no longer carry a top-up bonus. Send topup 0, or leave it out. Top-up bonuses come from tiers and happy hours.`,
+      { branchId },
+    );
+  }
   if (!Number.isInteger(visit) || (visit as number) < 1 || (visit as number) > 3) {
     throw badRequest('invalid_boost', `${branchId}: visit must be a whole number 1-3.`);
-  }
-  if (!Number.isInteger(topup) || (topup as number) < 0 || (topup as number) > 30) {
-    throw badRequest('invalid_boost', `${branchId}: topup must be a whole number 0-30.`);
   }
   if (!Number.isInteger(stamp) || (stamp as number) < 1 || (stamp as number) > 3) {
     throw badRequest('invalid_boost', `${branchId}: stamp must be a whole number 1-3.`);
@@ -138,14 +149,13 @@ function parseBoost(branchId: string, v: Record<string, unknown>): BoostInput {
   }
   // A window on "no boost" is a window on nothing. Dropped, so a neutral branch
   // is one shape and `boost_stopped_is_neutral` can be kept by an unchanged one.
-  if (isNeutral({ visit: visit as number, topup: topup as number, stamp: stamp as number })) {
+  if (isNeutral({ visit: visit as number, stamp: stamp as number })) {
     startsAt = null;
     endsAt = null;
   }
   return {
     branchId,
     visit: visit as number,
-    topup: topup as number,
     stamp: stamp as number,
     startsAt,
     endsAt,
@@ -158,16 +168,18 @@ const sameInstant = (a: Date | null, b: Date | null) =>
 function sameBoost(stored: typeof boost.$inferSelect, next: BoostInput): boolean {
   return (
     stored.visit === next.visit &&
-    stored.topup === next.topup &&
     stored.stamp === next.stamp &&
     sameInstant(stored.startsAt, next.startsAt) &&
     sameInstant(stored.endsAt, next.endsAt)
   );
 }
 
-/** The audit line: `BR-KWC: 2× visits, +10% top-ups, 1× stamps · from … · until …`. */
+/**
+ * The audit line: `BR-KWC: 2× visits, 1× stamps · from … · until …`. No top-up
+ * part since 0068. It would always read "+0% top-ups".
+ */
 function describeBoost(b: BoostInput): string {
-  const base = `${b.branchId}: ${b.visit}× visits, +${b.topup}% top-ups, ${b.stamp}× stamps`;
+  const base = `${b.branchId}: ${b.visit}× visits, ${b.stamp}× stamps`;
   const from = b.startsAt ? ` · from ${b.startsAt.toISOString()}` : '';
   const until = b.endsAt ? ` · until ${b.endsAt.toISOString()}` : '';
   return `${base}${from}${until}`;
@@ -347,6 +359,10 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
    *
    * `stoppedAt` / `stoppedBy` in the body are IGNORED rather than refused, so a
    * client may send the read object's boosts straight back.
+   *
+   * `topup` (migration 0068). A branch boost pays no top-up bonus. A non-zero
+   * `topup` is refused with 400 `boost_topup_removed`, and 0 or absent is
+   * accepted. Every row is written and served with `topup: 0`. See `parseBoost`.
    */
   app.put<{ Params: { id: string } }>('/v1/salons/:id/promotions/boosts', async (req, reply) => {
     const p = requireDashboardPerm(req, 'marketing');
@@ -396,7 +412,9 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
           : { stoppedAt: null, stoppedBy: null, stoppedByStaffId: null };
         const values = {
           visit: next.visit,
-          topup: next.topup,
+          // Always 0 (`boost_topup_removed`). Written rather than defaulted so the
+          // update half of the upsert says it too.
+          topup: 0,
           stamp: next.stamp,
           startsAt: next.startsAt,
           endsAt: next.endsAt,
@@ -490,7 +508,7 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
             { branchId, stoppedAt: row.stoppedAt.toISOString(), stoppedBy: row.stoppedBy },
           );
         }
-        if (row.visit === 1 && row.topup === 0 && row.stamp === 1) {
+        if (isNeutral(row)) {
           throw conflict('no_boost_running', 'This branch has no boost to stop.', { branchId });
         }
         if (row.endsAt !== null && row.endsAt.getTime() <= now.getTime()) {
@@ -500,6 +518,11 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
           });
         }
 
+        /**
+         * `topup: 0` is part of the neutral shape `boost_stopped_is_neutral`
+         * names. Since 0068 the row already holds 0 (`boost_topup_removed`), so
+         * this writes the value the row had. A stop has no top-up to end.
+         */
         await tx
           .update(boost)
           .set({
@@ -518,7 +541,6 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
         const stopped: BoostInput = {
           branchId,
           visit: row.visit,
-          topup: row.topup,
           stamp: row.stamp,
           startsAt: row.startsAt,
           endsAt: row.endsAt,
@@ -535,7 +557,6 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
             branchId,
             stopped: {
               visit: row.visit,
-              topup: row.topup,
               stamp: row.stamp,
               startsAt: row.startsAt ? row.startsAt.toISOString() : null,
               endsAt: row.endsAt ? row.endsAt.toISOString() : null,

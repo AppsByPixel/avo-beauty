@@ -467,10 +467,11 @@ export async function openIntent(
    * on a phone, not at a branch, so there is nothing to establish; the
    * resolver above names a branch purely so the NOT NULL column has an
    * attribution. Paying a per-branch percentage on that basis would make a
-   * customer's bonus depend on branch-id sort order. So the branch boost's
-   * `topup` points and any branch-scoped window are skipped; an `all`-scoped
-   * happy hour has no ambiguity to resolve and applies. services/promotions.ts
-   * § PromotionInputs carries the reasoning and the flag.
+   * customer's bonus depend on branch-id sort order. So any branch-scoped
+   * window is skipped; an `all`-scoped happy hour has no ambiguity to resolve
+   * and applies. services/promotions.ts § PromotionInputs carries the
+   * reasoning and the flag. A branch boost carries no top-up points at all
+   * since migration 0068, so there is no boost bonus here to skip.
    */
   const promoInputs = await loadPromotionInputs(tx, s.id, null);
   const promoPercent =

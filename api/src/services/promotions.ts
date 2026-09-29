@@ -63,10 +63,23 @@
  * "Extra top-up bonus percentage points ON TOP OF the tier bonus". Tier and
  * promotion are different budget lines — which is also why they are different
  * columns. Promotion sources still take the max among themselves first.
+ *
+ * A BRANCH BOOST IS NOT A TOP-UP SOURCE (migration 0068). Its `topup` points
+ * were never paid, because a top-up has no branch and services/topup.ts passes
+ * a NULL one. Aftab ruled "Remove it from boosts". So `decideEarning` no longer
+ * reads a boost's `topup` at all, and `PromotionInputs.boosts` does not carry
+ * it. The top-up percentage comes from happy hours only here, and from the tier
+ * in services/topup.ts.
  */
 
 import { and, eq } from 'drizzle-orm';
-import { isHappyHourLive, minutesRemaining, rewardEffect, type HappyHour } from '@avo/types';
+import {
+  isBoostLive,
+  isHappyHourLive,
+  minutesRemaining,
+  rewardEffect,
+  type HappyHour,
+} from '@avo/types';
 /**
  * A TYPE-ONLY import of the client, deliberately.
  *
@@ -99,7 +112,11 @@ export type HappyHourWire = HappyHour;
  */
 export interface BoostWire {
   visit: number;
-  topup: number;
+  /**
+   * ALWAYS 0 (migration 0068). Kept on the wire because `BoostSchema.topup` is
+   * required in every installed client. A branch boost pays no top-up bonus.
+   */
+  topup: 0;
   stamp: number;
   /** The boost applies from here (inclusive). Null: from publish. */
   startsAt: string | null;
@@ -118,40 +135,23 @@ export interface PromotionSetWire {
   happy: HappyHourWire[];
 }
 
-/**
- * IS THIS BRANCH'S BOOST APPLYING AT `now`? — the boost's `isHappyHourLive`.
- *
- *     (startsAt === null || startsAt <= now) && (endsAt === null || now < endsAt)
- *
- * Half-open, like the happy hour's `from <= now < to`: a charge landing exactly
- * on `endsAt` is outside the boost. Absolute instants, not wall clock, so unlike
- * `isHappyHourLive` it needs no zone offset.
- *
- * A STOPPED boost needs no clause: a stop writes the neutral 1/0/1 and clears
- * the window (`boost_stopped_is_neutral`), so it earns nothing whether or not a
- * reader knows the stop exists.
- *
- * PURE, AND WRITTEN AGAINST THE WIRE SHAPE ON PURPOSE: it belongs in
- * `packages/types/src/rules.ts` beside `isHappyHourLive`, so the wallet's chip,
- * the dashboard's "Ends in 2h" and this server's charge-time decision cannot
- * disagree. `packages/types` is trunk's; it is written here and reported for
- * trunk to move, at which point this becomes an import.
+/*
+ * `isBoostLive` — IS THIS BRANCH'S BOOST APPLYING AT `now`? — is IMPORTED from
+ * packages/types/src/rules.ts (trunk, 7646bb8). It was written here first and
+ * reported for trunk to move, and the local copy is gone. The wallet's chip, the
+ * dashboard's "Ends in 2h" and this server's charge-time decision now run the
+ * same function. Half-open `[startsAt, endsAt)`, absolute instants. A STOPPED
+ * boost needs no clause: a stop writes the neutral 1/0/1 and clears the window
+ * (`boost_stopped_is_neutral`).
  */
-export function isBoostLive(
-  boost: { startsAt: string | null; endsAt: string | null },
-  now: Date,
-): boolean {
-  const t = now.getTime();
-  if (boost.startsAt !== null && t < Date.parse(boost.startsAt)) return false;
-  if (boost.endsAt !== null && t >= Date.parse(boost.endsAt)) return false;
-  return true;
-}
 
 /** `boost` row → wire. */
 export function serialiseBoost(b: typeof boost.$inferSelect): BoostWire {
   return {
     visit: b.visit,
-    topup: b.topup,
+    // A literal, not `b.topup`. `boost_topup_removed` holds the column at 0, and
+    // the wire promise does not lean on a CHECK being present.
+    topup: 0,
     stamp: b.stamp,
     startsAt: b.startsAt ? b.startsAt.toISOString() : null,
     endsAt: b.endsAt ? b.endsAt.toISOString() : null,
@@ -268,11 +268,13 @@ export interface PromotionInputs {
    * rather than quietly wrong.
    */
   branchId: string | null;
-  /** `startsAt` / `endsAt` as ISO strings, the wire form `isBoostLive` reads. */
+  /**
+   * `startsAt` / `endsAt` as ISO strings, the wire form `isBoostLive` reads. No
+   * `topup`, since 0068: a branch boost earns visits and stamps only.
+   */
   boosts: Array<{
     branchId: string;
     visit: number;
-    topup: number;
     stamp: number;
     startsAt: string | null;
     endsAt: string | null;
@@ -301,13 +303,13 @@ export function decideEarning(input: PromotionInputs, now: Date): EarningDecisio
   // `isBoostLive` against THIS evaluation instant (migration 0067): a boost past
   // its `endsAt`, or not yet at its `startsAt`, earns nothing, whatever a client
   // is still showing. Nothing flips a flag when it expires; this is the check.
+  // Visits and stamps only. A boost moves no top-up points (migration 0068).
   const b = input.branchId
     ? input.boosts.find((x) => x.branchId === input.branchId)
     : undefined;
   if (b && isBoostLive(b, now)) {
     decision.visitMultiplier = Math.max(decision.visitMultiplier, b.visit);
     decision.stampMultiplier = Math.max(decision.stampMultiplier, b.stamp);
-    decision.topupBonusPercent = Math.max(decision.topupBonusPercent, b.topup);
   }
 
   // ---- happy hours. THE SHARED PREDICATE, resolved against the salon's zone --
@@ -393,7 +395,6 @@ export async function loadPromotionInputs(
     boosts: boostRows.map((b) => ({
       branchId: b.branchId,
       visit: b.visit,
-      topup: b.topup,
       stamp: b.stamp,
       startsAt: b.startsAt ? b.startsAt.toISOString() : null,
       endsAt: b.endsAt ? b.endsAt.toISOString() : null,

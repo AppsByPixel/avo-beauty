@@ -96,7 +96,13 @@ export const boost = pgTable(
 
     /** 1..3. 1 is "no boost", which is why the floor is 1 and not 0. */
     visit: integer('visit').notNull().default(1),
-    /** 0..30 percentage POINTS, added on top of the tier bonus. 0 is no boost. */
+    /**
+     * ALWAYS 0 SINCE MIGRATION 0068 (`boost_topup_removed`). It was meant to be
+     * percentage points on top of the tier bonus, and it was never paid: a top-up
+     * has no branch, so no branch boost is ever found for one. Aftab ruled "Remove
+     * it from boosts". The column and the wire field stay, always 0, so installed
+     * apps keep parsing. Top-up bonuses are paid by tiers and happy hours.
+     */
     topup: integer('topup').notNull().default(0),
     /** 1..3, same reasoning as `visit`. */
     stamp: integer('stamp').notNull().default(1),
@@ -152,6 +158,9 @@ export const boost = pgTable(
     // database would multiply a customer's loyalty standing by fifty.
     check('boost_visit_in_range', sql`${t.visit} BETWEEN 1 AND 3`),
     check('boost_topup_in_range', sql`${t.topup} BETWEEN 0 AND 30`),
+    // Migration 0068. Subsumes the range above, which is kept because 0068 is
+    // additive. The PUT refuses a non-zero value first, with `boost_topup_removed`.
+    check('boost_topup_removed', sql`${t.topup} = 0`),
     check('boost_stamp_in_range', sql`${t.stamp} BETWEEN 1 AND 3`),
   ],
 );

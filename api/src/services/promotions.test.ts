@@ -21,8 +21,8 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { isHappyHourLive } from '@avo/types';
-import { decideEarning, isBoostLive, type PromotionInputs, type HappyHourWire } from './promotions';
+import { isBoostLive, isHappyHourLive } from '@avo/types';
+import { decideEarning, type PromotionInputs, type HappyHourWire } from './promotions';
 
 const SALON = { id: 'SAL-AMARA', timezone: 'Asia/Kuwait' };
 const BR_SAL = 'BR-SAL';
@@ -198,7 +198,6 @@ describe('a branch boost with a duration — isBoostLive, resolved at the evalua
   const boost = (over: { startsAt?: string | null; endsAt?: string | null } = {}) => ({
     branchId: BR_KWC,
     visit: 2,
-    topup: 20,
     stamp: 3,
     startsAt: null,
     endsAt: null,
@@ -221,14 +220,14 @@ describe('a branch boost with a duration — isBoostLive, resolved at the evalua
     expect(isBoostLive(w, at(END))).toBe(false);
   });
 
-  it('a boost past its endsAt earns nothing at charge time — visits, stamps and top-up points', () => {
+  it('a boost past its endsAt earns nothing at charge time — visits, stamps, and no top-up points either', () => {
     const d = decide(boost({ endsAt: END }), new Date(Date.parse(END) + 60_000));
     expect(d).toMatchObject({ visitMultiplier: 1, stampMultiplier: 1, topupBonusPercent: 0, happyHourId: null });
   });
 
-  it('the same boost still running earns all three', () => {
+  it('the same boost still running earns its visits and stamps, and no top-up points (0068)', () => {
     const d = decide(boost({ endsAt: END }), new Date(Date.parse(END) - 60_000));
-    expect(d).toMatchObject({ visitMultiplier: 2, stampMultiplier: 3, topupBonusPercent: 20 });
+    expect(d).toMatchObject({ visitMultiplier: 2, stampMultiplier: 3, topupBonusPercent: 0 });
   });
 
   it('a boost not yet at its startsAt earns nothing', () => {
@@ -256,8 +255,8 @@ describe('a branch boost with a duration — isBoostLive, resolved at the evalua
 
 describe('boosts and happy hours: the best offer applies, they do not compound', () => {
   const boosts = [
-    { branchId: BR_SAL, visit: 1, topup: 0, stamp: 1, startsAt: null, endsAt: null },
-    { branchId: BR_KWC, visit: 2, topup: 10, stamp: 1, startsAt: null, endsAt: null },
+    { branchId: BR_SAL, visit: 1, stamp: 1, startsAt: null, endsAt: null },
+    { branchId: BR_KWC, visit: 2, stamp: 1, startsAt: null, endsAt: null },
   ];
 
   it('a branch boost applies with no window at all', () => {
@@ -359,5 +358,38 @@ describe('a salon outside Kuwait, which is the case an offset could not have hel
     const instant = new Date('2026-01-19T15:50:00Z');
     expect(decideEarning(inputs({ salon: cairo }), instant).visitMultiplier).toBe(2);
     expect(decideEarning(inputs(), instant).visitMultiplier).toBe(1);
+  });
+});
+
+/**
+ * MIGRATION 0068 — A BRANCH BOOST PAYS NO TOP-UP BONUS. Aftab: "Remove it from
+ * boosts". The dashboard's stepper and the wallet's chip promised points the
+ * server never paid, because a top-up has no branch. The path that would have
+ * paid them at a KNOWN branch is gone from `decideEarning`, so a boost is not a
+ * top-up source at any branch.
+ */
+describe('a branch boost is not a top-up source (0068)', () => {
+  /**
+   * THE REGRESSION THIS PINS. A row loaded from a database that skipped 0068,
+   * or any caller that still hands `decideEarning` a boost with top-up points,
+   * earns nothing from them. Before the change this returned 10.
+   */
+  it('a boost carrying stale top-up points at a KNOWN branch adds none of them', () => {
+    const stale = { branchId: BR_KWC, visit: 2, stamp: 1, startsAt: null, endsAt: null, topup: 10 };
+    const d = decideEarning(
+      inputs({ branchId: BR_KWC, boosts: [stale as PromotionInputs['boosts'][number]], windows: [] }),
+      kuwait('11:00'),
+    );
+    expect(d).toMatchObject({ visitMultiplier: 2, topupBonusPercent: 0, happyHourId: null });
+  });
+
+  it('a happy-hour top-up bonus still pays beside a branch boost, and is credited as the reason', () => {
+    const on = { ...HH_02, branchId: 'all', on: true };
+    const boosted = [{ branchId: BR_KWC, visit: 2, stamp: 1, startsAt: null, endsAt: null }];
+    const d = decideEarning(
+      inputs({ branchId: BR_KWC, boosts: boosted, windows: [on] }),
+      kuwait('11:00', '2026-08-20'),
+    );
+    expect(d).toMatchObject({ visitMultiplier: 2, topupBonusPercent: 10, happyHourId: 'HH-02' });
   });
 });
