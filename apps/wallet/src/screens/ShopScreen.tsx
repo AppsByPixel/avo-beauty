@@ -93,7 +93,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { formatMoney, moneyAriaLabel, fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
@@ -118,6 +118,7 @@ import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 export function ShopScreen({
   shop,
@@ -772,7 +773,7 @@ export function ShopScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.canvas },
   scroll: { flex: 1 },
   // design:480 — padding 58/20/20, centred at the phone width like every screen.
@@ -876,4 +877,4 @@ const styles = StyleSheet.create({
   skeletonBlock: { backgroundColor: color.disabledBg },
   skeletonBar: { height: 12, borderRadius: 4, backgroundColor: color.disabledBg },
   skeletonBarPrice: { width: '34%', marginTop: 6 },
-});
+}));

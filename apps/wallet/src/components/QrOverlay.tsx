@@ -53,6 +53,7 @@ import { toEasternDigits } from '../i18n/digits';
 import { useDismissible } from './useDismissible';
 import { useScreenBoost } from '../platform/screenBoost';
 import { PulseDot } from './PulseDot';
+import { brandedStyles } from '../theme/live';
 
 /** design:643 — `width:246px;height:246px`. A content dimension, not a token. */
 const QR_SIZE = 246;
@@ -250,7 +251,7 @@ const FILL = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } as c
  * token gaps rather than deviations worth re-typing a literal for; reported, not
  * fixed here, because `packages/tokens` is trunk-owned.
  */
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   overlay: { ...FILL, alignItems: 'center', justifyContent: 'center', zIndex: 40 },
   backdrop: { ...FILL, backgroundColor: 'rgba(20,21,17,0.55)' },
   card: {
@@ -303,4 +304,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   doneText: { color: color.ink },
-});
+}));

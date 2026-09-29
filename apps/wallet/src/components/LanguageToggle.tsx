@@ -48,9 +48,10 @@
  * the web build shows nothing extra.
  */
 
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { color, CONTROL_BORDER, MIN_TAP_TARGET, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
+import { brandedStyles } from '../theme/live';
 
 export function LanguageToggle() {
   const { lang, copy, setLang, pendingRestart, applyDirection } = useLanguage();
@@ -93,7 +94,7 @@ export function LanguageToggle() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   wrap: { alignItems: 'flex-end', gap: 4 },
   button: {
     minHeight: MIN_TAP_TARGET,
@@ -123,4 +124,4 @@ const styles = StyleSheet.create({
     backgroundColor: color.warnBg,
   },
   restart: { color: color.warnText, textAlign: 'center' },
-});
+}));

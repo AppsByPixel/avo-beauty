@@ -28,7 +28,7 @@
  */
 
 import { useState } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import type { LegalDoc, Member } from '@avo/types';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -64,6 +64,7 @@ import { DeletionScheduled } from '../components/account/DeletionScheduled';
 import { FollowSalon } from '../components/account/FollowSalon';
 import { AccountSkeleton } from '../components/account/AccountSkeleton';
 import { RedeemVoucherSheet } from '../components/account/RedeemVoucherSheet';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   onBack: () => void;
@@ -611,7 +612,7 @@ function Shell({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   safe: { flex: 1, backgroundColor: color.canvas },
   // The notifications read failed. Inside the same card the switches would have
   // occupied, so the section keeps its shape and its heading.
@@ -713,4 +714,4 @@ const styles = StyleSheet.create({
   deleteUnknownRetryText: { color: color.brandDeep },
   version: { color: color.textMutedSoft, textAlign: 'center', marginTop: 6, fontSize: 11 },
   footerSpace: { height: 24 },
-});
+}));

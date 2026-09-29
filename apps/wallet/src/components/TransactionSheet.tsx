@@ -33,7 +33,7 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import type { Transaction } from '@avo/types';
 import { color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
@@ -43,6 +43,7 @@ import { startPaymentReport } from '../support/contact';
 import { Sheet } from './Sheet';
 import { SecondaryButton } from './Buttons';
 import { PickupHoursNote } from './PickupHoursNote';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   transaction: Transaction | null;
@@ -213,7 +214,7 @@ export function TransactionSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   head: { alignItems: 'center', gap: 6, paddingTop: 2 },
   amount: { fontFamily: 'Fraunces_600SemiBold', fontWeight: '600', fontSize: 30 },
   title: { color: color.ink },
@@ -282,4 +283,4 @@ const styles = StyleSheet.create({
   help: { color: color.textMutedSoft, marginTop: 12, marginHorizontal: 4, lineHeight: 18 },
   report: { marginTop: 12, backgroundColor: color.surface },
   close: { marginTop: 12, borderColor: 'transparent', backgroundColor: color.surfaceAlt2 },
-});
+}));

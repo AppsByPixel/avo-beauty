@@ -40,11 +40,12 @@ import {
 } from '@expo-google-fonts/ibm-plex-sans-arabic';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, Text, View, StyleSheet } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MIN_TAP_TARGET, color, text } from './src/theme';
 import { installFocusRing } from './src/theme/focus';
+import { brandedStyles, useBrandRepaint } from './src/theme/live';
 import { SNAPSHOT_KEY } from './src/state/cache';
 import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -100,6 +101,14 @@ installFocusRing();
 const NO_BRANCHES: readonly never[] = [];
 
 export default function App() {
+  /*
+    THE SALON'S BRAND, LIVE. When `useWalletHome` reads the salon and applies its
+    hex, `src/theme/live.ts` rebuilds every brand stylesheet in place and bumps
+    this; the re-render here reaches every component, because each screen's
+    element is created in this tree's render and nothing below is memoised. A
+    repaint, not a re-mount: whatever she has open stays open.
+  */
+  useBrandRepaint();
   const [fontsLoaded] = useFonts({
     Fraunces_400Regular,
     Fraunces_400Regular_Italic,
@@ -907,7 +916,7 @@ async function clearLocalState(): Promise<void> {
   }
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   blank: { flex: 1, backgroundColor: color.canvas },
   root: { flex: 1, backgroundColor: color.canvas },
   body: { flex: 1 },
@@ -985,4 +994,4 @@ const styles = StyleSheet.create({
     gap: 3,
     paddingHorizontal: 12,
   },
-});
+}));

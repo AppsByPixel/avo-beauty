@@ -65,7 +65,7 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import type { ShopOrder } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { addressLines } from '../domain/address';
@@ -82,6 +82,7 @@ import { Sheet } from './Sheet';
 import { PickupHoursNote } from './PickupHoursNote';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 export function OrdersSheet({
   open,
@@ -330,7 +331,7 @@ function Chip({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { color: color.ink },
   list: { marginTop: 12, maxHeight: 440 },
@@ -380,4 +381,4 @@ const styles = StyleSheet.create({
   // resolve it to a face in both languages.
   chipRetryText: { color: color.dangerText, textDecorationLine: 'underline' },
   skeletonBar: { height: 12, borderRadius: 4, backgroundColor: color.disabledBg },
-});
+}));

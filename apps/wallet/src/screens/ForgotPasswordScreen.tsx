@@ -43,7 +43,6 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -55,6 +54,7 @@ import { MIN_TAP_TARGET, WHITE, color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
 import { PrimaryButton } from '../components/Buttons';
+import { brandedStyles } from '../theme/live';
 
 type Status =
   | { state: 'idle' }
@@ -255,7 +255,7 @@ function SentMark() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 96, paddingHorizontal: 24, paddingBottom: 32, flexGrow: 1 },
   title: { textAlign: 'center', color: color.ink },
@@ -304,4 +304,4 @@ const styles = StyleSheet.create({
   sentTitle: { color: color.ink, marginTop: 19, textAlign: 'center' },
   sentSub: { color: color.textMuted, marginTop: 7, textAlign: 'center', maxWidth: 260, lineHeight: 20 },
   sentBack: { marginTop: 24, alignSelf: 'stretch' },
-});
+}));

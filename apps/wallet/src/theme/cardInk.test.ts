@@ -214,9 +214,8 @@ describe.each(TIERS)('%s: every word on the card clears AA on both ends', (t) =>
  * forest's card, not on gold's — so the words that were checked against the
  * metal now sit on `deriveBrandSet(#1F5A36)`'s stops, #277144 → #153C24.
  * `brandInk()` reads `theme.card`, which `./brand` writes the derived stops
- * into at boot; this file imports `./index` and so cannot rebrand (the palette
- * is sealed), so the ink is built as exactly that: the brand ink with the
- * derived stops. The rendered version is `walletCardBrandRender.test.tsx`.
+ * into when a salon's hex is applied; this file builds the ink as exactly that
+ * — the brand ink with the derived stops — without going through the palette. The rendered version is `walletCardBrandRender.test.tsx`.
  *
  * MEASURED, NOT ASSUMED — AND NOT EVERY PAIRING CLEARS AA ON THE LIGHT STOP.
  * Solid white is 5.95:1 on #277144 and 12.33:1 on #153C24, and every word

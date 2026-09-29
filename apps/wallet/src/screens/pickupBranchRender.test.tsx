@@ -587,7 +587,13 @@ describe('7. the picker in Arabic', () => {
    */
   it('the picker’s styles carry no physical left/right and no row-reverse (source)', () => {
     const src = fs.readFileSync(path.join(__dirname, '../components/FulfilmentSection.tsx'), 'utf8');
-    const styles = src.slice(src.indexOf('const styles = StyleSheet.create'));
+    // Either stylesheet form (`theme/live.ts`). Asserted found: `indexOf` of a
+    // missing marker is -1, and `slice(-1)` is one character that passes both
+    // assertions below — which is exactly what this did the moment the sheet
+    // became a `brandedStyles`.
+    const at = src.search(/const styles = (?:StyleSheet\.create|brandedStyles)\(/);
+    expect(at).toBeGreaterThanOrEqual(0);
+    const styles = src.slice(at);
     expect(styles).not.toMatch(/row-reverse/);
     expect(styles).not.toMatch(/\b(marginLeft|marginRight|paddingLeft|paddingRight|left|right)\s*:/);
   });

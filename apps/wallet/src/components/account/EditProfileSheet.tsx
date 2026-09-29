@@ -24,7 +24,7 @@
  */
 
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import type { Member } from '@avo/types';
 import { color, text } from '../../theme';
 import { useLanguage } from '../../i18n/language';
@@ -33,6 +33,7 @@ import { ApiError } from '../../api/client';
 import { Sheet } from '../Sheet';
 import { PrimaryButton, SecondaryButton, TappableRow } from '../Buttons';
 import { CodeField, Field, FieldLabel, InlineError } from './Fields';
+import { brandedStyles } from '../../theme/live';
 
 interface Props {
   open: boolean;
@@ -281,7 +282,7 @@ export function EditProfileSheet({ open, member, onClose, onSaved, onToast }: Pr
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   title: { color: color.ink },
   sub: { color: color.textMutedLabel, marginTop: 6, lineHeight: 21 },
   note: { color: color.textMutedSoft, marginTop: 8, marginHorizontal: 2, lineHeight: 18 },
@@ -291,4 +292,4 @@ const styles = StyleSheet.create({
   link: { paddingVertical: 12, paddingHorizontal: 8, minHeight: 44, justifyContent: 'center' },
   linkText: { color: color.brandDeep },
   linkMuted: { color: color.textMuted },
-});
+}));

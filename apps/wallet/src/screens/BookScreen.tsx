@@ -51,7 +51,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import { formatMoney, type Fils, type Member, type Salon } from '@avo/types';
 import { MIN_TAP_TARGET, WHITE, color, onBrandFill, radius, text } from '../theme';
@@ -101,6 +101,7 @@ import {
   serviceName,
   splitRuns,
 } from '../domain/booking';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   salon: Salon;
@@ -1210,7 +1211,7 @@ function Shell({ children, overlay }: { children: React.ReactNode; overlay?: Rea
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   safe: { flex: 1, backgroundColor: color.canvas },
   // interaction-spec.md §1 — the wallet is a fixed-width app screen, centred on
   // a desktop browser rather than stretched. Same frame as Home.
@@ -1307,4 +1308,4 @@ const styles = StyleSheet.create({
   policy: { color: color.textMutedSoft, marginTop: 12, textAlign: 'center', lineHeight: 19 },
 
   footerSpace: { height: 24 },
-});
+}));

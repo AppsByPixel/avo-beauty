@@ -18,7 +18,7 @@
  * invoice a wallet-paid order opens, built from the server's `OrderResult`.
  */
 
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { fils, formatMoney, moneyAriaLabel } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { alignEnd } from '../i18n/rtl';
@@ -27,6 +27,7 @@ import { refusalReason } from '../domain/cardCheckout';
 import type { CardCheckoutController, CardStage } from '../state/useCardCheckout';
 import { Sheet } from './Sheet';
 import { PrimaryButton, SecondaryButton } from './Buttons';
+import { brandedStyles } from '../theme/live';
 
 export function CardOrderSheet({ card }: { card: CardCheckoutController }) {
   const { copy } = useLanguage();
@@ -251,7 +252,7 @@ function Outcome({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   centred: { alignItems: 'center', paddingTop: 18, paddingBottom: 6 },
   title: { color: color.ink, textAlign: 'center' },
   body: { color: color.textMuted, marginTop: 8, textAlign: 'center', maxWidth: 300, lineHeight: 20 },
@@ -306,4 +307,4 @@ const styles = StyleSheet.create({
   rowValue: { color: color.ink },
   reference: { color: color.textMutedLabel, marginTop: 10, letterSpacing: 0.3 },
   actions: { alignSelf: 'stretch', marginTop: 20, gap: 9 },
-});
+}));

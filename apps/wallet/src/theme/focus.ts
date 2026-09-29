@@ -32,6 +32,7 @@
 
 import { Platform } from 'react-native';
 import { color } from './index';
+import { onRepaint } from './live';
 
 /** Spread into `dataSet` on any control that should ring on keyboard focus. */
 export const focusable = { avoFocus: 'ring' } as const;
@@ -51,7 +52,22 @@ export function installFocusRing(): void {
 
   const style = document.createElement('style');
   style.id = STYLE_ID;
-  style.textContent = [
+  style.textContent = ringCss();
+  document.head.appendChild(style);
+}
+
+/**
+ * A `<style>` element is not a stylesheet `./live` can rebuild, so it follows
+ * the palette here: a salon's hex applied after install re-writes the ring.
+ */
+onRepaint(() => {
+  if (typeof document === 'undefined') return;
+  const style = document.getElementById(STYLE_ID);
+  if (style) style.textContent = ringCss();
+});
+
+function ringCss(): string {
+  return [
     '[data-avo-focus="ring"]{outline:none}',
     /*
       `brandDeep`, NOT `brand`, and this is a deviation from the spec's literal
@@ -75,5 +91,4 @@ export function installFocusRing(): void {
     */
     `[data-avo-focus="ring"]:focus-visible{outline:2px solid ${color.brandDeep};outline-offset:2px}`,
   ].join('\n');
-  document.head.appendChild(style);
 }

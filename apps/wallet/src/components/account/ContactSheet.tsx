@@ -30,7 +30,7 @@
  */
 
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { SupportConfig, SupportTicket } from '@avo/types';
 import { color, MIN_TAP_TARGET, radius, text, WHITE } from '../../theme';
@@ -40,6 +40,7 @@ import { ApiError } from '../../api/client';
 import { Sheet } from '../Sheet';
 import { PrimaryButton, SecondaryButton, TappableRow } from '../Buttons';
 import { Field, FieldLabel, InlineError } from './Fields';
+import { brandedStyles } from '../../theme/live';
 
 interface Props {
   open: boolean;
@@ -304,7 +305,7 @@ function Segment({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   title: { color: color.ink },
   sub: { color: color.textMuted, marginTop: 4, lineHeight: 20 },
   scroll: { marginTop: 2, flexShrink: 1 },
@@ -410,4 +411,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   doneBtn: { marginTop: 18 },
-});
+}));

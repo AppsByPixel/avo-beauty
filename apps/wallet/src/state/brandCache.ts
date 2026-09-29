@@ -11,9 +11,11 @@
  *
  * Meanwhile the screens that render BEFORE a session — sign-in, create account,
  * forgot password — are brand-coloured: the "Log in" fill, the footer links, the
- * reset circle. And the palette can only be set once per process
- * (`src/theme/sealed.ts`). So the hex has to be on the device at boot, which
- * means it has to have been written on a previous run.
+ * reset circle. They render before the salon read that carries the hex, so for
+ * them the hex has to be on the device at boot, which means it has to have been
+ * written on a previous run. (After sign-in the read itself applies it, live —
+ * `useWalletHome` and `src/theme/live.ts` — so this cache is what makes the
+ * FIRST FRAME right, not what makes the brand arrive at all.)
  *
  * WHY NOT THE HOME SNAPSHOT, WHICH ALREADY HOLDS THE WHOLE SALON
  * =============================================================
@@ -64,8 +66,8 @@ export async function readCachedBrandColor(): Promise<string | null> {
 
 /**
  * Called on every successful salon read, not just the first. A salon that
- * changes its hex in the dashboard is picked up here and applied at the next
- * launch — see `src/theme/brand.ts` on why not mid-session.
+ * changes its hex in the dashboard is applied by the read itself, and cached
+ * here so the next launch starts in it.
  */
 export async function cacheBrandColor(hex: string): Promise<void> {
   if (!HEX.test(hex)) return;

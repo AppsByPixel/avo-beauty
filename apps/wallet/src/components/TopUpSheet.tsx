@@ -17,7 +17,7 @@
  * `api/topups.ts` for the whole account.
  */
 
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import {
   fils,
   formatMoney,
@@ -33,6 +33,7 @@ import { canRetry, PAYMENT_METHODS, type TopUpOutcome } from '../domain/topup';
 import type { TopUpController, TopUpStage } from '../state/useTopUp';
 import { Sheet } from './Sheet';
 import { PrimaryButton, SecondaryButton, TappableRow } from './Buttons';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   stage: TopUpStage;
@@ -638,7 +639,7 @@ function GatewayFailedStage({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   sheetTitle: { color: color.ink },
 
   calcCard: {
@@ -794,4 +795,4 @@ const styles = StyleSheet.create({
 
   failureRef: { color: color.textMutedLabel, marginTop: 10, letterSpacing: 0.3 },
   resultActions: { alignSelf: 'stretch', marginTop: 20, gap: 9 },
-});
+}));

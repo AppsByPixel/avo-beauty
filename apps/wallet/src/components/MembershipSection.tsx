@@ -22,7 +22,7 @@
  *    column, which IS money and IS Western in both languages, does use it.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import type { Member, Salon } from '@avo/types';
 import { color, MICRO_LABEL_COLOR, moneyFigureFace, radius, text, WHITE } from '../theme';
 import { useLanguage } from '../i18n/language';
@@ -32,6 +32,7 @@ import {
   type MembershipStamps,
   type MembershipTiers,
 } from '../domain/membership';
+import { brandedStyles } from '../theme/live';
 
 /**
  * Two alphas the design uses here that the token set has no name for:
@@ -196,7 +197,7 @@ function StampCard({ view }: { view: MembershipStamps }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   // design:344 — 24, the same step ACTIVITY takes.
   section: { marginTop: 24 },
   sectionLabel: { color: MICRO_LABEL_COLOR, marginHorizontal: 4, marginBottom: 10 },
@@ -320,4 +321,4 @@ const styles = StyleSheet.create({
     marginTop: 7,
   },
   ruleText: { color: color.textMutedLabel, flex: 1, lineHeight: 19 },
-});
+}));

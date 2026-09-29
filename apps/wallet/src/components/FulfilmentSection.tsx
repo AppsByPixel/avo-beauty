@@ -71,7 +71,7 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import type { MemberAddress } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { addressLines } from '../domain/address';
@@ -89,6 +89,7 @@ import type { BusinessHours } from '../domain/pickupHours';
 import type { AddressBookController } from '../state/useAddresses';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   choice: FulfilmentChoice;
@@ -539,7 +540,7 @@ function Line({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   section: { marginTop: 18, borderTopWidth: 1, borderTopColor: color.hairline, paddingTop: 16 },
   heading: { color: color.textMutedLabel, marginBottom: 10, marginHorizontal: 2 },
   addresses: { marginTop: 14 },
@@ -604,4 +605,4 @@ const styles = StyleSheet.create({
   chipRetryText: { color: color.dangerText, textDecorationLine: 'underline' },
   // A skeleton is a BAR. Never a placeholder value.
   skeletonBar: { height: 11, borderRadius: 4, backgroundColor: color.disabledBg },
-});
+}));

@@ -30,11 +30,12 @@
  * #9: the badge is WHITE ON `brandDeep`, never on `brand`.
  */
 
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { color, CONTROL_BORDER, MIN_TAP_TARGET, radius, text, WHITE } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 export function BellButton({
   unreadCount,
@@ -81,7 +82,7 @@ export function BellButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   target: {
     minWidth: MIN_TAP_TARGET,
     minHeight: MIN_TAP_TARGET,
@@ -113,4 +114,4 @@ const styles = StyleSheet.create({
     backgroundColor: color.brandDeep,
   },
   badgeText: { color: WHITE, fontSize: 10, lineHeight: 12 },
-});
+}));

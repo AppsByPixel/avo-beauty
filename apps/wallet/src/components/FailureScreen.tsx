@@ -25,11 +25,12 @@
  * DECISIONS.md § "The offline cold-load sentence".
  */
 
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import type { FailureKind } from '../api/client';
 import { failureCopy } from '../domain/loadFailure';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   kind: FailureKind;
@@ -79,7 +80,7 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   wrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
   icon: {
     width: 62,
@@ -115,4 +116,4 @@ const styles = StyleSheet.create({
   buttonBusy: { opacity: 0.6 },
   buttonText: { color: onBrandFill.color },
   reference: { color: color.textMutedSoft, marginTop: 16 },
-});
+}));

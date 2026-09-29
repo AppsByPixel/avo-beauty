@@ -19,8 +19,9 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Platform } from 'react-native';
 import { color, radius } from '../theme';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   size: number;
@@ -86,6 +87,6 @@ export function PulseDot({ size, durationMs, fill }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   dot: { borderRadius: radius.pill, backgroundColor: color.brand, flexShrink: 0 },
-});
+}));

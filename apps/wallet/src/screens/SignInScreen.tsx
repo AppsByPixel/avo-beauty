@@ -50,7 +50,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { signIn } from '../api/auth';
 import { SALON_ID } from '../config/salon';
@@ -58,6 +58,7 @@ import { useLanguage } from '../i18n/language';
 import { PrimaryButton } from '../components/Buttons';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 type Status =
   | { state: 'idle' }
@@ -249,7 +250,7 @@ function Field({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 72, paddingHorizontal: 24, paddingBottom: 32, flexGrow: 1 },
   brand: { alignItems: 'center' },
@@ -310,4 +311,4 @@ const styles = StyleSheet.create({
   footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
   // Brand text on a light surface is brandDeep, never brand (#9).
   footerLinkText: { color: color.brandDeep },
-});
+}));

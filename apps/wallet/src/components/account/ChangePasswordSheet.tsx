@@ -30,7 +30,7 @@
  */
 
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { color, radius, text } from '../../theme';
 import { useLanguage } from '../../i18n/language';
 import { changePassword } from '../../api/account';
@@ -38,6 +38,7 @@ import { ApiError } from '../../api/client';
 import { Sheet } from '../Sheet';
 import { PrimaryButton, TappableRow } from '../Buttons';
 import { Field, FieldLabel, InlineError } from './Fields';
+import { brandedStyles } from '../../theme/live';
 
 interface Props {
   open: boolean;
@@ -207,7 +208,7 @@ export function ChangePasswordSheet({ open, onClose, onChanged, onForgot }: Prop
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   headText: { flex: 1, minWidth: 0 },
   title: { color: color.ink },
@@ -224,4 +225,4 @@ const styles = StyleSheet.create({
   primary: { marginTop: 20 },
   forgot: { alignSelf: 'center', minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, marginTop: 8 },
   forgotText: { color: color.brandDeep },
-});
+}));
