@@ -61,6 +61,7 @@ import type { Copy } from '../copy/types';
 import { TOP_UP_AMOUNTS } from '../domain/topup';
 import { topUpPreview, type TopUpPreview } from '../domain/topupPreview';
 import { Money } from './Money';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   member: Member;
@@ -317,7 +318,7 @@ export function TopUpCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   card: {
     marginTop: 22,
     backgroundColor: color.surface,
@@ -461,4 +462,4 @@ const styles = StyleSheet.create({
     backgroundColor: onBrandFill.backgroundColor,
   },
   ctaText: { color: onBrandFill.color },
-});
+}));

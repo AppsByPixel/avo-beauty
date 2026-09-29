@@ -22,6 +22,7 @@ import { ApiError, type FailureKind } from '../api/client';
 import { getMember, getPromotions, getSalon, getTransactions } from '../api/wallet';
 import { readSnapshot, writeSnapshot, type WalletSnapshot } from './cache';
 import { cacheBrandColor } from './brandCache';
+import { applyBrandColor } from '../theme/brand';
 
 export type HomeStatus = 'loading' | 'ready' | 'stale' | 'offline' | 'error' | 'blocked';
 
@@ -149,12 +150,17 @@ export function useWalletHome(): HomeState & { retry: () => void } {
       void writeSnapshot(snapshot, fetchedAt);
       /*
         The one place in the app that learns the salon's brand hex, so the one
-        place that remembers it. It cannot be applied now — a React Native
-        stylesheet copies its colours when its module is evaluated, which happened
-        long before this line — so it is written for the NEXT launch, where
-        `Boot.tsx` reads it back and sets the palette before anything is
-        evaluated. See src/theme/brand.ts and src/theme/sealed.ts.
+        place that applies it — NOW, before the ready state below renders, so
+        the first frame with data is already in the salon's colour. On a fresh
+        install this is the first time the device has ever seen the hex; before
+        `src/theme/live.ts` it could only be cached for the next launch, and the
+        whole first session ran in the default green (trunk, 2026-09-29).
+
+        Unchanged hex → no repaint (`applyBrandColor` compares first), so a
+        refresh does not redraw the app. And it is cached as well, so the next
+        launch's Boot has it before the first frame — including sign-in.
       */
+      applyBrandColor(snapshot.salon.brandColor);
       void cacheBrandColor(snapshot.salon.brandColor);
       setState({
         status: 'ready',

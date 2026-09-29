@@ -29,12 +29,13 @@
  */
 
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { isBoostLive, type Boost, type Branch, type PromotionSet, type Salon } from '@avo/types';
 import { color, ARABIC_FAMILY, FRAUNCES_ITALIC, MICRO_LABEL_COLOR, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { branchName } from '../domain/names';
 import type { Copy } from '../copy/types';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   salon: Salon;
@@ -160,7 +161,7 @@ export function BranchEarning({ salon, promotions }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   section: { marginTop: 16 },
   sectionLabel: { color: MICRO_LABEL_COLOR, marginHorizontal: 4, marginBottom: 9 },
   row: { flexDirection: 'row', gap: 9 },
@@ -194,4 +195,4 @@ const styles = StyleSheet.create({
     color: color.textMuted,
   },
   noteAr: { fontFamily: `${ARABIC_FAMILY}_400Regular`, fontStyle: 'normal' },
-});
+}));

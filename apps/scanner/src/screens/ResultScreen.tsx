@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { fils } from '@avo/types';
 import { copy } from '../copy/en';
@@ -31,6 +31,7 @@ import { LoyaltyLine } from '../components/LoyaltyLine';
 import { resultPill } from '../domain/loyalty';
 import { Money, moneyOf } from '../components/Money';
 import type { ChargeAttempt } from './MemberScreen';
+import { brandedStyles } from '../theme/branded';
 
 export function ResultScreen({
   attempt,
@@ -266,7 +267,7 @@ function ReceiptDot({ reduceMotion }: { reduceMotion: boolean }) {
   return <Animated.View style={[styles.receiptDot, reduceMotion ? null : { opacity: pulse }]} />;
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   // design:378 — padding 96/30/34, centred.
   screen: {
     flex: 1,
@@ -307,4 +308,4 @@ const styles = StyleSheet.create({
   receiptRow: { justifyContent: 'flex-start', gap: 8 },
   receiptDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.success },
   actions: { marginTop: 'auto', width: '100%', gap: 10 },
-});
+}));

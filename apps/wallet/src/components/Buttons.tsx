@@ -79,10 +79,11 @@
  * line for the whole app, so it cannot come back here or anywhere else.
  */
 
-import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, Text, type StyleProp, type ViewStyle } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
 import { useLanguage } from '../i18n/language';
+import { brandedStyles } from '../theme/live';
 
 /*
  * THE FOCUS RING IS NOT A STYLE OBJECT. It used to be, and that was a bug: a
@@ -168,7 +169,7 @@ export function TappableRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   base: {
     width: '100%',
     minHeight: MIN_TAP_TARGET,
@@ -188,4 +189,4 @@ const styles = StyleSheet.create({
   secondaryText: { color: color.brandDeep },
   disabled: { backgroundColor: color.disabledBg },
   disabledText: { color: color.textMutedSoft },
-});
+}));

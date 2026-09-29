@@ -2,9 +2,7 @@ import { registerRootComponent } from 'expo';
 
 import Boot from './Boot';
 
-// BOOT, NOT APP, and the indirection is not optional. `Boot` resolves the salon's
-// brand hex and name before it imports `App`, because a React Native stylesheet
-// copies a colour when its module is evaluated and never re-reads it. Registering
-// `App` here would evaluate every screen's stylesheet with the default sage and no
-// salon could ever be re-branded. See Boot.tsx and src/theme/sealed.ts.
+// BOOT, NOT APP. `Boot` resolves the cached salon identity — hex and name —
+// before it imports `App`, so the PIN screen's first frame is already the salon's
+// and no stylesheet is built twice. See Boot.tsx and src/theme/live.ts.
 registerRootComponent(Boot);

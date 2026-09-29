@@ -53,7 +53,10 @@ function walk(dir: string): string[] {
 }
 
 /**
- * Top-level entries of every `StyleSheet.create({...})` in a file.
+ * Top-level entries of every stylesheet in a file — `StyleSheet.create({...})`
+ * and `brandedStyles(() => ({...}))`, the re-evaluable form every sheet that
+ * reads a brand token now takes (`./live`). Both markers, or the scan silently
+ * loses exactly the entries a rebrand touches.
  *
  * Brace-matched rather than regexed across the whole object, because a nested
  * object (a shadow, a transform) would otherwise split an entry in half and the
@@ -62,11 +65,12 @@ function walk(dir: string): string[] {
  */
 function styleEntries(src: string): string[] {
   const out: string[] = [];
-  const marker = 'StyleSheet.create({';
+  const MARKERS = ['StyleSheet.create({', 'brandedStyles(() => ({'];
   let from = 0;
   for (;;) {
-    const start = src.indexOf(marker, from);
-    if (start === -1) break;
+    const hits = MARKERS.map((m) => [src.indexOf(m, from), m] as const).filter(([i]) => i !== -1);
+    if (hits.length === 0) break;
+    const [start, marker] = hits.reduce((a, b) => (b[0] < a[0] ? b : a));
     let depth = 0;
     let end = start + marker.length - 1;
     for (let i = end; i < src.length; i += 1) {
@@ -191,20 +195,36 @@ const ICON_COLOUR_PROPS = new Set(['color', 'tintColor', 'fill', 'stroke']);
 
 type Paint = { bg?: string; fg?: string };
 
-/** `styles.tickOn` → `{ bg: 'color.brand' }`, for every `StyleSheet.create` in the file. */
+/**
+ * The object literal a stylesheet is built from: the argument of
+ * `StyleSheet.create({...})`, or the body of `brandedStyles(() => ({...}))`.
+ */
+function sheetLiteral(call: ts.CallExpression, sf: ts.SourceFile): ts.ObjectLiteralExpression | null {
+  const callee = call.expression.getText(sf);
+  const arg = call.arguments[0];
+  if (!arg) return null;
+  if (callee === 'StyleSheet.create') return ts.isObjectLiteralExpression(arg) ? arg : null;
+  if (callee === 'brandedStyles' && ts.isArrowFunction(arg)) {
+    let body: ts.Node = arg.body;
+    while (ts.isParenthesizedExpression(body)) body = body.expression;
+    return ts.isObjectLiteralExpression(body) ? body : null;
+  }
+  return null;
+}
+
+/** `styles.tickOn` → `{ bg: 'color.brand' }`, for every stylesheet in the file. */
 function styleTable(sf: ts.SourceFile): Map<string, Paint> {
   const table = new Map<string, Paint>();
   const visit = (node: ts.Node): void => {
-    if (
+    const sheet =
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       node.initializer &&
-      ts.isCallExpression(node.initializer) &&
-      node.initializer.expression.getText(sf) === 'StyleSheet.create' &&
-      node.initializer.arguments[0] &&
-      ts.isObjectLiteralExpression(node.initializer.arguments[0])
-    ) {
-      for (const prop of node.initializer.arguments[0].properties) {
+      ts.isCallExpression(node.initializer)
+        ? sheetLiteral(node.initializer, sf)
+        : null;
+    if (sheet && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      for (const prop of sheet.properties) {
         if (!ts.isPropertyAssignment(prop) || !ts.isObjectLiteralExpression(prop.initializer)) continue;
         table.set(`${node.name.text}.${prop.name.getText(sf)}`, paintOf(prop.initializer, sf));
       }
@@ -334,6 +354,21 @@ describe('non-negotiable #9 across style entries — white never inside a brand 
       'fixture.tsx:10 styles.tickMark on styles.tickOn',
       'fixture.tsx:13 color=WHITE on styles.tickOn',
     ]);
+  });
+
+  /**
+   * The same fixture as a `brandedStyles` sheet — the form every brand sheet in
+   * this app now takes (`./live`). The scan missed every one of them the moment
+   * they were converted: `found brand fills … at all` went from 20+ to 0.
+   */
+  it('reads a brandedStyles sheet exactly as it reads StyleSheet.create', () => {
+    const branded = OLD_TICK.replace('StyleSheet.create({', 'brandedStyles(() => ({').replace(
+      '  });\n  export const Tick',
+      '  }));\n  export const Tick',
+    );
+    expect(branded).toContain('brandedStyles(() => ({');
+    expect(branded).not.toContain('StyleSheet.create');
+    expect(whiteOnBrandFill(branded).offenders).toEqual(whiteOnBrandFill(OLD_TICK).offenders);
   });
 
   it('does not flag white that sits on its own non-brand ground inside the fill', () => {

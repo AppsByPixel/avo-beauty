@@ -16,7 +16,6 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
-  StyleSheet,
   Text,
   View,
   type NativeScrollEvent,
@@ -64,6 +63,7 @@ import { BellSheet } from '../components/BellSheet';
 import { BookingPolicySheet } from '../components/BookingPolicySheet';
 import { useBell } from '../state/useBell';
 import { useOrders } from '../state/useOrders';
+import { brandedStyles } from '../theme/live';
 
 interface HomeProps {
   /**
@@ -633,7 +633,7 @@ function Shell({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   safe: { flex: 1, backgroundColor: color.canvas },
   // interaction-spec.md §1: mobile surfaces are fixed-width app screens; the
   // reference is 402pt. On a desktop browser the wallet is centred at that
@@ -674,4 +674,4 @@ const styles = StyleSheet.create({
   // Brand text on a light surface: brandDeep, never brand.
   offlineRetryText: { color: color.brandDeep },
   footerSpace: { height: 24 },
-});
+}));

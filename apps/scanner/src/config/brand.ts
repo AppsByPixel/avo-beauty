@@ -49,8 +49,8 @@ let salonName = BUILD_DEFAULT;
 /**
  * Adopt a name the server gave us. Called at boot from the cache and again after
  * each successful salon read, so a rename in the dashboard shows up without
- * waiting for a relaunch — unlike the colour, which is frozen into the
- * stylesheets (see `src/theme/sealed.ts`).
+ * waiting for a relaunch. The colour now follows it the same way — see
+ * `src/state/salonAdoption.ts`.
  *
  * A blank is ignored rather than stored: `''` would paint an empty heading and an
  * empty initial, which is the failure the API's own CHECK constraint on `nameAr`

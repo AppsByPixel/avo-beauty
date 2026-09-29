@@ -27,20 +27,18 @@
 import type { TextStyle } from 'react-native';
 import { hexToRgb } from '@avo/tokens';
 import { theme } from '@avo/tokens/native';
-import { seal } from './sealed';
+import { onRepaint } from './live';
 
 /**
- * From here on the palette is fixed for the life of the process.
+ * The palette is LIVE (`./live`). `color` is `theme.color` itself, so a read at
+ * render time is always current; the few values this module DERIVES from it
+ * (`onBrandFill`, `BRAND_BORDER`, `FOCUS_RING_LIGHT`) are re-derived on every
+ * repaint by the `onRepaint` at the bottom of the brand section, before any
+ * stylesheet is rebuilt.
  *
- * `onBrandFill` and `FOCUS_RING_LIGHT` below read `color.brandDeep` and
- * `color.brand` at module scope, and every screen's `StyleSheet.create` reads the
- * brand tokens the same way, so this module is the first consumer of the palette
- * by construction. A salon's hex has to be applied before this line runs; after
- * it, applying one would theme only the modules not yet evaluated. `./sealed`
- * carries the full argument, and `./brand` refuses -- loudly -- once this has
- * fired.
+ * This used to be `seal()`: the palette was fixed for the life of the process
+ * from this line on, and a hex learnt at sign-in waited for the next launch.
  */
-seal();
 
 export { theme };
 export const color = theme.color;
@@ -64,7 +62,7 @@ export const MIN_TAP_TARGET = theme.control.minTapTarget;
  * white on `brand`. `color.brand` stays available for surfaces: gradients,
  * tints, dots, progress fills, the selected-toggle track.
  */
-export const onBrandFill = color.brandDeep;
+export let onBrandFill = color.brandDeep;
 
 /**
  * A palette colour at an alpha, composited rather than typed.
@@ -82,7 +80,7 @@ export function withAlpha(hex: string, alpha: number): string {
 }
 
 /** The 1px edge on a brand-washed panel - `brand` at 22%, design:591. */
-export const BRAND_BORDER = withAlpha(color.brand, 0.22);
+export let BRAND_BORDER = withAlpha(color.brand, 0.22);
 
 /** The dark scan surface. Three tokens, plus the alphas that sit on them. */
 export const dark = {
@@ -134,7 +132,18 @@ export const dark = {
  * tenant's hex is what makes it reachable, so it is fixed in the same change.
  * `contrast.test.ts` asserts the 3:1 floor for every shipped preset.
  */
-export const FOCUS_RING_LIGHT = color.brandDeep;
+export let FOCUS_RING_LIGHT = color.brandDeep;
+
+/*
+  Re-derived on every repaint, before the stylesheets are rebuilt — they read
+  these. `export let` so importers see the new value: an ES import is a live
+  binding, and Babel's CommonJS output keeps it one.
+*/
+onRepaint(() => {
+  onBrandFill = color.brandDeep;
+  BRAND_BORDER = withAlpha(color.brand, 0.22);
+  FOCUS_RING_LIGHT = color.brandDeep;
+});
 
 // -------------------------------------------------------------------- type --
 

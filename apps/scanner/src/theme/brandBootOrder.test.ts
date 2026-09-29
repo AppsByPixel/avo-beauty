@@ -1,15 +1,15 @@
 /**
- * The one thing that can silently un-brand this app, asserted structurally.
- * Same subject and same method as the wallet's `brandBootOrder.test.ts`; the
- * argument is in `./sealed`.
+ * The cached brand is on the palette before the first stylesheet is built.
+ * Same subject and method as the wallet's `brandBootOrder.test.ts`.
  *
- * A React Native `StyleSheet.create` copies its colours when its module is first
- * evaluated, so `./brand` has to write the salon's hex before any module that
- * reads a brand token is evaluated, and `Boot.tsx` arranges that by reaching `App`
- * through a DYNAMIC import. The failure mode is somebody adding an eager import to
- * `index.ts` or `Boot.tsx`: nothing throws, no screen looks broken, and every
- * scanner renders sage forever. So the entry's static import graph is walked and
- * asserted not to reach the theme.
+ * `Boot.tsx` applies the identity cached by the previous sign-in and only then
+ * reaches `App` through a DYNAMIC import, so every stylesheet is built once from
+ * the salon's palette and the PIN screen's first frame is already the salon's.
+ * This used to guard white-labelling itself — the palette was sealed by the
+ * first stylesheet — and since `./live` a late hex repaints instead; what an
+ * eager import here costs now is a default first frame on every launch. So the
+ * entry's static import graph is still walked and asserted not to reach the
+ * theme.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -118,12 +118,5 @@ describe('the brand boot order', () => {
     const src = readFileSync(join(APP, 'src', 'config', 'brand.ts'), 'utf8');
     expect(src).not.toMatch(/from\s*'\.\.\/theme'/);
     expect(src).not.toMatch(/@avo\/tokens/);
-  });
-});
-
-describe('the seal is where it says it is', () => {
-  it('src/theme/index.ts calls seal() at module scope', () => {
-    const src = readFileSync(join(APP, 'src', 'theme', 'index.ts'), 'utf8');
-    expect(src).toMatch(/\nseal\(\);/);
   });
 });

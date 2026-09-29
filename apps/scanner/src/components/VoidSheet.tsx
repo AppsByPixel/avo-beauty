@@ -14,12 +14,13 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, Text, View } from 'react-native';
 import { ApiError, newIdempotencyKey } from '../api/client';
 import { voidCharge } from '../api/charges';
 import { copy } from '../copy/en';
 import { color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { DangerFilledButton, SecondaryButton } from './Buttons';
+import { brandedStyles } from '../theme/branded';
 
 type ReasonId = (typeof copy.voidReasons)[number]['id'];
 
@@ -196,7 +197,7 @@ export function VoidSheet({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   backdrop: { flex: 1, backgroundColor: 'rgba(20,21,17,0.55)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: color.surface,
@@ -235,4 +236,4 @@ const styles = StyleSheet.create({
   failure: { color: color.dangerText, marginTop: 14, lineHeight: 18 },
   actions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   action: { flex: 1 },
-});
+}));

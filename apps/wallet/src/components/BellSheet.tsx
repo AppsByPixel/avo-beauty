@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import type { ShopOrder, Transaction } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { Sheet } from './Sheet';
@@ -30,6 +30,7 @@ import { BRAND_BORDER, color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
 import { bellRows, campaignsHidden, idsToMark, type BellRow } from '../domain/bell';
 import type { BellController } from '../state/useBell';
+import { brandedStyles } from '../theme/live';
 
 const NO_ORDERS: readonly ShopOrder[] = [];
 
@@ -308,7 +309,7 @@ function Skeleton() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   head: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -390,4 +391,4 @@ const styles = StyleSheet.create({
 
   bar: { height: 10, borderRadius: 5, backgroundColor: color.surfaceAlt2, marginVertical: 3 },
   barShort: { width: '34%' },
-});
+}));

@@ -17,12 +17,13 @@
  *                 only where a row genuinely ends a card with no rule.
  */
 
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { color, MIN_TAP_TARGET, MICRO_LABEL_COLOR, radius, text, theme, WHITE } from '../../theme';
 import { useLanguage } from '../../i18n/language';
 import { alignEnd } from '../../i18n/rtl';
 import { TappableRow } from '../Buttons';
+import { brandedStyles } from '../../theme/live';
 
 export function SectionLabel({ children }: { children: string }) {
   const { lang } = useLanguage();
@@ -325,7 +326,7 @@ export function ToggleRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   sectionLabel: { color: MICRO_LABEL_COLOR, marginTop: 24, marginBottom: 10, marginHorizontal: 4 },
   card: {
     backgroundColor: color.surface,
@@ -411,4 +412,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: WHITE,
   },
-});
+}));

@@ -17,7 +17,7 @@
  *     white-on-`brandDeep`.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { formatMoney, type Fils, type Language } from '@avo/types';
 import {
   MICRO_LABEL_COLOR,
@@ -44,6 +44,7 @@ import {
   weekdayLabel,
   type StripDay,
 } from '../../domain/booking';
+import { brandedStyles } from '../../theme/live';
 
 // ------------------------------------------------------------------- shell --
 
@@ -567,7 +568,7 @@ export function EmptyPanel({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   stepLabel: { color: MICRO_LABEL_COLOR, marginHorizontal: 2, marginBottom: 12 },
 
   track: {
@@ -766,5 +767,5 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: color.ink, textAlign: 'center' },
   emptyBody: { color: color.textMuted, marginTop: 7, textAlign: 'center', lineHeight: 20 },
-});
+}));
 

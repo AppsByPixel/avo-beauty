@@ -10,10 +10,11 @@
  * holds the palette's maths; this file holds the claim that the card DRAWS it,
  * on a salon rebranded the way a real one is.
  *
- * THE SALON IS FOREST, APPLIED THE WAY BOOT APPLIES IT. `applyBrandColor` has
- * to run before anything imports `src/theme` (`theme/sealed.ts`), so every app
- * module below is reached through a dynamic import AFTER the rebrand — the same
- * shape as `Boot.tsx`. The card this renders is therefore the derived one,
+ * THE SALON IS FOREST, APPLIED THE WAY BOOT APPLIES IT: before any app module
+ * is imported, the shape of a launch with the hex cached. Every app module below
+ * is reached through a dynamic import AFTER the rebrand. (The live path — a hex
+ * that arrives from the salon read with the app already on screen — is
+ * `theme/brandLiveRender.test.tsx`.) The card this renders is therefore the derived one,
  * `deriveBrandSet(#1F5A36)`'s #277144 → #153C24, and not the build's default
  * gradient: a brand path that had hard-coded Amara would fail the first test.
  *
@@ -32,7 +33,7 @@ import {
   rgbToHex,
 } from '@avo/tokens';
 import { SalonSchema, type Salon, type TierName } from '@avo/types';
-// Does NOT import `./index`, so it cannot seal the palette (brand.test.ts § header).
+// Applied before `../theme` is imported: the cached-launch order (see above).
 import { applyBrandColor } from '../theme/brand';
 import type { PaymentCodeView } from '../domain/paymentCode';
 

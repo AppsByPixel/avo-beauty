@@ -65,13 +65,14 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Pressable, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import { color, radius, text, MIN_TAP_TARGET, WHITE } from '../theme';
 import { useCardInk } from '../theme/cardInk';
 import { useCopy, useLanguage } from '../i18n/language';
 import { toEasternDigits } from '../i18n/digits';
 import type { PaymentCodeView } from '../domain/paymentCode';
+import { brandedStyles } from '../theme/live';
 
 const QR_SIZE = 92;
 
@@ -225,7 +226,7 @@ function Countdown({ secondsRemaining, memberId }: { secondsRemaining: number; m
   return null;
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   panel: {
     width: '100%',
     marginTop: 20,
@@ -270,4 +271,4 @@ const styles = StyleSheet.create({
   },
   unavailableTitle: { textAlign: 'center' },
   unavailableBody: { marginTop: 5, textAlign: 'center' },
-});
+}));

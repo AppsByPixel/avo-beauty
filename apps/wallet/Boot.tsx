@@ -1,18 +1,26 @@
 /**
- * The root component, and the only thing that runs before the palette is fixed.
+ * The root component: the cached brand, applied before the first frame.
  *
  * WHAT IT IS FOR
  * ==============
- * `src/theme/brand.ts` can only apply a salon's hex before the first module that
- * reads a brand token is evaluated (`src/theme/sealed.ts` says why). `App.tsx`
- * statically imports seven screens, every one of which builds its stylesheets at
- * module scope, so by the time `App()` is first called the palette is already
- * baked. A hook inside App — the shape `useBrandTheme` takes on the web — is
- * therefore structurally unable to work here.
+ * A salon's hex reaches the palette two ways. Live, from the salon read after
+ * sign-in (`useWalletHome` → `src/theme/brand.ts` → `src/theme/live.ts`, which
+ * rebuilds every brand stylesheet in place). And here, from the hex that read
+ * cached on a previous launch — which is the only way the screens BEFORE a
+ * session (sign-in, create account, forgot password) can be in the salon's
+ * colour at all, and the way a returning phone's first frame is right instead
+ * of default-then-corrected.
  *
  * So the entry point is this, and `App` is reached through a DYNAMIC import that
- * is not started until the hex has been resolved and applied. That is the whole
- * job. Nothing else belongs in this file.
+ * is not started until the cached hex has been applied. That keeps every
+ * stylesheet built once, from the right palette, rather than built in the
+ * default and immediately rebuilt. Nothing else belongs in this file.
+ *
+ * It used to be load-bearing for white-labelling itself: the palette was sealed
+ * once the first stylesheet was evaluated, so a static import here that reached
+ * the theme would have silently disabled every salon's brand. It is not any
+ * more — a late hex repaints — but the ordering still decides whether the first
+ * frame is right, so `src/theme/brandBootOrder.test.ts` still holds it.
  *
  * WHAT RENDERS IN BETWEEN, AND WHY IT IS NOT A SPINNER
  * ===================================================
@@ -21,19 +29,15 @@
  * milliseconds — and interaction-spec.md §4's loading rules are about waits a
  * customer can perceive. A spinner here would flash.
  *
- * It is emphatically NOT the wallet in default sage followed by a correction. A
- * wrong-brand flash is worse than a neutral moment: it reads as a bug at the very
- * first frame a customer ever sees, and on the sealing rule above the correction
- * could only ever be partial anyway.
+ * It is emphatically NOT the wallet in the default green followed by a
+ * correction. A wrong-brand flash is worse than a neutral moment: it reads as a
+ * bug at the very first frame a customer ever sees.
  *
- * THE IMPORT LIST BELOW IS LOAD-BEARING
- * =====================================
- * Every static import here is evaluated before `resolve()` runs. Adding one that
- * transitively reaches `src/theme/index.ts` — any screen, any component, the
- * theme itself — silently disables white-labelling for the whole app. That is why
- * the blank's colour is read straight off `@avo/tokens/native` rather than from
- * `src/theme`, and why `src/theme/brandBootOrder.test.ts` asserts the entry's
- * static import graph cannot reach the theme.
+ * ON A TRULY FRESH INSTALL there is nothing cached, so sign-in and sign-up are
+ * drawn in the token file's default palette. That is the one state with no
+ * honest alternative: `GET /salons/{id}` needs a principal, and the build carries
+ * the salon's id, not its colour. The moment she signs in, Home's salon read
+ * applies the salon's hex live and the whole app repaints.
  */
 
 import { useEffect, useState } from 'react';
@@ -53,11 +57,12 @@ export default function Boot() {
       /*
         The hex comes from the device, not the network. `GET /salons/{id}` needs a
         principal, so on a first-ever launch there is nothing cached and the
-        default palette stands for that one session — the same fail-safe as a
-        refused hex. `useWalletHome` writes the hex on the first successful salon
-        read and every one after, so it is in place from the second launch on.
+        default palette stands UNTIL SIGN-IN — the first salon read applies the
+        hex live (`useWalletHome`) and caches it, so from the second launch on it
+        is here before the first frame.
 
-        REPORTED, NOT WORKED AROUND: closing that first launch needs an
+        REPORTED, NOT WORKED AROUND: putting the salon's colour on a fresh
+        install's sign-in screen needs an
         unauthenticated salon-identity read (name, brand hex, logo). There is
         precedent for exactly that shape — `/v1/platform/policies` is
         "unauthenticated by necessity (a signup screen renders it before there is
@@ -76,7 +81,7 @@ export default function Boot() {
         frame would land on exactly the customer who just asked for Arabic.
 
         `languagePreference` imports AsyncStorage and nothing else, so it does
-        not reach `src/theme` and the sealing order above is unaffected —
+        not reach `src/theme` and the first-frame order above is unaffected —
         `theme/brandBootOrder.test.ts` asserts that and would fail if it did.
       */
       cacheLanguage(await readStoredLanguage());
@@ -95,7 +100,6 @@ export default function Boot() {
 }
 
 const styles = StyleSheet.create({
-  // `canvas`, not a brand token: reading a brand token here would seal the
-  // palette in the one file that must not.
+  // `canvas`, not a brand token: the blank is drawn before the brand is known.
   blank: { flex: 1, backgroundColor: theme.color.canvas },
 });

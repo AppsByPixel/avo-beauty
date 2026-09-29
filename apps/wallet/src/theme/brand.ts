@@ -46,16 +46,39 @@
  * source and `apps/scanner/src/theme/brand.test.ts` recomputes it; the PROPERTY,
  * for every shipped brand, is asserted in `./brand.test.ts`.)
  *
- * MUTATION, AND WHY IT IS THE RIGHT SHAPE HERE
- * ===========================================
- * The DOM approach does not port. There are ~120 `StyleSheet.create` entries
- * reading `color.brand*` across this app, each of which copies the string at
- * module-evaluation time, so a React context would mean rewriting every
- * stylesheet in every screen — a restyle, which the brief forbids and which
- * would risk far more than it fixes. `theme.color` IS this app's palette root,
- * the native analogue of `document.documentElement.style`, so the five values are
- * written onto it before any consumer is evaluated. `./sealed` explains the
- * ordering and `Boot.tsx` enforces it.
+ * MUTATION, AND WHEN IT TAKES EFFECT
+ * ==================================
+ * `theme.color` IS this app's palette root, the native analogue of
+ * `document.documentElement.style`, so the five values are written onto it and
+ * then `./live`'s `repaint()` does what the browser does for the dashboard:
+ * every stylesheet that reads a brand token is rebuilt in place and the tree
+ * re-renders. So a hex applies WHENEVER it arrives:
+ *
+ *   - at boot, from the hex cached on the previous launch (`Boot.tsx`), before
+ *     the first frame — so a returning phone never shows a default frame, and a
+ *     signed-out one shows its salon's colour on sign-in;
+ *   - on every successful salon read (`useWalletHome`), live — which is the
+ *     only moment a fresh install ever learns its salon's colour, and the one
+ *     this file used to wait a whole launch for.
+ *
+ * It used to be sealed: after the first stylesheet was evaluated this refused,
+ * because a native stylesheet copies its colours once and a late write would
+ * have themed half the app. `./live` removes the reason — the stylesheets are
+ * re-evaluable now — so the seal is gone with it. See `./live` for why this is a
+ * repaint and not a re-mount or a reload.
+ *
+ * THE DASHBOARD'S POLICY, CASE BY CASE
+ * ====================================
+ * The palette is always EITHER `deriveBrandSet(hex)`'s five OR the defaults the
+ * token file ships — never a leftover. That is `useBrandTheme`'s behaviour too:
+ * its effect cleanup removes the previous salon's properties before the next
+ * hex is looked at, so a refused or absent hex lands on the defaults.
+ *
+ *   hex derives      →  write the five, repaint
+ *   hex refused      →  warn with the package's own sentence, defaults, repaint
+ *   no hex           →  defaults (a first launch, where they already stand)
+ *   same as standing →  nothing, and no re-render: Home re-reads the salon on
+ *                       every refresh, and that must not redraw the app
  *
  * WHAT THIS DELIBERATELY DOES NOT DO
  * ==================================
@@ -73,15 +96,13 @@
  * relying on these six figures, which move whenever the ramp does. Reported to
  * trunk; it needs fixing in the generator, for both surfaces at once.
  *
- * A hex changed in the dashboard mid-session takes effect at the NEXT LAUNCH, for
- * the sealing reason above. That is a deliberate limitation and the right one: a
- * salon changes its colour approximately never, and half-repainting a running app
- * is the failure this module is built to avoid.
+ * A hex changed in the dashboard mid-session is picked up at the next salon
+ * read — Home's next refresh — not the next launch.
  */
 
 import { deriveBrandSet, type BrandRejection } from '@avo/tokens';
 import { theme } from '@avo/tokens/native';
-import { paletteIsSealed } from './sealed';
+import { repaint } from './live';
 
 /** Drops `readonly` and nothing else. The shape is the generator's, unchanged. */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
@@ -108,56 +129,78 @@ export type BrandOutcome =
   /** No hex to apply. First-ever launch, or a build with no salon read yet. */
   | { applied: false; why: 'no-hex' }
   /** The shared package refused it. Defaults stand. */
-  | { applied: false; why: 'refused'; hex: string; failed: BrandRejection; reason: string }
-  /** Something already read the palette. Defaults stand — see ./sealed. */
-  | { applied: false; why: 'sealed'; hex: string };
+  | { applied: false; why: 'refused'; hex: string; failed: BrandRejection; reason: string };
+
+type Five = BrandApplied['values'];
+
+const palette = theme.color as Writable<typeof theme.color>;
+const card = theme.card as Writable<typeof theme.card>;
 
 /**
- * Apply a salon's brand hex to the native palette, or leave the defaults.
+ * The shipped defaults, read once when this module is evaluated. Nothing writes
+ * the palette except `paint` below, so at this line it is still the token file's.
+ */
+const DEFAULTS: Five = {
+  brand: palette.brand,
+  brandDeep: palette.brandDeep,
+  brandTint: palette.brandTint,
+  cardFrom: card.from,
+  cardTo: card.to,
+};
+
+function paint(next: Five): void {
+  if (
+    palette.brand === next.brand &&
+    palette.brandDeep === next.brandDeep &&
+    palette.brandTint === next.brandTint &&
+    card.from === next.cardFrom &&
+    card.to === next.cardTo
+  ) {
+    return;
+  }
+  palette.brand = next.brand;
+  palette.brandDeep = next.brandDeep;
+  palette.brandTint = next.brandTint;
+  card.from = next.cardFrom;
+  card.to = next.cardTo;
+  repaint();
+}
+
+/**
+ * Apply a salon's brand hex to the native palette, or return it to the defaults.
  *
- * Fail-safe in all three negative cases, for `useBrandTheme`'s reason: the point
- * of entry is where a bad hex gets rejected, and by the time one reaches a
+ * Fail-safe in both negative cases, for `useBrandTheme`'s reason: the point of
+ * entry is where a bad hex gets rejected, and by the time one reaches a
  * customer's phone the only safe move is to ignore it and keep going.
  */
 export function applyBrandColor(hex: string | null | undefined): BrandOutcome {
-  if (!hex) return { applied: false, why: 'no-hex' };
+  if (!hex) {
+    paint(DEFAULTS);
+    return { applied: false, why: 'no-hex' };
+  }
 
   const result = deriveBrandSet(hex);
   if (!result.ok) {
     // The shared package wrote the sentence; it is not paraphrased here.
     console.warn(`[avo] Ignoring salon brand colour ${hex}: ${result.reason}`);
+    paint(DEFAULTS);
     return { applied: false, why: 'refused', hex, failed: result.failed, reason: result.reason };
   }
 
-  if (paletteIsSealed()) {
-    console.error(
-      `[avo] Refusing to apply salon brand colour ${hex}: the palette was already read, ` +
-        `so applying it now would theme half the app. Something imported ` +
-        `src/theme before Boot resolved the brand — see src/theme/sealed.ts.`,
-    );
-    return { applied: false, why: 'sealed', hex };
-  }
-
   const { set } = result;
-  const palette = theme.color as Writable<typeof theme.color>;
-  const card = theme.card as Writable<typeof theme.card>;
-
-  palette.brand = set.brand;
-  palette.brandDeep = set.deep;
-  palette.brandTint = set.tint;
-  card.from = set.cardFrom;
-  card.to = set.cardTo;
+  const values: Five = {
+    brand: set.brand,
+    brandDeep: set.deep,
+    brandTint: set.tint,
+    cardFrom: set.cardFrom,
+    cardTo: set.cardTo,
+  };
+  paint(values);
 
   return {
     applied: true,
     hex,
-    values: {
-      brand: set.brand,
-      brandDeep: set.deep,
-      brandTint: set.tint,
-      cardFrom: set.cardFrom,
-      cardTo: set.cardTo,
-    },
+    values,
     whiteOnDeep: set.whiteOnDeep,
     whiteOnBrand: set.whiteOnBrand,
     deepOnTint: set.deepOnTint,

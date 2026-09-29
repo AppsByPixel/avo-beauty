@@ -64,7 +64,7 @@
  *    Queued as its own item rather than folded into the refusal fix.
  */
 
-import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
+import { ScrollView, Text, View, Pressable } from 'react-native';
 import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { copy } from '../copy/en';
@@ -72,6 +72,7 @@ import { brand } from '../config/brand';
 import { useSession } from '../state/session';
 import { card, color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
+import { brandedStyles } from '../theme/branded';
 
 export type HomeDestination = 'scan' | 'charges' | 'bookings' | 'schedule';
 
@@ -306,7 +307,7 @@ function Tile({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   // design:92 — padding 70/26/30.
   content: { paddingTop: 70, paddingHorizontal: 26, paddingBottom: 30, flexGrow: 1 },
@@ -355,4 +356,4 @@ const styles = StyleSheet.create({
   onBrandTitle: { color: color.white },
   onBrandSub: { color: 'rgba(255,255,255,0.85)' },
   footer: { color: color.textMutedSoft, textAlign: 'center', marginTop: 'auto', paddingTop: 30 },
-});
+}));

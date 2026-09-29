@@ -1,11 +1,14 @@
 /**
  * The runtime rebrand, driven rather than asserted.
  *
- * This file does NOT import `./index`. Importing it seals the palette (see
- * `./sealed`), and the whole subject here is what happens before that. Vitest
- * isolates module registries per test file, so `contrast.test.ts` importing the
- * theme cannot affect this one — but within this file the discipline has to hold,
- * and `applies nothing once the palette is sealed` below is the proof it does.
+ * The specs below share one module registry and run in order, so each one
+ * leaves the palette in whatever state it applied. That is deliberate — the
+ * refusal and no-hex cases are only meaningful starting from a salon brand —
+ * and each spec that depends on a starting state sets it.
+ *
+ * The live half (a hex applied with the theme already imported and stylesheets
+ * already built) is `the live repaint` below and, rendered,
+ * `./brandLiveRender.test.tsx`.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -133,12 +136,23 @@ describe('applyBrandColor — the rebrand', () => {
     expect(theme.color.brandTint2).toBe(before.tint2);
   });
 
-  it('does nothing at all when there is no hex — a first launch', () => {
-    const snapshot = { ...theme.color };
-    expect(applyBrandColor(null)).toEqual({ applied: false, why: 'no-hex' });
-    expect(applyBrandColor(undefined)).toEqual({ applied: false, why: 'no-hex' });
-    expect(applyBrandColor('')).toEqual({ applied: false, why: 'no-hex' });
-    expect({ ...theme.color }).toEqual(snapshot);
+  /**
+   * A first launch has no hex and is already on the defaults, so this is a
+   * no-op there. From a salon brand it returns to the defaults rather than
+   * leaving the last salon standing — `useBrandTheme`'s effect cleanup does the
+   * same on the web.
+   */
+  it('lands on the shipped defaults when there is no hex', () => {
+    applyBrandColor('#B08D8D');
+    for (const none of [null, undefined, ''] as const) {
+      applyBrandColor('#B08D8D');
+      expect(applyBrandColor(none)).toEqual({ applied: false, why: 'no-hex' });
+      expect(theme.color.brand).toBe(DEFAULT_BRAND.brand);
+      expect(theme.color.brandDeep).toBe(DEFAULT_BRAND.brandDeep);
+      expect(theme.color.brandTint).toBe(DEFAULT_BRAND.brandTint);
+      expect(theme.card.from).toBe(brandPresets.amaraSage.cardFrom);
+      expect(theme.card.to).toBe(brandPresets.amaraSage.cardTo);
+    }
   });
 });
 
@@ -147,12 +161,18 @@ describe('the refusal path — a non-viable hex leaves the defaults standing', (
    * `#FFFF00` is the case the brief names, and it is refused by the shared
    * package: darkened by the full 25% budget it reaches only 4.25:1 against
    * white. The behaviour to prove is not that it is refused — `derive.test.ts`
-   * owns that — but that a refusal changes NOTHING here, so the app keeps a
-   * palette that is known readable instead of shipping an unreadable button.
+   * owns that — but that a refusal lands on the DEFAULTS, a palette known to be
+   * readable, instead of shipping an unreadable button.
+   *
+   * The defaults, not "whatever was standing": that is the dashboard's
+   * behaviour (its effect cleanup removes the previous salon's properties before
+   * the refused hex is ignored), and a leftover from a previous salon is not a
+   * palette anyone chose. It used to leave the standing brand; that was only
+   * reachable at boot, where the standing brand was always the default anyway.
    */
-  it('refuses #FFFF00 and does not touch the palette', () => {
+  it('refuses #FFFF00 and returns the palette to the defaults', () => {
     applyBrandColor('#8A7CB0'); // put a real brand in place first
-    const standing = { ...theme.color, cardFrom: theme.card.from, cardTo: theme.card.to };
+    expect(theme.color.brand).toBe('#8A7CB0');
 
     const out = applyBrandColor('#FFFF00');
     expect(out.applied).toBe(false);
@@ -161,7 +181,11 @@ describe('the refusal path — a non-viable hex leaves the defaults standing', (
     if (out.why !== 'refused') return;
     expect(out.failed).toBe('white-on-deep');
 
-    expect({ ...theme.color, cardFrom: theme.card.from, cardTo: theme.card.to }).toEqual(standing);
+    expect(theme.color.brand).toBe(DEFAULT_BRAND.brand);
+    expect(theme.color.brandDeep).toBe(DEFAULT_BRAND.brandDeep);
+    expect(theme.color.brandTint).toBe(DEFAULT_BRAND.brandTint);
+    expect(theme.card.from).toBe(brandPresets.amaraSage.cardFrom);
+    expect(theme.card.to).toBe(brandPresets.amaraSage.cardTo);
   });
 
   it('discriminates on the refusal DATA, not on the prose', () => {
@@ -183,17 +207,64 @@ describe('the refusal path — a non-viable hex leaves the defaults standing', (
   });
 });
 
-describe('the ordering guard', () => {
-  it('applies nothing once the palette is sealed', async () => {
-    const { seal } = await import('./sealed');
-    const standing = { ...theme.color };
-    seal();
+describe('the live repaint', () => {
+  /**
+   * What used to be refused as "sealed": a hex applied AFTER the theme has been
+   * imported and a stylesheet has been built from it. It now rebuilds the
+   * stylesheet in place, and re-derives the module-level values the theme
+   * computes from the palette.
+   */
+  it('rebuilds a brand stylesheet and the derived theme values in place', async () => {
+    applyBrandColor(null);
+    const [{ brandedStyles, onRepaint }, themeIndex] = await Promise.all([
+      import('./live'),
+      import('./index'),
+    ]);
+    const styles = brandedStyles(() => ({
+      fill: { backgroundColor: themeIndex.onBrandFill.backgroundColor },
+      edge: { borderColor: themeIndex.BRAND_BORDER },
+      link: { color: themeIndex.color.brandDeep },
+    }));
+    const handle = styles.fill;
+    expect(styles.fill.backgroundColor).toBe(DEFAULT_BRAND.brandDeep);
+
+    let repaints = 0;
+    onRepaint(() => {
+      repaints += 1;
+    });
+
     const out = applyBrandColor('#B08D8D');
-    expect(out.applied).toBe(false);
-    if (out.applied) return;
-    expect(out.why).toBe('sealed');
-    // Half-themed is worse than not themed: nothing moved.
-    expect({ ...theme.color }).toEqual(standing);
+    if (!out.applied) throw new Error('expected #B08D8D to apply');
+    expect(repaints).toBe(1);
+    expect(styles.fill.backgroundColor).toBe(out.values.brandDeep);
+    expect(styles.link.color).toBe(out.values.brandDeep);
+    expect(styles.edge.borderColor).toBe(themeIndex.withAlpha('#B08D8D', 0.22));
+    expect(themeIndex.onBrandFill.backgroundColor).toBe(out.values.brandDeep);
+    expect(themeIndex.brandTextColor).toBe(out.values.brandDeep);
+    expect(themeIndex.cardGradient.from).toBe(out.values.cardFrom);
+    // The entry is a new object; `styles` is the same object. The component
+    // reads `styles.fill` at render, so it gets the new one.
+    expect(styles.fill).not.toBe(handle);
+
+    // #9 is the reason `onBrandFill` exists: white stays on the new deep.
+    expect(themeIndex.onBrandFill.color).toBe(themeIndex.WHITE);
+    expect(contrastWithWhite(themeIndex.onBrandFill.backgroundColor)).toBeGreaterThanOrEqual(
+      AA_NORMAL_TEXT,
+    );
+  });
+
+  it('does not repaint for the hex already standing — a Home refresh', async () => {
+    const { onRepaint } = await import('./live');
+    applyBrandColor('#8A7CB0');
+    let repaints = 0;
+    onRepaint(() => {
+      repaints += 1;
+    });
+    applyBrandColor('#8A7CB0');
+    applyBrandColor('#8A7CB0');
+    expect(repaints).toBe(0);
+    applyBrandColor('#B08D8D');
+    expect(repaints).toBe(1);
   });
 });
 

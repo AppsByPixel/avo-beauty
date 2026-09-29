@@ -16,10 +16,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { color, radius, text, WHITE } from '../theme';
 import { useLanguage } from '../i18n/language';
+import { brandedStyles } from '../theme/live';
 
 /** design:1112 — the design holds it for 3400ms. */
 const VISIBLE_MS = 3400;
@@ -75,7 +76,7 @@ export function Toast({ message }: { message: string | null }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   toast: {
     position: 'absolute',
     left: 16,
@@ -100,4 +101,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   text: { color: WHITE, flex: 1, lineHeight: 18 },
-});
+}));

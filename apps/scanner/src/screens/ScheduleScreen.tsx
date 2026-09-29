@@ -57,7 +57,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { ApiError } from '../api/client';
 import {
   fetchMyArtist,
@@ -72,6 +72,7 @@ import { color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton, PrimaryButton } from '../components/Buttons';
 import { EmptyState, Refusal, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
+import { brandedStyles } from '../theme/branded';
 
 /** design:645 — the stepper moves in half-hours. */
 const STEP_MINUTES = 30;
@@ -702,7 +703,7 @@ function SummaryRow({ label, value, last }: { label: string; value: string; last
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface, paddingTop: 66 },
   header: {
     flexDirection: 'row',
@@ -902,4 +903,4 @@ const styles = StyleSheet.create({
     borderBottomColor: color.hairline,
   },
   save: { marginTop: 14 },
-});
+}));

@@ -10,19 +10,22 @@
 import type { TextStyle } from 'react-native';
 import { theme } from '@avo/tokens/native';
 import { hexToRgb, tokens } from '@avo/tokens';
-import { seal } from './sealed';
+import { onRepaint } from './live';
 
 /**
- * From here on the palette is fixed for the life of the process.
+ * The palette is LIVE, and this module is where that has a cost.
  *
- * `onBrandFill` and `brandTextColor` below read `color.brandDeep` at module
- * scope, and every screen's `StyleSheet.create` reads the brand tokens the same
- * way, so this module is the first consumer of the palette by construction. A
- * salon's hex has to be applied before this line runs; after it, applying one
- * would theme only the modules not yet evaluated. `./sealed` carries the full
- * argument, and `./brand` refuses -- loudly -- once this has fired.
+ * `color` below is `theme.color` itself — the object `./brand` writes a salon's
+ * hex onto — so any read of `color.brandDeep` at render time is always current.
+ * The handful of values this module DERIVES from the palette (`onBrandFill`,
+ * `BRAND_BORDER`, `brandTextColor`) are computed once, so they are re-derived on
+ * every repaint by the `onRepaint` hook at the bottom of this file, before any
+ * stylesheet is rebuilt. `./live` carries the whole mechanism.
+ *
+ * This used to be `seal()`: the palette was fixed for the life of the process
+ * from this line on, and a salon's hex learnt after sign-in could only be
+ * applied at the next launch.
  */
-seal();
 
 export { theme };
 export const color = theme.color;
@@ -243,10 +246,8 @@ export const WHITE = color.white;
  * pair so a primary button cannot be written any other way, and so a review can
  * grep for the one place the rule is encoded.
  */
-export const onBrandFill = {
-  backgroundColor: color.brandDeep,
-  color: WHITE,
-} as const;
+const fill = { backgroundColor: color.brandDeep, color: WHITE };
+export const onBrandFill: { readonly backgroundColor: string; readonly color: string } = fill;
 
 /**
  * A palette colour at an alpha, composited rather than typed.
@@ -272,13 +273,25 @@ export function withAlpha(hex: string, alpha: number): string {
  * The 1px edge on a brand-washed panel - `brand` at 22%, design:591. Used on
  * every brand-washed panel in the bundle.
  */
-export const BRAND_BORDER = withAlpha(color.brand, 0.22);
+export let BRAND_BORDER = withAlpha(color.brand, 0.22);
 
 /** Brand-coloured text on a light surface is also `brandDeep`, never `brand`. */
-export const brandTextColor = color.brandDeep;
+export let brandTextColor = color.brandDeep;
 
 /** The wallet card gradient. `brand` is a surface colour — this is its job. */
 export const cardGradient = theme.card;
+
+/*
+  Re-derived on every repaint, BEFORE the stylesheets are rebuilt — they read
+  these. `export let` so the new value is what every importer sees: an ES import
+  is a live binding, and Babel's CommonJS output keeps it one (`_theme.BRAND_BORDER`
+  is read at use, not copied at import).
+*/
+onRepaint(() => {
+  fill.backgroundColor = color.brandDeep;
+  BRAND_BORDER = withAlpha(color.brand, 0.22);
+  brandTextColor = color.brandDeep;
+});
 
 /**
  * Shadows, borders and motion are in the token source but the generator's React

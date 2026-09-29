@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { lookupMembers, MIN_QUERY_LENGTH, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
@@ -33,6 +33,7 @@ import { BRAND_BORDER, color, display, MIN_TAP_TARGET, radius, tierStyles, ui } 
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, OfflineBanner, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
+import { brandedStyles } from '../theme/branded';
 
 type Search =
   | { state: 'idle' }
@@ -234,7 +235,7 @@ export function LookupScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 66, paddingHorizontal: 22, paddingBottom: 26, flexGrow: 1 },
   header: {
@@ -297,4 +298,4 @@ const styles = StyleSheet.create({
   },
   noticeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: color.brand, marginTop: 5 },
   noticeText: { color: color.brandDeeper, flex: 1, lineHeight: 18 },
-});
+}));

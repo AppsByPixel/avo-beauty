@@ -23,12 +23,13 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { Linking, StyleSheet, Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { visibleSocialLinks, type SocialLink } from '@avo/types';
 import { color, radius, text } from '../../theme';
 import { useLanguage } from '../../i18n/language';
 import { TappableRow } from '../Buttons';
+import { brandedStyles } from '../../theme/live';
 
 /**
  * design/avo-promotions.js:523-528 — the design's own icon set, lifted verbatim.
@@ -88,7 +89,7 @@ export function FollowSalon({ social }: { social: SocialLink[] }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
   tile: {
     // Four across with 9pt gutters, and it wraps rather than squeezing when a
@@ -120,4 +121,4 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     writingDirection: 'ltr',
   },
-});
+}));

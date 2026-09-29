@@ -22,7 +22,7 @@
  */
 
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { fils, formatMoney, type Fils, type Salon } from '@avo/types';
 import { MICRO_LABEL_COLOR, MIN_TAP_TARGET, color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
@@ -34,6 +34,7 @@ import { failureCopy, type LoadFailure } from '../domain/loadFailure';
 import { cancelPreview, type CancelPreview } from '../domain/bookingPolicy';
 import type { CancelBookingResult } from '../api/booking';
 import { PolicyBlock, SettlementLines } from './booking/PolicyBlock';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   booking: BookingView;
@@ -422,7 +423,7 @@ export function UpcomingSkeleton() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   card: {
     marginTop: 22,
     padding: 17,
@@ -523,4 +524,4 @@ const styles = StyleSheet.create({
 
   bar: { height: 12, borderRadius: 6, backgroundColor: color.surfaceAlt2 },
   barThin: { height: 10 },
-});
+}));

@@ -55,7 +55,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import type { LegalDoc } from '@avo/types';
 import { ApiError } from '../api/client';
@@ -74,6 +74,7 @@ import { PrimaryButton } from '../components/Buttons';
 import { PolicySheet } from '../components/account/PolicySheet';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { brandedStyles } from '../theme/live';
 
 /**
  * The terms, and whether they are here yet.
@@ -675,7 +676,7 @@ function Checkbox({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   screen: { flex: 1, backgroundColor: color.surface },
   content: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 40, flexGrow: 1 },
   brand: { alignItems: 'center' },
@@ -771,4 +772,4 @@ const styles = StyleSheet.create({
   footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
   footerLinkText: { color: color.brandDeep },
   termsFailed: { marginTop: 40, alignItems: 'stretch' },
-});
+}));

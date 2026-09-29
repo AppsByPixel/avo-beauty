@@ -1,22 +1,20 @@
 /**
- * The one thing that can silently un-brand this app, asserted structurally.
+ * The cached brand is on the palette before the first stylesheet is built.
  *
- * A React Native `StyleSheet.create` copies its colours when its module is first
- * evaluated. `src/theme/brand.ts` therefore has to write the salon's hex onto the
- * palette BEFORE any module that reads a brand token is evaluated, and `Boot.tsx`
- * arranges that by reaching `App` through a DYNAMIC import (`./sealed` carries the
- * full argument).
+ * `Boot.tsx` applies the hex cached on the previous launch and only then
+ * reaches `App` through a DYNAMIC import, so every stylesheet is built once,
+ * from the salon's palette, and the first frame — sign-in, for a signed-out
+ * phone — is already in the salon's colour.
  *
- * The failure mode is not subtle in its effect and is invisible in a diff:
- * somebody adds `import { color } from './src/theme'` — or any screen, or any
- * component — to `index.ts` or `Boot.tsx`, that module is evaluated before the
- * hex is resolved, `seal()` fires, and from then on every build renders sage
- * whatever tenant it is for. Nothing throws. No screen looks broken. It is
- * exactly the bug this slice was dispatched to fix, reintroduced.
- *
- * So this walks the entry point's STATIC import graph and asserts it cannot reach
- * the theme. It scans source text rather than importing anything, because
- * importing is the thing being measured.
+ * THIS USED TO GUARD WHITE-LABELLING ITSELF. The palette was sealed once the
+ * first brand-reading module was evaluated, so an innocent static import here
+ * that reached the theme would have left every salon in the default green for
+ * good. Since `./live` a late hex repaints, so the failure is smaller now — a
+ * default frame corrected a moment later, and every brand stylesheet built
+ * twice — but it is still the wrong first frame on every launch, and still
+ * invisible in a diff. So this still walks the entry point's STATIC import
+ * graph and asserts it cannot reach the theme. It scans source text rather than
+ * importing anything, because importing is the thing being measured.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -98,7 +96,7 @@ describe('the brand boot order', () => {
     expect(entrySrc).not.toMatch(/registerRootComponent\(\s*App\s*\)/);
   });
 
-  /** The claim. If this fails, white-labelling is off for every salon. */
+  /** The claim. If this fails, every launch's first frame is the default palette. */
   it('cannot reach src/theme/index.ts before the brand is applied', () => {
     expect([...fromEntry].filter((f) => f === 'src/theme/index.ts')).toEqual([]);
   });
@@ -131,21 +129,5 @@ describe('the brand boot order', () => {
     const boot = readFileSync(join(APP, 'Boot.tsx'), 'utf8');
     expect(boot).toMatch(/await import\('\.\/App'\)/);
     expect(boot).not.toMatch(/(?:^|\n)\s*import[^\n;]*from\s*'\.\/App'/);
-  });
-});
-
-describe('the seal is where it says it is', () => {
-  it('src/theme/index.ts calls seal() at module scope', () => {
-    const src = readFileSync(join(APP, 'src', 'theme', 'index.ts'), 'utf8');
-    // At module scope: a bare `seal();` on its own line, not inside a function.
-    expect(src).toMatch(/\nseal\(\);/);
-  });
-
-  it('and nothing else calls it', () => {
-    const callers = [...fromEntry, 'src/theme/index.ts', 'App.tsx']
-      .filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'))
-      .filter((f) => f !== 'src/theme/sealed.ts' && f !== 'src/theme/index.ts')
-      .filter((f) => /\bseal\(\)/.test(readFileSync(join(APP, f), 'utf8')));
-    expect(callers).toEqual([]);
   });
 });

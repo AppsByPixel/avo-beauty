@@ -17,9 +17,18 @@
  * ============================
  * `deriveBrandSet` from `@avo/tokens` derives the set and refuses a hex whose
  * `deep` cannot clear 4.5:1 against white — non-negotiable #9, decided in the
- * shared package and not re-litigated here. A refusal leaves the default sage
- * standing rather than shipping an unreadable button, which is
- * `apps/dashboard/src/shell/useBrandTheme.ts`'s behaviour and now the wallet's.
+ * shared package and not re-litigated here. A refusal lands on the defaults
+ * rather than shipping an unreadable button, which is
+ * `apps/dashboard/src/shell/useBrandTheme.ts`'s behaviour and the wallet's: the
+ * palette is always either `deriveBrandSet(hex)`'s five or the token file's
+ * defaults, never a previous salon's leftover.
+ *
+ * WHEN IT APPLIES. At boot, from the identity cached on the previous sign-in
+ * (`Boot.tsx`), so the PIN screen is already in the salon's colour; and on every
+ * salon read after a sign-in (`config/brand.ts` → `adoptSalonIdentity`), LIVE —
+ * `./live` rebuilds every brand stylesheet in place. It used to refuse after the
+ * palette was "sealed" by the first stylesheet, so a till's first session after
+ * enrolment ran in the default green end to end.
  *
  * Four values, not five: the scanner has no wallet card, so `theme.card` is
  * emitted for it but nothing reads it. It is written anyway, because a palette
@@ -43,7 +52,7 @@
 
 import { deriveBrandSet, type BrandRejection } from '@avo/tokens';
 import { theme } from '@avo/tokens/native';
-import { paletteIsSealed } from './sealed';
+import { repaint } from './live';
 
 /** Drops `readonly` and nothing else. The shape is the generator's, unchanged. */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
@@ -58,49 +67,70 @@ export type BrandOutcome =
       deepOnTint: number;
     }
   | { applied: false; why: 'no-hex' }
-  | { applied: false; why: 'refused'; hex: string; failed: BrandRejection; reason: string }
-  | { applied: false; why: 'sealed'; hex: string };
+  | { applied: false; why: 'refused'; hex: string; failed: BrandRejection; reason: string };
 
-/** Apply a salon's brand hex to the native palette, or leave the defaults. */
+type Five = { brand: string; brandDeep: string; brandTint: string; cardFrom: string; cardTo: string };
+
+const palette = theme.color as Writable<typeof theme.color>;
+const card = theme.card as Writable<typeof theme.card>;
+
+/** The shipped defaults, read before anything can write the palette. */
+const DEFAULTS: Five = {
+  brand: palette.brand,
+  brandDeep: palette.brandDeep,
+  brandTint: palette.brandTint,
+  cardFrom: card.from,
+  cardTo: card.to,
+};
+
+/** Write the five and repaint — or nothing at all if they are already standing. */
+function paint(next: Five): void {
+  if (
+    palette.brand === next.brand &&
+    palette.brandDeep === next.brandDeep &&
+    palette.brandTint === next.brandTint &&
+    card.from === next.cardFrom &&
+    card.to === next.cardTo
+  ) {
+    return;
+  }
+  palette.brand = next.brand;
+  palette.brandDeep = next.brandDeep;
+  palette.brandTint = next.brandTint;
+  card.from = next.cardFrom;
+  card.to = next.cardTo;
+  repaint();
+}
+
+/** Apply a salon's brand hex to the native palette, or return it to the defaults. */
 export function applyBrandColor(hex: string | null | undefined): BrandOutcome {
-  if (!hex) return { applied: false, why: 'no-hex' };
+  if (!hex) {
+    paint(DEFAULTS);
+    return { applied: false, why: 'no-hex' };
+  }
 
   const result = deriveBrandSet(hex);
   if (!result.ok) {
     // The shared package wrote the sentence; it is not paraphrased here.
     console.warn(`[avo] Ignoring salon brand colour ${hex}: ${result.reason}`);
+    paint(DEFAULTS);
     return { applied: false, why: 'refused', hex, failed: result.failed, reason: result.reason };
   }
 
-  if (paletteIsSealed()) {
-    console.error(
-      `[avo] Refusing to apply salon brand colour ${hex}: the palette was already read, ` +
-        `so applying it now would theme half the app. Something imported ` +
-        `src/theme before Boot resolved the brand — see src/theme/sealed.ts.`,
-    );
-    return { applied: false, why: 'sealed', hex };
-  }
-
   const { set } = result;
-  const palette = theme.color as Writable<typeof theme.color>;
-  const card = theme.card as Writable<typeof theme.card>;
-
-  palette.brand = set.brand;
-  palette.brandDeep = set.deep;
-  palette.brandTint = set.tint;
-  card.from = set.cardFrom;
-  card.to = set.cardTo;
+  const values: Five = {
+    brand: set.brand,
+    brandDeep: set.deep,
+    brandTint: set.tint,
+    cardFrom: set.cardFrom,
+    cardTo: set.cardTo,
+  };
+  paint(values);
 
   return {
     applied: true,
     hex,
-    values: {
-      brand: set.brand,
-      brandDeep: set.deep,
-      brandTint: set.tint,
-      cardFrom: set.cardFrom,
-      cardTo: set.cardTo,
-    },
+    values,
     whiteOnDeep: set.whiteOnDeep,
     whiteOnBrand: set.whiteOnBrand,
     deepOnTint: set.deepOnTint,

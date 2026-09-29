@@ -51,12 +51,13 @@
  */
 
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { color, MICRO_LABEL_COLOR, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
 import { SignedAmount } from './Money';
 import { discloseActivity, type ActivityRow } from '../domain/activity';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   rows: ActivityRow[];
@@ -200,7 +201,7 @@ function EmptyActivity({ onTopUp }: { onTopUp: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   section: { marginTop: 24 },
   sectionLabel: { color: MICRO_LABEL_COLOR, marginHorizontal: 4, marginBottom: 10 },
   card: {
@@ -278,4 +279,4 @@ const styles = StyleSheet.create({
     backgroundColor: onBrandFill.backgroundColor,
   },
   emptyActionText: { color: onBrandFill.color },
-});
+}));

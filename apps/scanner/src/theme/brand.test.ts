@@ -1,12 +1,13 @@
 /**
  * The scanner's runtime rebrand.
  *
- * This file does NOT import `./index` — importing it seals the palette and the
- * subject here is what happens before that. Vitest isolates module registries per
- * file, so `contrast.test.ts` importing the theme cannot affect this one.
+ * The specs share one module registry and run in order, so each leaves the
+ * palette as it applied it; a spec that depends on a starting state sets it.
+ * `the live repaint` below is the half that used to be refused as "sealed": a
+ * hex applied after the theme has been imported and sheets have been built.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AA_NORMAL_TEXT,
   brandPresets,
@@ -104,32 +105,89 @@ describe('applyBrandColor', () => {
     expect(out.values.brandTint).toBe(shared.set.tint);
   });
 
-  it('does nothing when the device has no cached hex', () => {
-    const snapshot = { ...theme.color };
+  /**
+   * A device with nothing cached is already on the defaults, so this is a no-op
+   * there; from a salon brand it lands on the defaults, as `useBrandTheme`'s
+   * effect cleanup does on the web.
+   */
+  it('lands on the shipped defaults when there is no hex', () => {
+    applyBrandColor('#8A7CB0');
     expect(applyBrandColor(null)).toEqual({ applied: false, why: 'no-hex' });
-    expect({ ...theme.color }).toEqual(snapshot);
+    expect(theme.color.brand).toBe(palette.brand);
+    expect(theme.color.brandDeep).toBe(palette.brandDeep);
+    expect(theme.color.brandTint).toBe(palette.brandTint);
   });
 
-  /** A refusal leaves the defaults standing rather than shipping an unreadable fill. */
-  it('refuses #FFFF00 and does not touch the palette', () => {
+  /**
+   * A refusal lands on the defaults — a palette known to be readable — rather
+   * than shipping an unreadable fill or keeping a previous salon's leftover.
+   */
+  it('refuses #FFFF00 and returns the palette to the defaults', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     applyBrandColor('#8A7CB0');
-    const standing = { ...theme.color };
+    expect(theme.color.brand).toBe('#8A7CB0');
     const out = applyBrandColor('#FFFF00');
     expect(out.applied).toBe(false);
     if (out.applied || out.why !== 'refused') return;
     expect(out.failed).toBe('white-on-deep');
-    expect({ ...theme.color }).toEqual(standing);
+    expect(theme.color.brand).toBe(palette.brand);
+    expect(theme.color.brandDeep).toBe(palette.brandDeep);
+    expect(theme.color.brandTint).toBe(palette.brandTint);
+    expect(warn).toHaveBeenCalledWith(`[avo] Ignoring salon brand colour #FFFF00: ${out.reason}`);
+    warn.mockRestore();
+  });
+});
+
+describe('the live repaint', () => {
+  it('re-derives the theme and rebuilds a brandedStyles sheet in place', async () => {
+    vi.doMock('react-native', () => ({ StyleSheet: { create: <T,>(s: T) => s } }));
+    applyBrandColor(null);
+    const [themeIndex, { brandedStyles }, { onRepaint }] = await Promise.all([
+      import('./index'),
+      import('./branded'),
+      import('./live'),
+    ]);
+    const styles = brandedStyles(() => ({
+      fill: { backgroundColor: themeIndex.onBrandFill },
+      edge: { borderColor: themeIndex.BRAND_BORDER },
+    }));
+    expect(styles.fill.backgroundColor).toBe(palette.brandDeep);
+    let repaints = 0;
+    onRepaint(() => {
+      repaints += 1;
+    });
+
+    const forest = brandPresets.forest.brand;
+    const out = applyBrandColor(forest);
+    if (!out.applied) throw new Error('forest was refused');
+    expect(repaints).toBe(1);
+    expect(styles.fill.backgroundColor).toBe(out.values.brandDeep);
+    expect(styles.edge.borderColor).toBe(themeIndex.withAlpha(forest, 0.22));
+    expect(themeIndex.onBrandFill).toBe(out.values.brandDeep);
+    expect(themeIndex.FOCUS_RING_LIGHT).toBe(out.values.brandDeep);
+    expect(themeIndex.card.from).toBe(out.values.cardFrom);
+
+    // The same hex again is a Home refresh: no repaint.
+    applyBrandColor(forest);
+    expect(repaints).toBe(1);
+    vi.doUnmock('react-native');
   });
 
-  it('applies nothing once the palette is sealed', async () => {
-    const { seal } = await import('./sealed');
-    const standing = { ...theme.color };
-    seal();
-    const out = applyBrandColor('#B08D8D');
-    expect(out.applied).toBe(false);
-    if (out.applied) return;
-    expect(out.why).toBe('sealed');
-    expect({ ...theme.color }).toEqual(standing);
+  /** The path the till takes after a staff sign-in reads the salon. */
+  it('adoptSalonIdentity applies the name and the colour together', async () => {
+    const [{ adoptSalonIdentity }, { brand, resetSalonNameToBuildDefault }] = await Promise.all([
+      import('../state/salonAdoption'),
+      import('../config/brand'),
+    ]);
+    applyBrandColor(null);
+    const out = adoptSalonIdentity({ name: 'Forest', brandColor: brandPresets.forest.brand });
+    expect(out.applied).toBe(true);
+    expect(brand.salonName).toBe('Forest');
+    if (!out.applied) return;
+    expect(theme.color.brandDeep).toBe(out.values.brandDeep);
+    expect(theme.card.from).toBe('#277144');
+    expect(theme.card.to).toBe('#153C24');
+    resetSalonNameToBuildDefault();
   });
 });
 

@@ -21,7 +21,7 @@ import { StyleSheet, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { fetchSalonLoyalty, type SalonLoyalty } from '../api/salon';
 import { FALLBACK_SALON_TIME_ZONE } from '../domain/salonTime';
-import { adoptSalonName } from '../config/brand';
+import { adoptSalonIdentity } from '../state/salonAdoption';
 import { resolveScan, type ScanResult } from '../api/scans';
 import { fetchMember, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
@@ -76,12 +76,12 @@ export function ScannerFlow() {
         if (!alive) return;
         setSalon(s);
         /*
-          The name is read at render time (config/brand.ts), so a rename in the
-          dashboard reaches Home's heading now rather than at the next launch. The
-          COLOUR cannot follow it: the stylesheets copied their colours when their
-          modules were evaluated. See src/theme/sealed.ts.
+          The name and the colour, both now. The name is read at render time
+          (config/brand.ts); the colour repaints every brand stylesheet in place
+          (src/theme/live.ts) — so a till's first session after enrolment is in
+          its salon's colour, not the default green until the next launch.
         */
-        adoptSalonName(s.name);
+        adoptSalonIdentity(s);
       })
       .catch(() => {
         /* reported through the member card's fallback, not a blocking error */

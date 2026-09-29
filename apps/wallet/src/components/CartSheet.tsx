@@ -57,7 +57,7 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { fils, formatMoney, moneyAriaLabel, type Fils, type MemberAddress } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { type PricedLine } from '../domain/cart';
@@ -78,6 +78,7 @@ import type { CardMethod } from '../state/useCardCheckout';
 import { color, MIN_TAP_TARGET, radius, text, WHITE } from '../theme';
 import { focusable } from '../theme/focus';
 import { alignEnd } from '../i18n/rtl';
+import { brandedStyles } from '../theme/live';
 
 interface Props {
   open: boolean;
@@ -704,7 +705,7 @@ function Stepper({
 }
 
 
-const styles = StyleSheet.create({
+const styles = brandedStyles(() => ({
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { color: color.ink },
   count: { color: color.textMuted },
@@ -831,4 +832,4 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', paddingTop: 40, paddingBottom: 30, paddingHorizontal: 10 },
   emptyTitle: { color: color.textMuted },
   emptyBody: { color: color.textMutedSoft, marginTop: 6 },
-});
+}));

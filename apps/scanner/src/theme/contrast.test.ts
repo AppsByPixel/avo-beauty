@@ -200,20 +200,39 @@ const ICON_COLOUR_PROPS = new Set(['color', 'tintColor', 'fill', 'stroke']);
 
 type Paint = { bg?: string; fg?: string };
 
-/** `styles.tickOn` → `{ bg: 'color.brand' }`, for every `StyleSheet.create` in the file. */
+/**
+ * The object literal a stylesheet is built from: the argument of
+ * `StyleSheet.create({...})`, or the body of `brandedStyles(() => ({...}))` —
+ * the re-evaluable form every sheet that reads a brand token now takes
+ * (`./branded`). Both, or the scan silently loses exactly the entries a rebrand
+ * touches.
+ */
+function sheetLiteral(call: ts.CallExpression, sf: ts.SourceFile): ts.ObjectLiteralExpression | null {
+  const callee = call.expression.getText(sf);
+  const arg = call.arguments[0];
+  if (!arg) return null;
+  if (callee === 'StyleSheet.create') return ts.isObjectLiteralExpression(arg) ? arg : null;
+  if (callee === 'brandedStyles' && ts.isArrowFunction(arg)) {
+    let body: ts.Node = arg.body;
+    while (ts.isParenthesizedExpression(body)) body = body.expression;
+    return ts.isObjectLiteralExpression(body) ? body : null;
+  }
+  return null;
+}
+
+/** `styles.tickOn` → `{ bg: 'color.brand' }`, for every stylesheet in the file. */
 function styleTable(sf: ts.SourceFile): Map<string, Paint> {
   const table = new Map<string, Paint>();
   const visit = (node: ts.Node): void => {
-    if (
+    const sheet =
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       node.initializer &&
-      ts.isCallExpression(node.initializer) &&
-      node.initializer.expression.getText(sf) === 'StyleSheet.create' &&
-      node.initializer.arguments[0] &&
-      ts.isObjectLiteralExpression(node.initializer.arguments[0])
-    ) {
-      for (const prop of node.initializer.arguments[0].properties) {
+      ts.isCallExpression(node.initializer)
+        ? sheetLiteral(node.initializer, sf)
+        : null;
+    if (sheet && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      for (const prop of sheet.properties) {
         if (!ts.isPropertyAssignment(prop) || !ts.isObjectLiteralExpression(prop.initializer)) continue;
         table.set(`${node.name.text}.${prop.name.getText(sf)}`, paintOf(prop.initializer, sf));
       }
@@ -343,6 +362,16 @@ describe('non-negotiable #9 across style entries — white never inside a brand 
       'fixture.tsx:10 styles.tickMark on styles.tickOn',
       'fixture.tsx:13 color=WHITE on styles.tickOn',
     ]);
+  });
+
+  it('reads a brandedStyles sheet exactly as it reads StyleSheet.create', () => {
+    const branded = OLD_TICK.replace('StyleSheet.create({', 'brandedStyles(() => ({').replace(
+      '  });\n  export const Tick',
+      '  }));\n  export const Tick',
+    );
+    expect(branded).toContain('brandedStyles(() => ({');
+    expect(branded).not.toContain('StyleSheet.create');
+    expect(whiteOnBrandFill(branded).offenders).toEqual(whiteOnBrandFill(OLD_TICK).offenders);
   });
 
   it('does not flag white that sits on its own non-brand ground inside the fill', () => {
