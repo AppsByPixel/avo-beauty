@@ -6,10 +6,31 @@
  * truth, shared with the dashboard (packages/types § PromotionSet). This screen
  * never keeps its own copy of a boost value, and there is no `live` flag: a
  * boost is whatever the published set says it is right now.
+ *
+ * TWO RULINGS, 2026-09-29 (DECISIONS.md):
+ *
+ *   · NO TOP-UP CHIP. Aftab: "Remove it from boosts". A top-up happens in the
+ *     app and has no branch, so the server never paid a branch boost's `topup`
+ *     — the design's "+10% top-ups" chip was a promise of money nobody kept.
+ *     The wire field stays (always 0) so installed apps parse; this reads it
+ *     nowhere, so an old cached set or a server that still says 30 cannot
+ *     bring the chip back. Top-up bonuses are stated where they are paid:
+ *     tiers and happy hours (`domain/topupPreview.ts`).
+ *
+ *   · THE BOOST WINDOW. A boost applies from `startsAt` until `endsAt` and can
+ *     be stopped (lane A, 6d102c5). A chip is shown only while `isBoostLive`
+ *     says the boost runs at this instant, only when it carries no stop record,
+ *     and only when its multiplier is above 1. That is DISPLAY (#2): the charge
+ *     resolves the same predicate on the server, and what she earns is its.
+ *
+ *     The design draws no "until <date>" on a branch chip — the only "until" on
+ *     Home is the happy-hour banner's — so the end is not shown. No copy is
+ *     invented for it.
  */
 
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { Branch, PromotionSet, Salon } from '@avo/types';
+import { isBoostLive, type Boost, type Branch, type PromotionSet, type Salon } from '@avo/types';
 import { color, ARABIC_FAMILY, FRAUNCES_ITALIC, MICRO_LABEL_COLOR, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { branchName } from '../domain/names';
@@ -21,33 +42,67 @@ interface Props {
   promotions: PromotionSet | null;
 }
 
+/** Whether a boost may be drawn at `now`: running, not stopped. Display only. */
+function boostOnDisplay(boost: Boost | undefined, now: Date): boost is Boost {
+  if (!boost) return false;
+  // The server writes neutral values with the stop, so this is belt and braces:
+  // a stop record is the fact to believe, whatever the multipliers say.
+  if (boost.stoppedAt !== null) return false;
+  return isBoostLive(boost, now);
+}
+
 /**
- * The multiplier badges. Both the multiplier and the boost percentage are
- * COUNTS, so Arabic renders them Eastern with the Arabic percent sign —
- * design/AVO Wallet Home.dc.html:1157-1158 writes `زيارات ×٢` and `+١٠٪ على
- * الشحن`. The copy module owns that; this only picks which string.
+ * The multiplier badge. The multiplier is a COUNT, so Arabic renders it Eastern
+ * — design/AVO Wallet Home.dc.html:1157 writes `زيارات ×٢`. The copy module owns
+ * that; this only picks which string. At most one badge now: the design's
+ * second, the top-up percentage (design:1158), is removed by ruling (header).
  */
 function badgesFor(
   branch: Branch,
   promotions: PromotionSet,
   mode: Salon['loyaltyMode'],
   copy: Copy,
+  now: Date,
 ): string[] {
   const boost = promotions.boosts[branch.id];
-  if (!boost) return [];
+  if (!boostOnDisplay(boost, now)) return [];
   const multiplier = mode === 'stamps' ? boost.stamp : boost.visit;
-  const badges: string[] = [];
-  if (multiplier > 1) {
-    badges.push(
-      mode === 'stamps' ? copy.stampsMultiplier(multiplier) : copy.visitsMultiplier(multiplier),
-    );
+  if (multiplier <= 1) return [];
+  return [mode === 'stamps' ? copy.stampsMultiplier(multiplier) : copy.visitsMultiplier(multiplier)];
+}
+
+/**
+ * The next instant any boost starts or ends, so the chips change at the
+ * boundary rather than on the next unrelated re-render. Null when none is
+ * ahead, or when it is further than a timer can wait (setTimeout's 32-bit
+ * delay) — a Home that stays open for 24 days re-renders long before then.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+function nextBoundaryMs(promotions: PromotionSet | null, now: number): number | null {
+  if (!promotions) return null;
+  let next: number | null = null;
+  for (const b of Object.values(promotions.boosts)) {
+    for (const edge of [b.startsAt, b.endsAt]) {
+      if (edge === null) continue;
+      const t = Date.parse(edge);
+      if (t > now && (next === null || t < next)) next = t;
+    }
   }
-  if (boost.topup > 0) badges.push(copy.topupBoost(boost.topup));
-  return badges;
+  return next !== null && next - now < MAX_TIMER_MS ? next - now : null;
 }
 
 export function BranchEarning({ salon, promotions }: Props) {
   const { lang, copy } = useLanguage();
+  // Re-read the clock at the next window edge. `now` is read at render, never
+  // stored, so the chips are a function of the clock and the published set.
+  const [, setTick] = useState(0);
+  const now = new Date();
+  const wait = nextBoundaryMs(promotions, now.getTime());
+  useEffect(() => {
+    if (wait === null) return undefined;
+    const id = setTimeout(() => setTick((n) => n + 1), wait + 1);
+    return () => clearTimeout(id);
+  }, [wait]);
   /**
    * NO PROMOTION SET, NO SECTION — not a section full of "Standard earning".
    *
@@ -64,7 +119,7 @@ export function BranchEarning({ salon, promotions }: Props) {
       <Text style={[text('label', lang), styles.sectionLabel]}>{copy.branchEarnLabel}</Text>
       <View style={styles.row}>
         {salon.branches.map((branch) => {
-          const badges = badgesFor(branch, promotions, salon.loyaltyMode, copy);
+          const badges = badgesFor(branch, promotions, salon.loyaltyMode, copy, now);
           return (
             <View key={branch.id} style={styles.chip}>
               {/*

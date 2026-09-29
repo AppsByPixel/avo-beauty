@@ -256,7 +256,8 @@ export const ar: Copy = {
   standardEarning: 'كسب اعتيادي', // design:1160
   visitsMultiplier: (n) => `زيارات ×${ea(n)}`, // design:1157
   stampsMultiplier: (n) => `أختام ×${ea(n)}`, // design:1157
-  topupBoost: (percent) => `+${ea(percent)}${PC} على الشحن`, // design:1158
+  // design:1158's top-up chip is removed by ruling: branch boosts lose the
+  // top-up bonus the server never paid (DECISIONS.md, 2026-09-29).
 
   // ----------------------------------------------------------- top-up card --
   topupTitle: 'اشحني محفظتك', // design:1281 — feminine imperative
