@@ -13,6 +13,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { z } from 'zod';
 import {
+  BoostSchema,
   BranchSchema,
   MemberSchema,
   PromotionSetSchema,
@@ -84,7 +85,8 @@ const CachedSchema = z.object({
  * that snapshot. The member, the balance and the transactions are parsed as
  * strictly as ever — this relaxes the two 0063 branch fields and (below) the
  * presence of 0065's `loyalty` on a transaction, nothing else, and the "a
- * balance we cannot vouch for" rule below is untouched.
+ * balance we cannot vouch for" rule below is untouched. 0067's boost window is
+ * the third upgrade, on the promotion set (below).
  *
  * A snapshot is a cache: the live read always follows and overwrites it, so a
  * branch override set since is at most as stale as every other cached field,
@@ -118,11 +120,36 @@ const LegacyCachedSchema = CachedSchema.extend({
      * ═════════════════════════════════════════════════════════════════════════
      */
     transactions: z.array(TransactionSchema.partial({ loyalty: true })),
+    /**
+     * ═════════════════════════════════════════════════════════════════════════
+     * BOOSTS CACHED BEFORE MIGRATION 0067 — THE SAME HAZARD, FOUR KEYS.
+     *
+     * 0067 put `startsAt`, `endsAt`, `stoppedAt` and `stoppedBy` on
+     * `BoostSchema`, required on the wire and nullable (trunk 7646bb8). A
+     * snapshot written by the previous build holds boosts of `{ visit, topup,
+     * stamp }` alone, so read strictly the whole snapshot fails and Home
+     * cold-starts — offline, the failure screen.
+     *
+     * Upgraded to `null` on each, and that invents nothing: a boost from before
+     * 0067 had no window and could not be stopped, and null/null/null/null is
+     * precisely what the server serves for such a row — running, unbounded,
+     * never stopped. `BranchEarning` resolves it with `isBoostLive` exactly as
+     * it would the live read's. `.partial` relaxes PRESENCE only: a window that
+     * is present and malformed still fails, and `visit`/`topup`/`stamp` are as
+     * strict as ever.
+     * ═════════════════════════════════════════════════════════════════════════
+     */
+    promotions: PromotionSetSchema.extend({
+      boosts: z.record(
+        z.string(),
+        BoostSchema.partial({ startsAt: true, endsAt: true, stoppedAt: true, stoppedBy: true }),
+      ),
+    }).nullable(),
   }),
 });
 
 function upgradeLegacy(cached: z.infer<typeof LegacyCachedSchema>): CachedSnapshot {
-  const { salon, transactions } = cached.snapshot;
+  const { salon, transactions, promotions } = cached.snapshot;
   return {
     ...cached,
     snapshot: {
@@ -136,19 +163,38 @@ function upgradeLegacy(cached: z.infer<typeof LegacyCachedSchema>): CachedSnapsh
         })),
       },
       transactions: transactions.map((t) => ({ ...t, loyalty: t.loyalty ?? null })),
+      promotions:
+        promotions === null
+          ? null
+          : {
+              ...promotions,
+              boosts: Object.fromEntries(
+                Object.entries(promotions.boosts).map(([branchId, b]) => [
+                  branchId,
+                  {
+                    ...b,
+                    startsAt: b.startsAt ?? null,
+                    endsAt: b.endsAt ?? null,
+                    stoppedAt: b.stoppedAt ?? null,
+                    stoppedBy: b.stoppedBy ?? null,
+                  },
+                ]),
+              ),
+            },
     },
   } as CachedSnapshot;
 }
 
 /**
  * The stored body, or null for "nothing usable — refetch". Exported so the
- * upgrade specs can hand it a pre-0063 / pre-0065 body without a storage double.
+ * upgrade specs can hand it a pre-0063 / pre-0065 / pre-0067 body without a
+ * storage double.
  */
 export function parseSnapshot(raw: unknown): CachedSnapshot | null {
   const parsed = CachedSchema.safeParse(raw);
   if (parsed.success) return parsed.data as CachedSnapshot;
-  // One legacy schema for both upgrades, so a snapshot from before 0063 AND
-  // 0065 — a device that skipped a release — upgrades in one pass.
+  // One legacy schema for every upgrade, so a snapshot from before 0063, 0065
+  // AND 0067 — a device that skipped releases — upgrades in one pass.
   const legacy = LegacyCachedSchema.safeParse(raw);
   if (legacy.success) return upgradeLegacy(legacy.data);
   // A snapshot written by an older contract is discarded rather than coerced:
