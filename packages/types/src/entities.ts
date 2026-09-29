@@ -178,6 +178,18 @@ export const SalonSchema = z.object({
   city: z.string().nullable(),
   /** Drives the white-label token. Validated through deriveBrandSet at onboarding. */
   brandColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  /**
+   * What colours the wallet's main card (Aftab, 2026-09-29). `tier` — the
+   * member's tier metal (silver is silver, gold is gold), the default. `brand` —
+   * the workspace's own colour, whatever her tier: a workspace that chose its
+   * theme (the dark-green `forest` preset, say) keeps it on every card.
+   *
+   * `.default('tier')` ON PURPOSE, not the house `.nullable()`: an API that
+   * predates the field sends nothing, and nothing must mean today's behaviour.
+   * A missing key parses to `tier`; it can never parse to a card the salon did
+   * not choose.
+   */
+  walletCard: z.enum(['tier', 'brand']).default('tier'),
   modules: z.object({ booking: z.boolean(), shop: z.boolean() }),
   loyaltyMode: z.enum(['tiers', 'stamps']),
   tiers: z.array(TierSchema).optional(),

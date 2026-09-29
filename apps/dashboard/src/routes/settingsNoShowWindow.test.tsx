@@ -77,6 +77,7 @@ const SALON: Salon = {
   city: 'Kuwait City',
   // A tenant's own hex, SAL-LUMIERE's — see `settingsSocialLinks.test.tsx`.
   brandColor: '#7A5C8E',
+  walletCard: 'tier',
   modules: { booking: true, shop: false },
   loyaltyMode: 'tiers',
   tiers: [{ name: 'bronze', minVisits: 0, bonusPercent: 0 }],

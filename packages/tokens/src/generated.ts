@@ -74,6 +74,15 @@ export const tokens = {
       "cardTo": "#786A9B",
       "whiteOnDeep": "5.88:1",
       "whiteOnBrand": "3.76:1"
+    },
+    "forest": {
+      "brand": "#1F5A36",
+      "deep": "#1F5A36",
+      "tint": "#E1F5E8",
+      "cardFrom": "#277144",
+      "cardTo": "#153C24",
+      "whiteOnDeep": "8.16:1",
+      "whiteOnBrand": "8.16:1"
     }
   },
   "tier": {

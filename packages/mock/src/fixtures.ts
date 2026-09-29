@@ -40,6 +40,7 @@ export const salon: Salon = {
   city: 'Kuwait City',
   plan: 'growth',
   brandColor: '#6E7F6C',
+  walletCard: 'tier',
   // Both default OFF — AVO-Beauty-Product-Description-v2.md §2.3. The pilot runs
   // without them; flip these to exercise the module-on states.
   modules: { booking: false, shop: false },

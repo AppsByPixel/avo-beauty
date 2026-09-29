@@ -207,6 +207,7 @@ const SALON: Salon = {
    * arbitrary tenant colour across the dashboard's fixtures.
    */
   brandColor: '#7A5C8E',
+  walletCard: 'tier',
   modules: { booking: false, shop: false },
   loyaltyMode: 'tiers',
   tiers: [{ name: 'bronze', minVisits: 0, bonusPercent: 0 }],

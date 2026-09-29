@@ -16,9 +16,28 @@ const presets = tokens.brandPresets as Record<
   { brand: string; deep: string; tint: string; cardFrom: string; cardTo: string }
 >;
 
-describe('the three shipped presets', () => {
-  it.each(Object.entries(presets))('%s: white FAILS on brand — this is why #9 exists', (_name, p) => {
+/**
+ * The light presets are the reason #9 exists: white fails on their brand, so a
+ * filled control must use `deep`. `forest` (2026-09-29, the dark-green theme a
+ * workspace can choose) is dark enough that white passes on brand too — which is
+ * the safe direction, not an exception to #9: the rule is "white goes on deep",
+ * and forest's deep IS its brand. Scoped by name rather than by measuring, so a
+ * light preset that drifted dark would still go red here.
+ */
+const DARK_PRESETS = new Set(['forest']);
+const lightPresets = Object.entries(presets).filter(([name]) => !DARK_PRESETS.has(name));
+const darkPresets = Object.entries(presets).filter(([name]) => DARK_PRESETS.has(name));
+
+describe('the shipped presets', () => {
+  it.each(lightPresets)('%s: white FAILS on brand — this is why #9 exists', (_name, p) => {
     expect(contrastWithWhite(p.brand)).toBeLessThan(MIN_WHITE_CONTRAST);
+  });
+
+  it.each(darkPresets)('%s: a dark preset is its own deep, and white clears it', (_name, p) => {
+    expect(p.deep).toBe(p.brand);
+    expect(contrastWithWhite(p.brand)).toBeGreaterThanOrEqual(MIN_WHITE_CONTRAST);
+    expect(contrastWithWhite(p.cardFrom)).toBeGreaterThanOrEqual(MIN_WHITE_CONTRAST);
+    expect(contrastWithWhite(p.cardTo)).toBeGreaterThanOrEqual(MIN_WHITE_CONTRAST);
   });
 
   it.each(Object.entries(presets))('%s: white PASSES on the shipped deep', (_name, p) => {

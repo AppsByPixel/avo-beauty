@@ -89,6 +89,7 @@ const SALON: Salon = {
   plan: 'growth',
   city: 'Kuwait City',
   brandColor: '#6E7F6C',
+  walletCard: 'tier',
   modules: { booking: false, shop: false },
   loyaltyMode: 'tiers',
   tiers: [{ name: 'bronze', minVisits: 0, bonusPercent: 0 }],
