@@ -17,6 +17,9 @@
  * alphas because they are composited locally rather than declared as tokens.
  */
 
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { AA_NORMAL_TEXT, contrastRatio } from '@avo/tokens';
 import { color, dark, onBrandFill, FOCUS_RING_LIGHT } from './index';
@@ -145,5 +148,217 @@ describe('the light focus ring', () => {
 
   it('and clears the 3:1 non-text floor against the surface it sits on', () => {
     expect(contrastRatio(FOCUS_RING_LIGHT, color.surface)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// --------------------------------------------------------------- the source --
+
+const SRC = join(__dirname, '..');
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) return walk(full);
+    return full.endsWith('.tsx') && !full.includes('.test.') ? [full] : [];
+  });
+}
+
+const FILES = walk(SRC);
+
+// ------------------------- #9 across style entries: the split-entry pairing --
+
+/**
+ * WHITE ON `brand` WHEN THE FILL AND THE TEXT LIVE IN DIFFERENT STYLE ENTRIES.
+ *
+ * Ported from the wallet's `src/theme/contrast.test.ts`, where it was written
+ * against the wallet's booking tick: the fill on the `View` (`tickOn`), the
+ * white on the `Text` inside it (`tickMark`). Each entry was innocent alone and
+ * the pair was a #9 violation at ~3.5:1. The wallet header measures why that
+ * shape is the norm — a text colour and its background are almost never in the
+ * same entry — and the scanner has no same-entry scan at all, so here this is
+ * the only source check of #9 beyond the `onBrandFill` constant.
+ *
+ * So this resolves the JSX, not the style table. It parses every `.tsx` with the
+ * TypeScript compiler, maps each `StyleSheet.create` entry to its fill and its
+ * text colour, and for every element whose `style` can resolve to a `color.brand`
+ * fill — unconditionally or behind a `selected &&` — it walks that element and
+ * its JSX descendants for anything painted white: a style entry whose `color` is
+ * white, an inline `{ color: WHITE }`, or an icon prop (`color`, `tintColor`,
+ * `fill`, `stroke`). A descendant that paints its own non-brand background ends
+ * the walk, because what sits inside it sits on that instead.
+ *
+ * WHAT IT STILL CANNOT SEE: a fill in one component and the white text in a
+ * CHILD COMPONENT defined elsewhere (`<Fill><Badge /></Fill>`, where `Badge`
+ * sets the white). Resolving that is rendering. Every current brand fill is a
+ * leaf or holds its content inline — read by hand for this change, not proved
+ * by the scan. The floor test below only proves the scan is finding fills.
+ */
+
+const WHITE_RAW = /^(WHITE|color\.white|dark\.text|onBrandFill\.color|'#fff(fff)?'|"#fff(fff)?"|'white'|"white")$/i;
+const BRAND_FILL_RAW = /^color\.brand$/;
+const ICON_COLOUR_PROPS = new Set(['color', 'tintColor', 'fill', 'stroke']);
+
+type Paint = { bg?: string; fg?: string };
+
+/** `styles.tickOn` → `{ bg: 'color.brand' }`, for every `StyleSheet.create` in the file. */
+function styleTable(sf: ts.SourceFile): Map<string, Paint> {
+  const table = new Map<string, Paint>();
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      node.initializer.expression.getText(sf) === 'StyleSheet.create' &&
+      node.initializer.arguments[0] &&
+      ts.isObjectLiteralExpression(node.initializer.arguments[0])
+    ) {
+      for (const prop of node.initializer.arguments[0].properties) {
+        if (!ts.isPropertyAssignment(prop) || !ts.isObjectLiteralExpression(prop.initializer)) continue;
+        table.set(`${node.name.text}.${prop.name.getText(sf)}`, paintOf(prop.initializer, sf));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return table;
+}
+
+function paintOf(obj: ts.ObjectLiteralExpression, sf: ts.SourceFile): Paint {
+  const paint: Paint = {};
+  for (const p of obj.properties) {
+    if (!ts.isPropertyAssignment(p)) continue;
+    const key = p.name.getText(sf);
+    if (key === 'backgroundColor') paint.bg = p.initializer.getText(sf).trim();
+    if (key === 'color') paint.fg = p.initializer.getText(sf).trim();
+  }
+  return paint;
+}
+
+/** Every paint a `style={...}` expression can resolve to, across arrays, `&&` and ternaries. */
+function stylePaints(el: ts.JsxOpeningLikeElement, table: Map<string, Paint>, sf: ts.SourceFile) {
+  const found: Array<{ ref: string; paint: Paint }> = [];
+  for (const attr of el.attributes.properties) {
+    if (!ts.isJsxAttribute(attr) || attr.name.getText(sf) !== 'style') continue;
+    const walkExpr = (n: ts.Node): void => {
+      if (ts.isPropertyAccessExpression(n)) {
+        const ref = n.getText(sf);
+        const paint = table.get(ref);
+        if (paint) found.push({ ref, paint });
+      } else if (ts.isObjectLiteralExpression(n)) {
+        found.push({ ref: 'inline', paint: paintOf(n, sf) });
+        return;
+      }
+      ts.forEachChild(n, walkExpr);
+    };
+    if (attr.initializer) walkExpr(attr.initializer);
+  }
+  return found;
+}
+
+function paintsWhite(el: ts.JsxOpeningLikeElement, table: Map<string, Paint>, sf: ts.SourceFile): string | null {
+  const viaStyle = stylePaints(el, table, sf).find(({ paint }) => paint.fg && WHITE_RAW.test(paint.fg));
+  if (viaStyle) return viaStyle.ref;
+  for (const attr of el.attributes.properties) {
+    if (!ts.isJsxAttribute(attr) || !attr.initializer) continue;
+    const name = attr.name.getText(sf);
+    if (!ICON_COLOUR_PROPS.has(name)) continue;
+    const raw = ts.isJsxExpression(attr.initializer)
+      ? (attr.initializer.expression?.getText(sf).trim() ?? '')
+      : attr.initializer.getText(sf).trim();
+    if (WHITE_RAW.test(raw)) return `${name}=${raw}`;
+  }
+  return null;
+}
+
+const opening = (n: ts.Node): ts.JsxOpeningLikeElement | null =>
+  ts.isJsxElement(n) ? n.openingElement : ts.isJsxSelfClosingElement(n) ? n : null;
+
+/** Every white glyph, icon or text that can sit on a `color.brand` fill, in one file's source. */
+function whiteOnBrandFill(source: string, file = 'fixture.tsx') {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const table = styleTable(sf);
+  const fills: string[] = [];
+  const offenders: string[] = [];
+  const at = (n: ts.Node) => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+
+  const underFill = (n: ts.Node, fillRef: string): void => {
+    const el = opening(n);
+    if (el) {
+      const paints = stylePaints(el, table, sf);
+      const ownGround = paints.find(
+        ({ paint }) => paint.bg && !BRAND_FILL_RAW.test(paint.bg) && paint.bg !== "'transparent'",
+      );
+      if (ownGround) return;
+      const white = paintsWhite(el, table, sf);
+      if (white) offenders.push(`${at(n)} ${white} on ${fillRef}`);
+    }
+    ts.forEachChild(n, (c) => underFill(c, fillRef));
+  };
+
+  const visit = (n: ts.Node): void => {
+    const el = opening(n);
+    const fill = el && stylePaints(el, table, sf).find(({ paint }) => paint.bg && BRAND_FILL_RAW.test(paint.bg));
+    if (el && fill) {
+      fills.push(`${at(n)} ${fill.ref}`);
+      const self = paintsWhite(el, table, sf);
+      if (self) offenders.push(`${at(n)} ${self} on ${fill.ref}`);
+      if (ts.isJsxElement(n)) for (const c of n.children) underFill(c, fill.ref);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { fills, offenders };
+}
+
+/**
+ * The old booking tick, verbatim in shape: fill on the `View`, white on the
+ * `Text` inside it, each in its own entry, the fill behind `selected &&`. Kept as
+ * a fixture so the scan is proved able to fail on the thing it was written for,
+ * rather than trusted to.
+ */
+const OLD_TICK = `
+  const styles = StyleSheet.create({
+    tick: { width: 22, borderColor: color.borderControl },
+    tickOn: { backgroundColor: color.brand, borderColor: color.brand },
+    tickMark: { color: WHITE, fontSize: 12 },
+    deep: { backgroundColor: color.brandDeep },
+  });
+  export const Tick = ({ selected }) => (
+    <View style={[styles.tick, selected && styles.tickOn]}>
+      {selected ? <Text style={[text('bodyS'), styles.tickMark]}>✓</Text> : null}
+    </View>
+  );
+  export const Icon = () => <View style={styles.tickOn}><Check color={WHITE} /></View>;
+  export const Grounded = () => (
+    <View style={styles.tickOn}><View style={styles.deep}><Text style={styles.tickMark}>ok</Text></View></View>
+  );
+`;
+
+describe('non-negotiable #9 across style entries — white never inside a brand fill', () => {
+  it('catches the split shape the booking tick had, and a white icon prop', () => {
+    const { offenders } = whiteOnBrandFill(OLD_TICK);
+    expect(offenders).toEqual([
+      'fixture.tsx:10 styles.tickMark on styles.tickOn',
+      'fixture.tsx:13 color=WHITE on styles.tickOn',
+    ]);
+  });
+
+  it('does not flag white that sits on its own non-brand ground inside the fill', () => {
+    const { fills, offenders } = whiteOnBrandFill(OLD_TICK);
+    expect(fills).toHaveLength(3);
+    expect(offenders.some((o) => o.startsWith('fixture.tsx:15'))).toBe(false);
+  });
+
+  const SCANNED = FILES.map((f) => whiteOnBrandFill(readFileSync(f, 'utf8'), f.replace(SRC, '')));
+
+  /** A green bought with nothing: if the JSX stops resolving, this goes red first. */
+  it('found brand fills in the JSX to check at all', () => {
+    expect(SCANNED.flatMap((s) => s.fills).length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('puts no white glyph, icon or text on a `color.brand` fill anywhere in the scanner', () => {
+    expect(SCANNED.flatMap((s) => s.offenders)).toEqual([]);
   });
 });

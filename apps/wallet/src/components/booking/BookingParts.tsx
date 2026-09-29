@@ -634,7 +634,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tickOn: { backgroundColor: color.brand, borderColor: color.brand },
+  // A white ✓ sits on this fill, so it is `onBrandFill` like the day chip and
+  // the slot — it was `color.brand`, white on brand at ~3.5:1 and a #9 defect
+  // the same-entry scan could not see because `tickMark` holds the white.
+  tickOn: { backgroundColor: onBrandFill.backgroundColor, borderColor: color.brandDeep },
   tickMark: { color: WHITE, fontSize: 12, lineHeight: 14 },
 
   dayChip: {
