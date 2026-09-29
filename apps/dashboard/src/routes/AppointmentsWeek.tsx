@@ -809,8 +809,8 @@ export function UnusableZone({ zone, onShowList }: { zone: string; onShowList: (
 /**
  * NOTHING BOOKED, AND IT IS A DIFFERENT EMPTY FROM THE LIST'S TWO.
  *
- * `Appointments.tsx` has "Booking is switched off" and "No appointments this
- * week" — the second of which is about the whole board. This one is about SEVEN
+ * `Appointments.tsx` has "Booking is switched off" and "No appointments
+ * yet" — the second of which is about the whole board. This one is about SEVEN
  * NAMED DAYS and it is only reachable once `windowCoverage` says the week is
  * whole, so it is the one empty on this screen that is a measured fact rather
  * than the absence of an answer. It names the dates so that a merchant who has

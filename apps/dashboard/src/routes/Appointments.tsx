@@ -116,7 +116,7 @@ const STATUS_OPTIONS = [
  * `AVO States.dc.html`: "Two different empties: nothing booked yet, versus the
  * Booking module switched off. Never show the same copy for both." They are not
  * two phrasings of one condition — they are different facts with different
- * fixes. "No appointments this week" tells a salon that takes bookings that
+ * fixes. "No appointments yet" tells a salon that takes bookings that
  * nobody has booked; shown to a salon with the module off it is a lie, because
  * nobody *can* book. The switched-off empty carries the action that resolves it.
  */
@@ -977,8 +977,17 @@ export function Appointments() {
                   */
                   <tr>
                     <td colSpan={6} className="appts__empty">
+                      {/*
+                        "This week" is the one preset the design's own title is
+                        true of, so that preset gets it — with the days named, as
+                        every filtered empty names them.
+                      */}
                       <EmptyState
-                        title="No appointments in this range"
+                        title={
+                          dates.preset === 'week'
+                            ? 'No appointments this week'
+                            : 'No appointments in this range'
+                        }
                         body={`Nothing is booked ${rangeClause(range)}.`}
                       />
                     </td>
@@ -986,12 +995,20 @@ export function Appointments() {
                 ) : rows.length === 0 ? (
                   /*
                     THE NOTHING-BOOKED-YET EMPTY. Reached only when the module is
-                    ON and the server genuinely returned no rows.
+                    ON, the filter is "All dates", and the server genuinely
+                    returned no rows.
+
+                    NOT "No appointments this week". That is the design's title
+                    (`AVO States.dc.html:187`) for a board that showed one week;
+                    this one, under "All dates", asked for the whole book, and a
+                    salon with nothing booked next month was being told something
+                    about this week only. The design's title moved to the "This
+                    week" filter above, where it is exactly true.
                   */
                   <tr>
                     <td colSpan={6} className="appts__empty">
                       <EmptyState
-                        title="No appointments this week"
+                        title="No appointments yet"
                         body="Bookings from the customer app land here as soon as they're made."
                       />
                     </td>

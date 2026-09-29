@@ -1009,7 +1009,20 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
               <div className="wiz__row">
                 <div>
                   <div className="wiz__rowlabel">Booking deposit</div>
-                  <div className="wiz__rowsub">Auto-returned an hour after a missed slot</div>
+                  {/*
+                    NOT THE DESIGN'S "Auto-returned an hour after a missed slot"
+                    (`AVO Owner Console.dc.html`). That is true only of a salon
+                    with no booking policy — which is every salon on the day it is
+                    onboarded (the window defaults to 60 minutes), and none once it
+                    publishes one: from then on a missed slot keeps or returns the
+                    deposit by the salon's own rule (migration 0066, DECISIONS
+                    "Booking policy"). This sentence is read once, at onboarding,
+                    and outlives that day, so it says both halves.
+                  */}
+                  <div className="wiz__rowsub">
+                    Returned an hour after a missed slot, until the salon publishes its booking
+                    policy
+                  </div>
                 </div>
                 {/*
                   INTEGER FILS in, integer fils out, and `<Money>` is the only place

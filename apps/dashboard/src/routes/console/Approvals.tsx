@@ -23,6 +23,8 @@ import {
 import { campaignRewardLabel } from '../../api/promotions.js';
 import { SectionError, WriteError } from '../sectionState.js';
 import { enumParam, useUrlFilters } from '../listFilters.js';
+import { viewerZone } from '../salonTime.js';
+import { PLATFORM_CAMPAIGNS_CAP, thisMonthCohort, type MonthCohort } from './approvalsMonth.js';
 
 /**
  * Approvals — where non-negotiable #8 is satisfied or broken.
@@ -269,7 +271,11 @@ export function Approvals() {
           )}
         </div>
 
-        <ThrottlePanel policy={policy} items={items} awaiting={pending.length} />
+        <ThrottlePanel
+          policy={policy}
+          month={campaigns.data ? thisMonthCohort(campaigns.data, new Date(), viewerZone()) : null}
+          awaiting={pending.length}
+        />
       </div>
     </div>
   );
@@ -532,11 +538,12 @@ function DecidedRow({ campaign: c }: { campaign: Campaign }) {
 
 function ThrottlePanel({
   policy,
-  items,
+  month,
   awaiting,
 }: {
   policy: ReturnType<typeof useMessagingPolicy>;
-  items: Campaign[];
+  /** This month's submissions — `approvalsMonth.ts`. `null` until the read lands: no premature zeros. */
+  month: MonthCohort | null;
   /** From the `?status=pending` read, so it agrees with the queue beside it. */
   awaiting: number;
 }) {
@@ -637,17 +644,46 @@ function ThrottlePanel({
         that reads as done. `Sent` is added for the same reason: "approved" and
         "delivered" were one number, and #8's whole subject is the gap between them.
       */}
+      {/*
+        THE MONTH IS NOW THE MONTH. Every row but "Awaiting review" counts the
+        campaigns SUBMITTED this calendar month, in each state they are in now —
+        `approvalsMonth.ts` carries why that is the most the API allows and when
+        it is exact. "Awaiting review" stays the pending read's count so it agrees
+        with the queue beside it: a campaign submitted last month and still
+        unreviewed is still waiting on this reviewer.
+      */}
       <Card className="approvals__stats">
         <h2 className="approvals__h2 avo-display">This month</h2>
-        <StatRow label="Submitted" value={items.length} />
-        <StatRow label="Awaiting review" value={awaiting} />
-        <StatRow label="Sent" value={items.filter((c) => c.status === 'sent').length} />
-        <StatRow
-          label="Approved, not yet sent"
-          value={items.filter((c) => c.status === 'approved' && !isCampaignHeld(c)).length}
-        />
-        <StatRow label="Held" value={items.filter(isCampaignHeld).length} />
-        <StatRow label="Rejected" value={items.filter((c) => c.status === 'rejected').length} />
+        {month === null ? (
+          <>
+            <Skeleton width="100%" height={20} />
+            <Skeleton width="100%" height={20} />
+            <Skeleton width="100%" height={20} />
+          </>
+        ) : (
+          <>
+            <StatRow label="Submitted" value={month.items.length} />
+            <StatRow label="Awaiting review" value={awaiting} />
+            <StatRow label="Sent" value={month.items.filter((c) => c.status === 'sent').length} />
+            <StatRow
+              label="Approved, not yet sent"
+              value={
+                month.items.filter((c) => c.status === 'approved' && !isCampaignHeld(c)).length
+              }
+            />
+            <StatRow label="Held" value={month.items.filter(isCampaignHeld).length} />
+            <StatRow
+              label="Rejected"
+              value={month.items.filter((c) => c.status === 'rejected').length}
+            />
+            {month.truncated ? (
+              <p className="approvals__statnote">
+                Counted from the newest {PLATFORM_CAMPAIGNS_CAP} campaigns, all from this month —
+                there may be more, so read these as at least.
+              </p>
+            ) : null}
+          </>
+        )}
       </Card>
     </aside>
   );

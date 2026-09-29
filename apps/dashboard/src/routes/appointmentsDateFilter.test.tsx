@@ -176,9 +176,23 @@ describe('the states', () => {
     expect(screen.queryByText('No appointments this week')).toBeNull();
   });
 
-  it('the unfiltered empty is unchanged', async () => {
+  /**
+   * "All dates" asked for the whole book, so its empty says the whole book is
+   * empty. It said "No appointments this week" — the design's title for a board
+   * that showed one week — under a filter that is not a week.
+   */
+  it('the unfiltered empty speaks for the whole book, not for this week', async () => {
     mount();
+    await screen.findByText('No appointments yet');
+    expect(screen.queryByText('No appointments this week')).toBeNull();
+    expect(screen.queryByText('No appointments in this range')).toBeNull();
+  });
+
+  it('"This week" is where the design’s "No appointments this week" is true, with the days named', async () => {
+    mount();
+    choose('This week');
     await screen.findByText('No appointments this week');
+    expect(screen.getByText('Nothing is booked between 27 Sep 2026 and 3 Oct 2026.')).toBeTruthy();
     expect(screen.queryByText('No appointments in this range')).toBeNull();
   });
 
