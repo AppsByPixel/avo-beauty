@@ -2236,3 +2236,22 @@ with ten days' notice.
 - The server resolves the boost with `isBoostLive` at charge time.
 - A top-up has no branch, so a branch boost's `topup` bonus never applies to a top-up, running or
   not. That was true before this change too.
+
+**Branch boosts lose the top-up bonus. Aftab ruled, 2026-09-29: "Remove it from boosts".**
+- **What was wrong.** The dashboard let a merchant set a branch's "Top-up bonus", and the wallet
+  showed a "+10% top-ups" chip on that branch. The server never paid it. A top-up happens in the
+  app and has no branch, so `decideEarning` never finds a branch boost for it. The design draws
+  this, so it was a promise of money that predates this work.
+- **The ruling.** Branch boosts keep visits and stamps only. Top-up bonuses remain where they are
+  actually paid: tiers and happy hours.
+- **How it is built.**
+  - Existing boost rows have `topup` set to 0.
+  - A CHECK holds it at 0, and the PUT refuses a non-zero value.
+  - The wire field stays, always 0, so installed apps keep parsing. Removing it would be a
+    four-way break for no gain.
+  - The dashboard stepper and the wallet chip go.
+
+**The salon's cancel takes an Idempotency-Key (non-negotiable #4).** Lane D found that
+`POST /salons/{id}/bookings/{id}/cancel` returns money without a key. Its status checks prevent a
+double refund, but a retry cannot get the original answer back. The ruling is that the dashboard
+sends a key and the API requires it. The dashboard deploys before the API, as it already must.
