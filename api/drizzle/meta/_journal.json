@@ -484,6 +484,13 @@
       "when": 1790915600000,
       "tag": "0068_a_branch_boost_pays_no_top_up",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1791002000000,
+      "tag": "0069_a_workspace_keeps_its_own_card",
+      "breakpoints": true
     }
   ]
 }

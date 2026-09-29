@@ -36,7 +36,7 @@ import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { product } from '../db/schema/product';
-import { branch, salon } from '../db/schema/salon';
+import { branch, salon, WALLET_CARDS, type WalletCard } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { staffUser } from '../db/schema/staff';
 import {
@@ -146,6 +146,15 @@ export const MERCHANT_EDITABLE = new Set([
    * on one of two doors into one column is the hole the tier ladder had.
    */
   'brandColor',
+  /**
+   * `'tier' | 'brand'` — whether the wallet's main card wears her tier metal or
+   * this salon's own colour (migration 0069, Aftab 2026-09-29). Beside
+   * `brandColor` because it is the same decision about the same surface, so it
+   * takes the same door and the same gate: `perms.loyalty` here, `salons` on
+   * the console's superset. Validated by `parseWalletCard`, audited in the same
+   * "Salon settings changed" row as a brand change.
+   */
+  'walletCard',
   /**
    * `loyaltyMode`, `tiers`, `stampTarget`, `stampReward` and `stampRewardAr`
    * WERE HERE, AND ARE NOW CONSOLE-ONLY. See `LOYALTY_FIELDS` below: loyalty
@@ -343,6 +352,25 @@ export function parseDepositFils(value: unknown): Fils {
 }
 
 /**
+ * `walletCard`, refused at the door with a sentence rather than at
+ * `salon_wallet_card_known` with a 500. EXPORTED for `POST /v1/platform/salons`,
+ * so the create door and both edit doors say the same thing.
+ *
+ * No trimming, no case folding: the value is an enum on the wire
+ * (`SalonSchema.walletCard`), and `"Brand"` is a client bug to surface, not a
+ * spelling to forgive.
+ */
+export function parseWalletCard(value: unknown): WalletCard {
+  if (typeof value === 'string' && (WALLET_CARDS as readonly string[]).includes(value)) {
+    return value as WalletCard;
+  }
+  throw badRequest(
+    'invalid_wallet_card',
+    `walletCard must be one of ${WALLET_CARDS.map((v) => `"${v}"`).join(' or ')}.`,
+  );
+}
+
+/**
  * THE NO-SHOW RETURN WINDOW HAD NO CEILING, and one number is TWO windows.
  *
  * This guard refused only `<= 0`, so `525600` was accepted and stored — one year
@@ -485,6 +513,7 @@ export interface SalonView {
   city: string | null;
   plan: SalonRow['plan'];
   brandColor: string;
+  walletCard: WalletCard;
   modules: { booking: boolean; shop: boolean };
   loyaltyMode: SalonRow['loyaltyMode'];
   tiers: SalonRow['tiers'];
@@ -551,6 +580,12 @@ export function serialiseSalon(
     city: s.city,
     plan: s.plan,
     brandColor: s.brandColor,
+    /**
+     * Beside the colour it can put on the card. ALWAYS EMITTED — `SalonSchema`
+     * defaults a missing key to `tier`, which is right for an API that predates
+     * the field and wrong as a way for this one to say it.
+     */
+    walletCard: s.walletCard,
     modules: { booking: s.moduleBooking, shop: s.moduleShop },
     loyaltyMode: s.loyaltyMode,
     tiers: s.tiers,
@@ -735,6 +770,7 @@ export function buildSalonPatch(
   // because that CHECK only asks whether the string is a hex, and #9 asks
   // whether the hex can carry white text. See services/brandColor.ts.
   if ('brandColor' in body) patch.brandColor = parseBrandColor(body.brandColor);
+  if ('walletCard' in body) patch.walletCard = parseWalletCard(body.walletCard);
   if ('depositFils' in body) patch.depositFils = parseDepositFils(body.depositFils);
   if ('noShowReturnMinutes' in body) {
     patch.noShowReturnMinutes = parseNoShowReturnMinutes(body.noShowReturnMinutes);
@@ -848,7 +884,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    *
    * IT USED TO SAY "the loyalty editor writes through here", AND THAT IS NO
    * LONGER TRUE. The five loyalty fields left `MERCHANT_EDITABLE` when loyalty
-   * authority moved to AVO; this route now carries brand colour, deposit,
+   * authority moved to AVO; this route now carries brand colour, wallet card, deposit,
    * modules, timezone, business hours, social and the Arabic name — settings,
    * not rules. `perms.loyalty` survives as the gate on that screen, which is a
    * narrower meaning than the name suggests. routes/loyalty.ts and the

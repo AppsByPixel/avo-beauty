@@ -148,6 +148,16 @@ describe('brandColor, non-negotiable #9 second clause', () => {
     expect(input.brandColor).toBe('#7a5c8e');
   });
 
+  it('creates a salon on the tier card unless it names the brand card (migration 0069)', () => {
+    expect(parseOnboardInput({ ...MINIMUM_BODY }, PLATFORM_DEFAULT_DEPOSIT).walletCard).toBe('tier');
+    expect(
+      parseOnboardInput({ ...MINIMUM_BODY, walletCard: 'brand' }, PLATFORM_DEFAULT_DEPOSIT).walletCard,
+    ).toBe('brand');
+    expect(
+      refusal(() => parseOnboardInput({ ...MINIMUM_BODY, walletCard: 'green' }, PLATFORM_DEFAULT_DEPOSIT)).code,
+    ).toBe('invalid_wallet_card');
+  });
+
   it.each(['#FFFF00', '#FFFFFF'])('refuses %s with the deriver’s own reason', (hex) => {
     const err = refusal(() => parseBrandColor(hex));
     expect(err.statusCode).toBe(400);
