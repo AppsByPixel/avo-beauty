@@ -9,7 +9,7 @@
  * 1. SINGLE USE. Consumption is one conditional update, not a read-then-write:
  *
  *      UPDATE wallet_token
- *         SET consumed_at = now(), consumed_by_staff_id = $2,
+ *         SET consumed_at = greatest(now(), issued_at), consumed_by_staff_id = $2,
  *             consumed_by_transaction_id = $3
  *       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
  *      RETURNING member_id;
@@ -21,6 +21,13 @@
  * 2. SHORT EXPIRY. The design rotates every 45 seconds. The CHECK below caps any
  *    token at two minutes of life whatever the caller passes, so a config typo
  *    or a future handler cannot mint a long-lived bearer credential for a wallet.
+ *
+ * 3. ONE CLOCK. `issued_at`, `expires_at` and `consumed_at` are all written from
+ *    the database's `now()`, never from the API's `new Date()`. The two CHECKs
+ *    below compare those columns with each other, so a column written by another
+ *    machine's clock turns them into a test of clock skew — which is how
+ *    `wallet_token_consumed_after_issue` refused five charges on trunk's gate.
+ *    services/walletToken.ts § ONE CLOCK has the incident and the choice.
  *
  * The raw token is never stored — only its sha256. It is returned once, at mint.
  * A token is a bearer credential that authorises a debit; a database backup
