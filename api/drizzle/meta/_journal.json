@@ -477,6 +477,13 @@
       "when": 1790829200000,
       "tag": "0067_a_late_move_keeps_its_return_and_a_boost_that_ends",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1790915600000,
+      "tag": "0068_a_branch_boost_pays_no_top_up",
+      "breakpoints": true
     }
   ]
 }

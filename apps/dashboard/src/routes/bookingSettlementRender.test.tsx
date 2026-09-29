@@ -51,6 +51,7 @@ const BASE: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: STAMP,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',

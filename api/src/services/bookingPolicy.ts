@@ -63,6 +63,7 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import {
   fils,
+  percentOfFloor,
   subtract,
   type BookingPolicy,
   type BookingPolicyStamp,
@@ -273,25 +274,22 @@ export function parsePolicyInput(body: unknown): PolicyInput {
  * `returnPercent` of the deposit, ROUNDED DOWN TO THE FIL; the salon keeps the
  * remainder fil. The ruling, verbatim.
  *
- * NOT `percentOf` FROM @avo/types, and this is the finding rather than a
- * preference: `percentOf` is `Math.round(amount * percent / 100)` — half-UP, and
- * through a float division. At 50% of 5.005 KD it returns 2503 and the ruling
- * says 2502. Integer arithmetic instead: `product` is an exact integer (a deposit
- * is at most 10.000 KD, so at most 1,000,000), `product % 100` is exact, and
- * subtracting it leaves an exact multiple of 100 whose division by 100 is exact.
- * No float ever holds a fractional fil. Recommended to trunk as a
- * `percentOfFloor` in @avo/types.
+ * THE FLOOR IS `percentOfFloor` FROM @avo/types (trunk, 7c3ac5c). The wallet's
+ * cancel preview is to switch to it too, and then the preview and the settlement
+ * cannot round differently. The API's own copy of that integer maths is gone. It still
+ * refuses a fractional or out-of-range percent and a negative deposit with a
+ * RangeError, and never lets a float hold a fractional fil. This function adds
+ * only the other half of the split: the salon keeps `deposit - returned`,
+ * remainder fil included.
+ *
+ * NOT `percentOf`, which rounds half UP: at 50% of 5.005 KD it gives 2503, and
+ * the ruling says 2502 back.
  */
 export function splitDeposit(
   deposit: Fils,
   returnPercent: number,
 ): { returnedFils: Fils; keptFils: Fils } {
-  if (!Number.isSafeInteger(returnPercent) || returnPercent < 0 || returnPercent > 100) {
-    throw new RangeError(`returnPercent must be a whole number 0–100, got ${returnPercent}`);
-  }
-  if (deposit < 0) throw new RangeError(`a deposit cannot be negative, got ${deposit}`);
-  const product = deposit * returnPercent;
-  const returnedFils = fils((product - (product % 100)) / 100);
+  const returnedFils = percentOfFloor(deposit, returnPercent);
   return { returnedFils, keptFils: subtract(deposit, returnedFils) };
 }
 

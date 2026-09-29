@@ -453,11 +453,13 @@ suite('she chooses which branch to collect from', () => {
       expect(placed.body.transaction.branchId).toBe(SAL);
     });
 
-    it("5b. …and choosing the BOOSTED branch buys her nothing: BR-KWC's seeded 2x visit boost pays one visit on a wallet order, and its +10 point top-up boost adds nothing to a card order's bonus", async () => {
+    it("5b. …and choosing the BOOSTED branch buys her nothing: BR-KWC's seeded 2x visit boost pays one visit on a wallet order, and a card order's bonus is the tier's alone", async () => {
       const boosted = await one(sql`SELECT visit, topup FROM boost WHERE salon_id = ${SALON} AND branch_id = ${KWC}`);
       // Precondition, or the rest proves nothing.
       expect(Number(boosted.visit)).toBeGreaterThan(1);
-      expect(Number(boosted.topup)).toBeGreaterThan(0);
+      // Migration 0068: a branch boost carries no top-up points at all. The seed
+      // held +10 here until then, and this spec proved it paid nothing.
+      expect(Number(boosted.topup)).toBe(0);
 
       const who = await customer('ATTR-KWC');
       const before = await money(who);

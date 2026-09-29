@@ -2255,3 +2255,23 @@ with ten days' notice.
 `POST /salons/{id}/bookings/{id}/cancel` returns money without a key. Its status checks prevent a
 double refund, but a retry cannot get the original answer back. The ruling is that the dashboard
 sends a key and the API requires it. The dashboard deploys before the API, as it already must.
+
+**Boost duration and Stop in the dashboard (lane C, 758e8dd..c6c3dec).**
+- **Steppers:** the three steppers become two (visits and stamps), per the top-up ruling.
+- **State pill:** each branch shows its state. The pill replaces the design's per-branch flag.
+  - Live · ends ‹when›
+  - Live · runs until stopped
+  - Scheduled · starts ‹when›
+  - Ended ‹when›
+  - Stopped by ‹name› ‹when›
+  - Off
+- **Duration presets:** Today only, 7 days, 30 days and Custom. Times are in the salon's clock and
+  the zone is named on the field. Presets end at the salon's midnight.
+- **Stop:** asks in the row, like the no-show, not in a modal.
+- **Tills:** shows what a branch earns right now. A boost that has ended, is scheduled or was
+  stopped reads as the base rate.
+- **Salon cancel:** the dashboard sends one Idempotency-Key per cancel attempt and reuses it on
+  retry.
+- **Approvals month stats:** counted from the newest 200 campaigns, and labelled as floors when all
+  200 fall this month. A `?from=&to=` or counts endpoint on `/v1/platform/campaigns` is owed by
+  lane A.

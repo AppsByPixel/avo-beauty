@@ -10,7 +10,7 @@ import {
   Skeleton,
   TextField,
 } from '@avo/ui';
-import { NEUTRAL_BOOST, summariseBoost, usePromotions } from '../api/promotions.js';
+import { earningNow, NEUTRAL_BOOST, summariseBoost, usePromotions } from '../api/promotions.js';
 import { useDevices, useEnrolDevice, useRevokeDevice } from '../api/devices.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
@@ -297,15 +297,20 @@ function TillsPanel({ salon }: { salon: Salon | undefined }) {
         <ul className="tills__list">
           {items.map((device) => {
             const placement = placementOf(device, branches);
+            /*
+              WHAT A CHARGE THROUGH IT EARNS NOW — `earningNow` reads the row
+              through `isBoostLive`, so a boost that has ended, is scheduled for
+              later, or was stopped reads as the base rate, which is what the
+              server would pay. No top-up term: branch boosts do not pay one
+              (DECISIONS, 2026-09-29).
+            */
             const boost =
               placement.kind === 'open' && promotions.data
-                ? { ...NEUTRAL_BOOST, ...(promotions.data.boosts[device.branchId] ?? {}) }
+                ? earningNow(promotions.data.boosts[device.branchId], new Date())
                 : null;
             const boosted =
               boost !== null &&
-              (boost.visit > NEUTRAL_BOOST.visit ||
-                boost.topup > NEUTRAL_BOOST.topup ||
-                boost.stamp > NEUTRAL_BOOST.stamp);
+              (boost.visit > NEUTRAL_BOOST.visit || boost.stamp > NEUTRAL_BOOST.stamp);
 
             return (
               <li
@@ -550,7 +555,7 @@ function MovePanel({
   const unchanged = standsOpen && target === device.branchId;
 
   const boostFor = (branchId: string) =>
-    promotions ? { ...NEUTRAL_BOOST, ...(promotions.boosts[branchId] ?? {}) } : null;
+    promotions ? earningNow(promotions.boosts[branchId], new Date()) : null;
 
   const from = boostFor(device.branchId);
   const to = chosen ? boostFor(chosen.id) : null;
@@ -568,7 +573,7 @@ function MovePanel({
     standsOpen &&
     from !== null &&
     to !== null &&
-    (from.visit !== to.visit || from.topup !== to.topup || from.stamp !== to.stamp);
+    (from.visit !== to.visit || from.stamp !== to.stamp);
 
   return (
     <div className="settings__confirm" role="group" aria-label={`Move ${device.label}`}>
@@ -749,9 +754,7 @@ function AddTill({
   const [branchId, setBranchId] = useState(branches[0]?.id ?? '');
 
   const chosen = branches.find((b) => b.id === branchId);
-  const boost = promotions
-    ? { ...NEUTRAL_BOOST, ...(promotions.boosts[branchId] ?? {}) }
-    : null;
+  const boost = promotions ? earningNow(promotions.boosts[branchId], new Date()) : null;
 
   /*
    * Trimmed here as well as server-side. `blank_field` is a real 400 for a

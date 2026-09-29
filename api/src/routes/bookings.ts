@@ -455,7 +455,7 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
    *   POST /salons/{id}/bookings                     perms.appointments, key
    *   POST /salons/{id}/bookings/{id}/reschedule     perms.appointments
    *   POST /salons/{id}/bookings/{id}/reassign       perms.appointments
-   *   POST /salons/{id}/bookings/{id}/cancel         perms.void
+   *   POST /salons/{id}/bookings/{id}/cancel         perms.void, key
    *   POST /salons/{id}/bookings/{id}/complete       perms.appointments
    *
    * ALL UNDER `/salons/{id}` for the reason the no-show route above argues at
@@ -527,8 +527,14 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
    * pair breaks the permission census.
    *
    * =====================================================================
-   * IDEMPOTENCY — REQUIRED ON THE CREATE, DELIBERATELY ABSENT ON THE OTHER FOUR
+   * IDEMPOTENCY — REQUIRED ON THE CREATE AND THE CANCEL, ABSENT ON THE OTHER THREE
    * =====================================================================
+   * THE CANCEL TAKES ONE SINCE 2026-09-29 (DECISIONS.md, "The salon's cancel
+   * takes an Idempotency-Key"). It returns money, so #4 applies. The row lock
+   * below already stopped a double refund. What it could not do was give a retry
+   * the original answer. `services/booking.ts § cancelByMerchant` carries it.
+   * What follows is the original argument, which still holds for the other three.
+   *
    * Non-negotiable #4 asks for a key on every MONEY-MOVING post, and a merchant
    * create moves no money. It takes one anyway, and the reason is not the money:
    *
@@ -544,12 +550,11 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
    *   it is the one place in this API where a key is not load-bearing for money,
    *   and a future reader should not conclude money is moving here.
    *
-   * THE OTHER FOUR NAME ONE RESOURCE WITH ONE LIVE STATE, and rely on
+   * THE OTHER THREE NAME ONE RESOURCE WITH ONE LIVE STATE, MOVE NO MONEY, and rely on
    * `FOR UPDATE` the way `cancelBooking` argues: a second request blocks on the
    * row lock, re-reads a status that is no longer `deposit_held`, and is answered
-   * `already_cancelled` / `already_completed` / `not_changeable`. That is stronger
-   * than a key, because it holds for two DIFFERENT keys as well as for one
-   * repeated.
+   * `not_changeable` / `already_completed`. That is stronger than a key, because
+   * it holds for two DIFFERENT keys as well as for one repeated.
    */
 
   // ------------------------------------------- POST /salons/{id}/bookings --
@@ -775,24 +780,50 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
   );
 
   // ------------------------------ POST /salons/{id}/bookings/{id}/cancel --
-  /** `perms.void` — an app booking's deposit comes back. See the header. */
+  /**
+   * `perms.void` — an app booking's deposit comes back. See the header.
+   *
+   * THE KEY IS REQUIRED (non-negotiable #4). The no-show route's machinery,
+   * unchanged: gate first, then the key, claimed inside the money transaction; a
+   * retry with the same key replays the committed response, and a different key
+   * after completion is answered `already_cancelled` by the row lock.
+   */
   app.post<{ Params: { id: string; bookingId: string } }>(
     '/salons/:id/bookings/:bookingId/cancel',
     async (req, reply) => {
       const p = requireDashboardPerm(req, 'void');
       requireSameSalon(p, req.params.id);
 
-      return reply.send(
-        await cancelByMerchant(
-          db,
-          { salonId: req.params.id, bookingId: req.params.bookingId },
-          {
-            principal: p,
-            ipAddress: req.ip ?? null,
-            userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
-          },
-        ),
-      );
+      const idem = {
+        scope: principalScope(p),
+        endpoint: 'POST /salons/:id/bookings/:bookingId/cancel',
+        key: readIdempotencyKey(req),
+        // No body: the booking is the whole request, so one key names one booking.
+        requestHash: hashRequestBody({ salonId: req.params.id, bookingId: req.params.bookingId }),
+      };
+
+      try {
+        return reply.send(
+          await cancelByMerchant(
+            db,
+            { salonId: req.params.id, bookingId: req.params.bookingId, idempotency: idem },
+            {
+              principal: p,
+              ipAddress: req.ip ?? null,
+              userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+            },
+          ),
+        );
+      } catch (err) {
+        // Only the key's own index, for `markNoShow`'s reason above.
+        if (!isUniqueViolation(err)) throw err;
+        const stored = await awaitCommittedKey(db, idem);
+        if (stored) return reply.code(stored.status).send(stored.body);
+        throw conflict(
+          'request_in_progress',
+          'That request is still being processed. Try again in a moment.',
+        );
+      }
     },
   );
 

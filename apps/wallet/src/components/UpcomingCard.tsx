@@ -94,7 +94,16 @@ export function UpcomingCard({
       onCancel();
       return;
     }
-    setPreview(cancelPreview(stamped.cancellation, booking.startsAt, new Date(), booking.depositFils));
+    setPreview(
+      cancelPreview(
+        stamped.cancellation,
+        booking.startsAt,
+        new Date(),
+        booking.depositFils,
+        // After a late move the server pays the smaller of this and the rule.
+        booking.returnCapPercent,
+      ),
+    );
   };
 
   return (

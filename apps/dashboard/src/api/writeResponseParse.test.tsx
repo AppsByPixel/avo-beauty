@@ -238,7 +238,7 @@ const SUBJECTS: Subject[] = [
   {
     name: 'cancel',
     hook: useCancelBooking as unknown as Subject['hook'],
-    vars: { bookingId: BOOKING_ID },
+    vars: { bookingId: BOOKING_ID, idempotencyKey: 'KEY-CANCEL' },
     reassurance: 'The deposit is still held.',
     ok: {
       booking: { ...WRITTEN_BOOKING, status: 'cancelled' },

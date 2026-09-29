@@ -709,7 +709,9 @@ async function seed(): Promise<void> {
         salonId: SALON_ID,
         branchId: BRANCH_KUWAIT_CITY,
         visit: 2,
-        topup: 10,
+        // Was 10. A branch boost pays no top-up bonus, and `boost_topup_removed`
+        // (migration 0068) refuses anything but 0.
+        topup: 0,
         stamp: 1,
         publishedAt: new Date('2026-08-10T09:00:00+03:00'),
         publishedBy: 'Noura',

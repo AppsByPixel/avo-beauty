@@ -8,7 +8,7 @@
  * deposits these specs pick.
  */
 
-import { fils, percentOf } from '@avo/types';
+import { fils, percentOf, percentOfFloor, type Fils } from '@avo/types';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../http/errors';
 import {
@@ -66,6 +66,20 @@ describe('splitDeposit — rounded DOWN to the fil, the salon keeps the remainde
     expect(() => splitDeposit(fils(5_000), 12.5)).toThrow(RangeError);
     expect(() => splitDeposit(fils(5_000), 101)).toThrow(RangeError);
     expect(() => splitDeposit(fils(5_000), -1)).toThrow(RangeError);
+  });
+
+  it('refuses a negative deposit', () => {
+    expect(() => splitDeposit(-1 as Fils, 50)).toThrow(RangeError);
+  });
+
+  it('returns exactly the shared @avo/types percentOfFloor, for every percent, so the wallet preview cannot round differently', () => {
+    for (const deposit of [0, 1, 99, 5_005, 7_777, 10_000]) {
+      for (let p = 0; p <= 100; p++) {
+        expect(splitDeposit(fils(deposit), p).returnedFils, `${deposit} at ${p}%`).toBe(
+          percentOfFloor(fils(deposit), p),
+        );
+      }
+    }
   });
 });
 
