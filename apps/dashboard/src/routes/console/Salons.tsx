@@ -33,6 +33,14 @@ import { useConsoleSections } from '../../auth/AuthProvider.js';
 import { ApiError } from '../../api/client.js';
 import { SectionError, WriteError } from '../sectionState.js';
 import {
+  WALLET_CARD_BODY,
+  WALLET_CARD_LABEL,
+  WALLET_CARD_OPTIONS,
+  WALLET_CARD_STAMPS_NOTE,
+  WalletCardPreview,
+  type WalletCard,
+} from '../walletCardChoice.js';
+import {
   TEXT_PARAM,
   enumParam,
   shownLabel,
@@ -593,7 +601,10 @@ const WIZARD_PLANS = ['Starter', 'Growth', 'Pro'] as const;
 const STEP_LABELS = ['Salon details', 'Modules & deposit', 'Loyalty & brand', 'Review'] as const;
 
 /**
- * Same file, `wBrands`. Three swatches, and the platform default is preselected.
+ * Same file, `wBrands`. The design draws three swatches; the token file now
+ * carries four — the dark-green `forest` joined in trunk's fd6edc8 — and the
+ * wizard draws all four, because the list is read, not copied (below). The
+ * platform default is preselected.
  *
  * READ OFF `brandPresets`, NOT RE-TYPED. This was the literal list
  * `['#6E7F6C', '#B08D8D', '#8A7CB0']` with `BRAND_SWATCHES[0]` as the initial
@@ -619,6 +630,12 @@ export const BRAND_SWATCHES: readonly string[] = Object.values(brandPresets).map
 
 /** The hex a salon is born on when nobody picks — the same value the API defaults to. */
 export const BRAND_DEFAULT = color.brand;
+
+/**
+ * PROVISIONAL — Lane A names this. See `walletCardRefusal` in the wizard: the
+ * code only decides which step the sentence is shown on, never its words.
+ */
+export const WALLET_CARD_REFUSAL = 'invalid_wallet_card';
 
 /**
  * The design's stepper is drawn in whole KD, 1–10, and the server's CHECK is
@@ -665,6 +682,8 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
   const [shop, setShop] = useState(false);
   const [loyaltyMode, setLoyaltyMode] = useState<LoyaltyMode>('tiers');
   const [brandColor, setBrandColor] = useState<string>(BRAND_DEFAULT);
+  /** `tier` is the server's default too — `SalonSchema.walletCard.default('tier')`. */
+  const [walletCard, setWalletCard] = useState<WalletCard>('tier');
   const [depositTouched, setDepositTouched] = useState(false);
   const [deposit, setDeposit] = useState<number | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
@@ -813,6 +832,20 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
       ? create.error.message
       : null;
 
+  /**
+   * THE WALLET CARD'S OWN REFUSAL, on its own field, for the brand's reason.
+   * `WALLET_CARD_REFUSAL` is PROVISIONAL: Lane A names the 400 for a bad value
+   * in parallel and it is spelled here in the house pattern (`invalid_brand_color`)
+   * until theirs lands. Only the PLACEMENT depends on it — a code this does not
+   * know still renders the server's sentence verbatim, on the review step,
+   * through `WriteError`.
+   */
+  const walletCardRefusal =
+    create.error instanceof ApiError && create.error.code === WALLET_CARD_REFUSAL
+      ? create.error.message
+      : null;
+  const fieldRefusal = brandRefusal ?? walletCardRefusal;
+
   function toStep(next: number) {
     /*
      * Entering review mints the key; leaving review drops it. Dropping it is the
@@ -844,6 +877,14 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
           loyaltyMode,
           ...(loyaltyMode === 'stamps' ? { stampTarget: DEFAULT_STAMP_TARGET } : {}),
           brandColor,
+          /*
+           * SENT ONLY WHEN IT IS NOT THE DEFAULT. Absent means `tier` on the
+           * server (`.default('tier')`), so the two are the same request — and
+           * until Lane A's `walletCard` reaches `parseOnboardInput`'s ACCEPTED
+           * set, a key it does not know is `400 not_settable_here`, which would
+           * stop every onboarding that never touched the setting.
+           */
+          ...(walletCard === 'brand' ? { walletCard } : {}),
         },
       },
       {
@@ -863,7 +904,9 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
         onError: (cause) => {
           if (
             cause instanceof ApiError &&
-            (cause.code === 'brand_color_not_viable' || cause.code === 'invalid_brand_color')
+            (cause.code === 'brand_color_not_viable' ||
+              cause.code === 'invalid_brand_color' ||
+              cause.code === WALLET_CARD_REFUSAL)
           ) {
             setStep(3);
           }
@@ -1132,6 +1175,38 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
                 */
                 <p className="wiz__fielderror">{derived.reason}</p>
               )}
+              {/*
+                THE WALLET CARD, BESIDE THE BRAND IT MAY PAINT. `Settings.tsx §
+                WalletCardPanel` is the merchant's copy of the same control; the
+                words and the picture are shared, the request is this wizard's.
+              */}
+              <div className="wiz__row">
+                <div>
+                  <div className="wiz__rowlabel">Wallet card</div>
+                  <div className="wiz__rowsub">
+                    {loyaltyMode === 'stamps' ? WALLET_CARD_STAMPS_NOTE : WALLET_CARD_BODY[walletCard]}
+                  </div>
+                </div>
+                <Segmented
+                  label="Wallet card"
+                  value={walletCard}
+                  onChange={(next) => {
+                    create.reset();
+                    setWalletCard(next);
+                  }}
+                  options={WALLET_CARD_OPTIONS}
+                />
+              </div>
+              {walletCardRefusal !== null ? (
+                <p className="wiz__fielderror" role="alert">
+                  {walletCardRefusal}
+                </p>
+              ) : null}
+              <WalletCardPreview
+                choice={walletCard}
+                brandHex={brandColor}
+                loyaltyMode={loyaltyMode}
+              />
             </div>
           ) : null}
 
@@ -1168,6 +1243,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
                   }
                 />
                 <SummaryRow label="Brand colour" value={brandColor} />
+                <SummaryRow label="Wallet card" value={WALLET_CARD_LABEL[walletCard]} />
               </dl>
               <div className="wiz__invite">
                 <span className="wiz__invitedot" aria-hidden="true" />
@@ -1182,7 +1258,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
                 which on this endpoint is the whole thing, because the create is one
                 transaction.
               */}
-              {create.isError && brandRefusal === null ? (
+              {create.isError && fieldRefusal === null ? (
                 <WriteError error={create.error} reassurance="No salon was created." />
               ) : null}
             </div>

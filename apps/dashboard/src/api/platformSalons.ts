@@ -9,7 +9,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Branch, Tier } from '@avo/types';
+import type { Branch, Salon, Tier } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { TIER_LADDER } from './loyalty.js';
 /*
@@ -360,6 +360,13 @@ export interface OnboardSalonInput {
   /** Stamps mode only. The server fills the tier ladder from DEFAULT_LOYALTY. */
   stampTarget?: number;
   brandColor: string;
+  /**
+   * What colours the wallet card — trunk's `SalonSchema.walletCard`. OPTIONAL
+   * on the wire because absent means `tier` on the server; the wizard sends it
+   * only for `brand` (see `console/Salons.tsx § SENT ONLY WHEN IT IS NOT THE
+   * DEFAULT`).
+   */
+  walletCard?: Salon['walletCard'];
 }
 
 /**

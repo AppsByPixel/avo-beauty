@@ -443,12 +443,15 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
 /**
  * `AppointmentLink.tsx` is an anchor that navigates in-app — no fetch, no state.
  * `depositCopy.tsx` is copy: the no-show sentence and the settlement note, from props.
+ * `walletCardChoice.tsx` is the wallet card setting's words and preview, from
+ * props — no fetch; its two hosts (Settings, the onboarding wizard) own the write.
  */
 const NON_SCREENS = [
   'NotBuiltYet.tsx',
   'sectionState.tsx',
   'AppointmentLink.tsx',
   'depositCopy.tsx',
+  'walletCardChoice.tsx',
 ] as const;
 
 /**
