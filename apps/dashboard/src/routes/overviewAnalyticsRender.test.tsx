@@ -589,3 +589,85 @@ describe('the parse is the contract', () => {
     ).toThrow();
   });
 });
+
+/* ------------------------------------------------- density: folding, packing -- */
+
+const FIVE_AHEAD = ['Latifa A.', 'Hessa M.', 'Dana Y.', 'Shaikha B.', 'Rana S.'].map((name, i) => ({
+  ...FULL_RAW.upcoming.next.items[0]!,
+  bookingId: `BK-1000001${i}`,
+  startsAt: `2026-09-30T1${i}:00:00.000Z`,
+  customerName: name,
+}));
+
+describe('Upcoming folds at three', () => {
+  /*
+   * Aftab: "still too many empty spaces on the dashboard". Five named bookings
+   * under two figures made Upcoming the tallest card in its column; three are
+   * drawn and the rest are one press away, in the Recent activity panel's words.
+   */
+  it('draws three of five, then all five on "Show 2 more"', () => {
+    mount({ data: withBlock('upcoming', { ...FULL_RAW.upcoming, next: { status: 'ok', items: FIVE_AHEAD } }) });
+    const c = within(card('upcoming')!);
+    expect(c.getAllByRole('link')).toHaveLength(3);
+    const more = c.getByRole('button', { name: 'Show 2 more upcoming bookings' });
+    expect(more.textContent).toBe('Show 2 more');
+    fireEvent.click(more);
+    expect(c.getAllByRole('link')).toHaveLength(5);
+    expect(c.queryByRole('button', { name: /more upcoming/ })).toBeNull();
+  });
+
+  it('offers nothing to unfold at three or fewer', () => {
+    mount({ data: FULL });
+    expect(within(card('upcoming')!).queryByRole('button', { name: /more upcoming/ })).toBeNull();
+  });
+});
+
+describe('the analytics pack as masonry, measured', () => {
+  /*
+   * jsdom has no layout and no ResizeObserver. A fake observer and a stubbed
+   * height stand in, so what is asserted is the arithmetic `useMasonry` hands the
+   * stylesheet: rows = the card's height plus the gap, rounded up, and the switch
+   * that turns the 1px rows on only once every card has been measured.
+   */
+  it('gives each card its height plus the gap in rows, and only then turns masonry on', () => {
+    const observed: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(el: Element) {
+          observed.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    const style = document.createElement('style');
+    style.textContent = '.ovw-grid { column-gap: 16px; }';
+    document.head.appendChild(style);
+    const heights = new Map<string, number>([['revenue-by-branch', 136.4], ['top-services', 209]]);
+    const rect = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        const h = heights.get(this.dataset['widget'] ?? '') ?? 100;
+        return { height: h, width: 500, top: 0, left: 0, right: 500, bottom: h, x: 0, y: 0, toJSON: () => ({}) };
+      });
+    try {
+      mount({ data: FULL });
+      const grid = document.querySelector('.ovw-grid') as HTMLElement;
+      expect(grid.hasAttribute('data-masonry')).toBe(true);
+      expect(card('revenue-by-branch')!.style.getPropertyValue('--ovw-rows')).toBe('153');
+      expect(card('top-services')!.style.getPropertyValue('--ovw-rows')).toBe('225');
+      expect(observed).toHaveLength(13);
+      // The reading order is still the logical one: only the drawing moves.
+      expect([...grid.children].map((e) => (e as HTMLElement).dataset['widget'])).toEqual(cards());
+    } finally {
+      rect.mockRestore();
+      style.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('leaves an ordinary grid where there is nothing to measure with', () => {
+    mount({ data: FULL });
+    expect(document.querySelector('.ovw-grid')!.hasAttribute('data-masonry')).toBe(false);
+  });
+});

@@ -138,11 +138,12 @@ export function Overview() {
         feed is already disclosed at five (§ FEED_VISIBLE). It needed something
         beside it.
 
-        THE CHART TAKES THE WIDER COLUMN because fourteen bars need width to be a
-        shape and five `who what when` lines do not. It is FIRST IN THE DOM so
-        that the stacked narrow and tablet layouts put the trend above the feed
-        rather than below it — the complaint was that the feed dominates, and
-        reading order is half of dominating.
+        THE TWO ARE HALVES of the Overview's one grid (`app.css § ONE GRID FOR THE
+        WHOLE OVERVIEW`), so their seam is the KPI row's middle seam; the chart
+        used to take a wider 1.35fr track, a seam that lined up with nothing. It
+        is FIRST IN THE DOM so that a stacked layout puts the trend above the
+        feed rather than below it — the complaint was that the feed dominates,
+        and reading order is half of dominating.
       */}
       <div className="overview__grid">
         <SalesTrendCard />

@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { fils, formatMoney, subtract, type OverviewAnalytics } from '@avo/types';
-import { Card, EmptyState, ErrorState, Money, Segmented, Skeleton, StaleBanner } from '@avo/ui';
+import { Button, Card, EmptyState, ErrorState, Money, Segmented, Skeleton, StaleBanner } from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import { ANALYTICS_PERIOD, useOverviewAnalytics } from '../api/analytics.js';
 import { useReport, windowLabel, windowPhrase, type Report } from '../api/reports.js';
@@ -162,6 +162,9 @@ export function AnalyticsGrid({
 
   const phrase = shown ? windowPhrase(shown.window) : 'in this period';
 
+  const gridRef = useRef<HTMLDivElement>(null);
+  useMasonry(gridRef);
+
   return (
     <section className="ovw-section" aria-labelledby="ovw-heading">
       <div className="ovw-head">
@@ -184,7 +187,11 @@ export function AnalyticsGrid({
         />
       ) : null}
 
-      <div className="ovw-grid">
+      {/*
+        The DOM order below is the reading order, for the keyboard and a screen
+        reader alike. `useMasonry` moves only where each card is DRAWN.
+      */}
+      <div className="ovw-grid" ref={gridRef}>
         <RevenueByBranchCard state={earnings} />
         {booking ? <TopServicesCard view={view} data={shown} phrase={phrase} /> : null}
         {booking ? <ArtistsCard view={view} data={shown} /> : null}
@@ -207,6 +214,64 @@ export function AnalyticsGrid({
 
 /* ------------------------------------------------------------ the shell ----- */
 
+/**
+ * MASONRY, MEASURED: EACH CARD SITS ONE GAP UNDER THE CARD ABOVE IT.
+ *
+ * Aftab, at about 2000px: "still too many empty spaces on the dashboard" — the
+ * blank under the shorter card of every row (Top services beside Artist
+ * performance, No-shows beside Upcoming, First visit vs returning beside New
+ * members). A row grid cannot avoid it and equal-height rows only move it inside
+ * the cards, so the rows go.
+ *
+ * The grid keeps its columns (the Overview's one grid, `app.css § ONE GRID`) and
+ * gets 1px rows. Each card is told how many rows it takes: its own height plus
+ * the gap token, rounded up. `grid-auto-flow: dense` then puts every card at the
+ * earliest place a column is free, which is the shortest column's end, so each
+ * column stacks with exactly one gap (to under a pixel) and no card sits below a
+ * hole. A ResizeObserver re-measures when a card's size changes for any reason
+ * (the column width, a font arriving); a MutationObserver re-measures when the
+ * cards' contents change (data landing, a list unfolding). Both, because a
+ * ResizeObserver only reports in a rendering frame, and a tab in the background
+ * has none: an unfold there went unmeasured and the card overlapped the next
+ * one by 35px until the tab was shown. Mutation records arrive as microtasks.
+ *
+ * Only the drawing moves. The DOM, the tab order and what a screen reader walks
+ * are the card order written in `AnalyticsGrid`.
+ *
+ * Until the first measurement (and wherever there is no ResizeObserver, which
+ * is jsdom) the grid is an ordinary two-column grid with cards at their own
+ * height; `data-masonry` is what switches the 1px rows on, so a card can never
+ * be drawn into a one-pixel row it has not been measured for. A browser with
+ * native `grid-template-rows: masonry` gets that instead, and this does nothing.
+ */
+function useMasonry(ref: RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const grid = ref.current;
+    if (!grid || typeof ResizeObserver === 'undefined') return;
+    if (typeof CSS !== 'undefined' && CSS.supports?.('grid-template-rows', 'masonry')) return;
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+    const place = (card: Element) => {
+      if (!(card instanceof HTMLElement)) return;
+      card.style.setProperty('--ovw-rows', String(Math.ceil(card.getBoundingClientRect().height + gap)));
+    };
+    const placeAll = () => {
+      for (const card of Array.from(grid.children)) place(card);
+    };
+    const resized = new ResizeObserver((entries) => {
+      for (const entry of entries) place(entry.target);
+    });
+    const changed = new MutationObserver(placeAll);
+    placeAll();
+    for (const card of Array.from(grid.children)) resized.observe(card);
+    changed.observe(grid, { childList: true, subtree: true, characterData: true });
+    grid.dataset['masonry'] = '';
+    return () => {
+      resized.disconnect();
+      changed.disconnect();
+    };
+  });
+}
+
 interface CardView {
   pending: boolean;
   /** The read's failure when there is nothing to draw. Null otherwise. */
@@ -222,19 +287,17 @@ interface CardView {
 export function Widget({
   title,
   caption,
-  wide = false,
   label,
   children,
 }: {
   title: string;
   caption?: string | null;
-  wide?: boolean;
   /** `data-widget`, for tests and for nobody else. */
   label: string;
   children: ReactNode;
 }) {
   return (
-    <Card className="ovw" flush data-widget={label} {...(wide ? { 'data-wide': 'true' } : {})}>
+    <Card className="ovw" flush data-widget={label}>
       <h3 className="overview__card-title">{title}</h3>
       {caption ? <p className="ovw__caption">{caption}</p> : null}
       <div className="ovw__body">{children}</div>
@@ -593,7 +656,6 @@ export function BusiestTimesCard({
     <Widget
       title="Busiest times"
       label="busiest-times"
-      wide
       caption={`Visits by day and hour, in the salon's time (${zone})`}
     >
       {body(
@@ -620,7 +682,8 @@ export function BusiestTimesCard({
                 </p>
               ) : null}
               <div className="ovw-heat">
-                <table>
+                {/* `--hours` sizes the cells to the card: app.css § THE GRID FILLS THE CARD. */}
+                <table style={{ '--hours': grid.hours.length } as CSSProperties}>
                   <caption className="avo-sr-only">
                     Visits by weekday and hour in {zone}, {phrase}. {plural(block.totalVisits, 'visit', 'visits')} in all.
                   </caption>
@@ -708,29 +771,80 @@ export function UpcomingCard({
               body="Bookings from the app and the front desk appear here as they're made."
             />
           ) : (
-            <ul className="ovw-list">
-              {block.next.items.map((b) => (
-                <li key={b.bookingId} className="ovw-list__row">
-                  <AppointmentLink
-                    className="ovw-list__link"
-                    href={appointmentHref(b.bookingId, b.startsAt, timezone)}
-                  >
-                    <span className="ovw-list__main">
-                      <b>{b.customerName}</b> · {b.serviceName}
-                    </span>
-                    <span className="ovw-list__sub">
-                      {whenLabel(b.startsAt, timezone)} · {b.artistName} · {b.branchName}
-                      {b.branchAssumed ? ' (branch assumed)' : ''}
-                    </span>
-                  </AppointmentLink>
-                </li>
-              ))}
-            </ul>
+            <UpcomingList items={block.next.items} timezone={timezone} />
           )}
           <Doubt doubt={block.branchAssumed} noun="appointments" />
         </>
       ))}
     </Widget>
+  );
+}
+
+/**
+ * THE NEXT BOOKINGS, FOLDED AT THREE. The server names up to five; five rows
+ * under two figures made this the tallest card in its column by a clear margin,
+ * which in a packed grid is the blank under its neighbour moved one card down.
+ * Three are drawn and the rest are one press away.
+ *
+ * The disclosure is the Recent activity panel's (`Overview.tsx § ActivityList`):
+ * a secondary button with the count in its label, "Show N more", in the same
+ * `.overview__feed-more` box, because a second shape for "there is more below"
+ * is a second thing to learn. It reveals rows already in hand and fetches
+ * nothing.
+ */
+export const UPCOMING_VISIBLE = 3;
+
+function UpcomingList({
+  items,
+  timezone,
+}: {
+  items: ReadonlyArray<{
+    bookingId: string;
+    startsAt: string;
+    customerName: string;
+    serviceName: string;
+    artistName: string;
+    branchName: string;
+    branchAssumed: boolean;
+  }>;
+  timezone: string | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const listRef = useRef<HTMLUListElement>(null);
+  const visible = expanded ? items : items.slice(0, UPCOMING_VISIBLE);
+  const hidden = items.length - visible.length;
+  return (
+    <>
+      <ul className="ovw-list" ref={listRef} tabIndex={-1}>
+        {visible.map((b) => (
+          <li key={b.bookingId} className="ovw-list__row">
+            <AppointmentLink className="ovw-list__link" href={appointmentHref(b.bookingId, b.startsAt, timezone)}>
+              <span className="ovw-list__main">
+                <b>{b.customerName}</b> · {b.serviceName}
+              </span>
+              <span className="ovw-list__sub">
+                {whenLabel(b.startsAt, timezone)} · {b.artistName} · {b.branchName}
+                {b.branchAssumed ? ' (branch assumed)' : ''}
+              </span>
+            </AppointmentLink>
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 ? (
+        <div className="overview__feed-more">
+          <Button
+            variant="secondary"
+            aria-label={`Show ${hidden} more upcoming ${hidden === 1 ? 'booking' : 'bookings'}`}
+            onClick={() => {
+              setExpanded(true);
+              listRef.current?.focus();
+            }}
+          >
+            Show {hidden} more
+          </Button>
+        </div>
+      ) : null}
+    </>
   );
 }
 
