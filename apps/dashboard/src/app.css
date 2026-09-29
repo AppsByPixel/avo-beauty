@@ -214,6 +214,8 @@ a:hover {
   border-right: 1px solid var(--avo-hairline);
   /* The sidebar never scrolls with content — interaction-spec.md §1. */
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
   transition: width var(--avo-motion-fast) ease;
 }
 
@@ -239,6 +241,24 @@ a:hover {
   flex: 1;
   overflow: auto;
   padding: 28px 30px;
+  /*
+   * THE SHELL SCROLLS HERE, NOT IN THE WINDOW, SO THIS BOX MUST ALSO BE THE
+   * CONTAINING BLOCK. Without `position`, an absolutely positioned descendant
+   * with no positioned ancestor (every `.avo-sr-only` chart alternative on the
+   * Overview) takes the INITIAL containing block, escapes this box's overflow
+   * clip, and stretches the document to where it would sit in this box's full
+   * scroll height. Measured on /overview at 1440x900: the document was 2564px
+   * tall against a 900px viewport. Once this box reached its end the wheel
+   * chained to the window and scrolled the whole shell (rail, header, content)
+   * up into a blank page. `relative` keeps those spans inside the clip, and the
+   * document back at exactly the viewport.
+   *
+   * `overscroll-behavior: contain` is the second half: nothing past this box's
+   * end is ever chained to the window, whatever lands in the document later.
+   * Asserted in shell/shellScrollContainment.test.ts.
+   */
+  position: relative;
+  overscroll-behavior: contain;
 }
 
 .dash[data-bp='base'] .dash__content {
@@ -608,6 +628,8 @@ a:hover {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .dash-header__date {
@@ -775,6 +797,8 @@ a:hover {
 .dash-bell__list {
   max-height: 340px;
   overflow: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 /* One row. A `div` when it goes nowhere, a `button` when it does - same box. */
@@ -1528,6 +1552,8 @@ a:hover {
 
 .ovw-table {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .ovw-table table {
@@ -1564,6 +1590,8 @@ a:hover {
 
 .ovw-heat {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .ovw-heat table {
@@ -3360,6 +3388,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .audit__table {
@@ -3472,6 +3502,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .appts__table {
@@ -4105,6 +4137,8 @@ a:hover {
 .apweek__scroll {
   overflow-x: auto;
   padding: 0 20px 18px;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .apweek__grid {
@@ -4745,6 +4779,8 @@ a:hover {
   overflow-y: auto;
   margin: 0 calc(-1 * var(--avo-space-card-padding))
     calc(-1 * var(--avo-space-card-padding));
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .deposits__table {
@@ -6822,6 +6858,8 @@ a:hover {
  */
 .reports__card[data-wide] .reports__table {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .reports__card[data-wide] .reports__cols,
@@ -7118,6 +7156,8 @@ a:hover {
 /* interaction-spec.md §1: data tables scroll, they never drop columns. */
 .salons__scroll {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .salons__table {
@@ -7467,6 +7507,8 @@ a:hover {
 /* interaction-spec.md §1: data tables scroll, they never drop columns. */
 .saloned__scroll {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .saloned__tiers {
@@ -7778,6 +7820,8 @@ a:hover {
   background: var(--avo-surface);
   border-radius: 22px;
   box-shadow: 0 40px 80px -30px color-mix(in srgb, var(--avo-ink) 50%, transparent);
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .wiz__head {
@@ -8554,6 +8598,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .accounts-console__table {
@@ -9276,6 +9322,8 @@ a:hover {
   overflow-x: auto;
   max-height: 640px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .orders__table {
