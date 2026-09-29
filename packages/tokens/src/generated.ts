@@ -80,22 +80,34 @@ export const tokens = {
     "bronze": {
       "dot": "#B08D57",
       "pillBg": "#F0EEE9",
-      "pillText": "#80653C"
+      "pillText": "#80653C",
+      "cardFrom": "#C9A574",
+      "cardTo": "#B28B56",
+      "cardText": "#2A1D0C"
     },
     "silver": {
       "dot": "#B7BEC4",
       "pillBg": "#ECEEF0",
-      "pillText": "#5f6b73"
+      "pillText": "#5f6b73",
+      "cardFrom": "#D6DBDF",
+      "cardTo": "#A9B1B8",
+      "cardText": "#1C262D"
     },
     "gold": {
       "dot": "#C9A24B",
       "pillBg": "#F3E9CF",
-      "pillText": "#7A6034"
+      "pillText": "#7A6034",
+      "cardFrom": "#E0BE66",
+      "cardTo": "#BC9540",
+      "cardText": "#2A2110"
     },
     "black": {
       "dot": "#3A3A3A",
       "pillBg": "#E3E1DC",
-      "pillText": "#3A3A3A"
+      "pillText": "#3A3A3A",
+      "cardFrom": "#4A4A4A",
+      "cardTo": "#232323",
+      "cardText": "#FFFFFF"
     },
     "member": {
       "dot": "#6E7F6C",
