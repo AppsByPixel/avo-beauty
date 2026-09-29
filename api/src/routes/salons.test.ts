@@ -32,6 +32,7 @@ const BEFORE: SalonRow = {
   ownerPhone: '+96599124408',
   plan: 'growth',
   brandColor: '#6E7F6C',
+  walletCard: 'tier',
   moduleBooking: true,
   moduleShop: true,
   loyaltyMode: 'tiers',
@@ -215,6 +216,16 @@ describe('buildSalonPatch, merchant set', () => {
       .toBe('brand_color_not_viable');
     expect(buildSalonPatch({ brandColor: '#8A7CB0' }, BEFORE, MERCHANT_EDITABLE).patch.brandColor)
       .toBe('#8A7CB0');
+  });
+
+  it('takes walletCard beside brandColor, and only the two values the contract names', () => {
+    expect(MERCHANT_EDITABLE.has('walletCard')).toBe(true);
+    expect(buildSalonPatch({ walletCard: 'brand' }, BEFORE, MERCHANT_EDITABLE).patch.walletCard).toBe('brand');
+    expect(buildSalonPatch({ walletCard: 'tier' }, BEFORE, PLATFORM_EDITABLE).patch.walletCard).toBe('tier');
+    for (const bad of ['Brand', 'gold', '', null, 1, true, ['brand']]) {
+      expect(refusal(() => buildSalonPatch({ walletCard: bad }, BEFORE, MERCHANT_EDITABLE)).code, String(bad))
+        .toBe('invalid_wallet_card');
+    }
   });
 
   it('validates businessHours, which nothing did before', () => {

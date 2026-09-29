@@ -29,6 +29,10 @@ export const tierName = pgEnum('tier_name', ['bronze', 'silver', 'gold', 'black'
 
 export type BusinessHours = z.infer<typeof BusinessHoursSchema>;
 
+/** `SalonSchema.walletCard`, the two values `salon_wallet_card_known` admits. */
+export const WALLET_CARDS = ['tier', 'brand'] as const;
+export type WalletCard = (typeof WALLET_CARDS)[number];
+
 export const salon = pgTable(
   'salon',
   {
@@ -101,6 +105,19 @@ export const salon = pgTable(
      * the intention.
      */
     brandColor: text('brand_color').notNull(),
+    /**
+     * What colours the wallet's main card — `SalonSchema.walletCard` in
+     * `@avo/types` (Aftab, 2026-09-29). `tier` is the member's tier metal and the
+     * default; `brand` is this salon's own `brandColor` on every card, whatever
+     * her tier. Migration 0069.
+     *
+     * TEXT WITH A CHECK, not a pg enum: an enum value can be added and never
+     * removed, while a CHECK is swapped in two statements, and a card choice
+     * is exactly the kind of list that gets revised. `parseWalletCard` in
+     * `routes/salons.ts` is the sentence; `salon_wallet_card_known` is the
+     * guarantee.
+     */
+    walletCard: text('wallet_card').$type<WalletCard>().notNull().default('tier'),
     moduleBooking: boolean('module_booking').notNull().default(false),
     moduleShop: boolean('module_shop').notNull().default(false),
 
@@ -171,6 +188,7 @@ export const salon = pgTable(
     // Non-negotiable #9 lives at onboarding, but a colour that isn't even a hex
     // must never reach the token deriver.
     check('salon_brand_color_is_hex', sql`${t.brandColor} ~ '^#[0-9A-Fa-f]{6}$'`),
+    check('salon_wallet_card_known', sql`${t.walletCard} IN ('tier', 'brand')`),
     // api-contract.md: merchant-set booking deposit, 1000–10000 fils.
     check('salon_deposit_in_range', sql`${t.depositFils} BETWEEN 1000 AND 10000`),
     /**

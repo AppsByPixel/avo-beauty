@@ -14,7 +14,7 @@
  * A seed that drifted from the fixtures would make every one of those specs fail
  * for a reason that has nothing to do with the API.
  *
- * Three things exist here that the fixtures do not have:
+ * Four things exist here that the fixtures do not have:
  *
  *   SAL-LUMIERE   a second salon whose Arabic name columns are NULL, on purpose.
  *                 The client fallback is `nameAr ?? name`, and a row that merely
@@ -32,6 +32,12 @@
  *
  *   services      the mock kept these in memory. `POST /charges` prices its
  *                 basket from the database, so they have to exist as rows.
+ *
+ *   SAL-FOREST    the dark-green demo workspace (`walletCard: 'brand'`), with a
+ *                 gold member whose card keeps the salon's colour anyway. Its
+ *                 rows live in db/forestFixture.ts, shared with
+ *                 `db:demo-forest` for the hosted demo. Its passwords are the
+ *                 FOREST_* constants below and are never printed.
  *
  * Idempotent: re-running it resets balances and counters to the fixture values,
  * which is what makes a repeatable test run possible.
@@ -57,6 +63,13 @@ import { staffUser } from './schema/staff';
 import { transaction } from './schema/transaction';
 import { hashSecret } from '../auth/password';
 import { DEFAULT_BRAND_COLOR } from '../services/brandColor';
+import {
+  FOREST,
+  FOREST_OPENING_TX,
+  forestMemberValues,
+  upsertForestWorkspace,
+  writeForestOpeningBalance,
+} from './forestFixture';
 import { env } from '../env';
 
 /**
@@ -79,6 +92,14 @@ const BRANCH_KUWAIT_CITY = 'BR-KWC';
 const MEMBER_PASSWORD = 'dana-dev-password';
 const STAFF_PASSWORD = 'noura-dev-password';
 const PLATFORM_PASSWORD = 'yousef-dev-password';
+/**
+ * SAL-FOREST's two sign-ins — the dark-green demo workspace (db/forestFixture.ts).
+ * Development values for LOCAL databases only. The hosted demo gets its forest
+ * rows from `db:demo-forest`, which takes both passwords from the environment,
+ * so neither of these is ever the demo's credential.
+ */
+const FOREST_STAFF_PASSWORD = 'forest-dev-password';
+const FOREST_MEMBER_PASSWORD = 'maha-dev-password';
 const STAFF_PIN = '2468';
 const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
@@ -160,12 +181,22 @@ function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri'
 }
 
 async function seed(): Promise<void> {
-  const [memberHash, staffHash, pinHash, hessaPinHash, platformHash] = await Promise.all([
+  const [
+    memberHash,
+    staffHash,
+    pinHash,
+    hessaPinHash,
+    platformHash,
+    forestStaffHash,
+    forestMemberHash,
+  ] = await Promise.all([
     hashSecret(MEMBER_PASSWORD),
     hashSecret(STAFF_PASSWORD),
     hashSecret(STAFF_PIN),
     hashSecret(HESSA_PIN),
     hashSecret(PLATFORM_PASSWORD),
+    hashSecret(FOREST_STAFF_PASSWORD),
+    hashSecret(FOREST_MEMBER_PASSWORD),
   ]);
 
   /**
@@ -841,6 +872,15 @@ async function seed(): Promise<void> {
       },
     });
 
+  // ------------------------------------------------- the forest workspace ----
+  //
+  // SAL-FOREST: salon → branch → services → manager, in that order, inside
+  // `upsertForestWorkspace` — so the file's dependency order holds (its rows
+  // depend only on each other). The module is shared with `db:demo-forest`,
+  // which is why the rows are not spelled out here. Maha, its member, is seeded
+  // with the other members below.
+  await upsertForestWorkspace(db, { staffHash: forestStaffHash });
+
   // ------------------------------------------------------------- artists ----
   //
   // The four artists of design/AVO Merchant Dashboard.dc.html § Team, with the
@@ -1025,6 +1065,25 @@ async function seed(): Promise<void> {
             passwordHash: memberHash,
           }
         : { passwordHash: memberHash },
+    });
+
+  // Maha — SAL-FOREST's member. GOLD, 41.750 KD, 12 visits: her card would be
+  // gold, and is forest green because her salon chose `walletCard: 'brand'`.
+  // Same split as Dana: money follows `SEED_RESET`, the credential always.
+  await db
+    .insert(member)
+    .values(forestMemberValues(forestMemberHash, PUBLISHED_LEGAL_SET.version))
+    .onConflictDoUpdate({
+      target: member.id,
+      set: RESET
+        ? {
+            balanceFils: fils(FOREST.openingFils),
+            visits: FOREST.visits,
+            tier: FOREST.tier,
+            stamps: null,
+            passwordHash: forestMemberHash,
+          }
+        : { passwordHash: forestMemberHash },
     });
 
   /**
@@ -1293,6 +1352,13 @@ async function seed(): Promise<void> {
     );
   }
 
+  // Maha's opening entry, by the module `db:demo-forest` uses, under the same
+  // per-member absence guard as the loop above.
+  const [{ present: hasForestOpening } = { present: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS present FROM "transaction" WHERE id = ${FOREST_OPENING_TX}`,
+  )) as unknown as Array<{ present: number }>;
+  if (hasForestOpening === 0) await writeForestOpeningBalance(db);
+
   // ------------------------------------------------------------ TX-9021 ----
   //
   // Lane D's permission specs void `TX-9021` by name and assert it is a settled
@@ -1489,21 +1555,33 @@ async function seed(): Promise<void> {
       visits: member.visits,
     })
     .from(member)
-    .where(sql`${member.id} IN ('8842', '8843')`)
+    .where(sql`${member.id} IN ('8842', '8843', ${FOREST.memberId})`)
     .orderBy(member.id);
 
   // Three decimals, Western digits — the display boundary rule, and the only
   // place in this script where fils become a human-readable figure.
   const kd = (v: number | bigint) => (Number(v) / 1000).toFixed(3);
 
-  for (const row of printed) {
+  const summaryOf = (row: (typeof printed)[number]) => {
     const tier = row.tier ? `, ${row.tier[0]!.toUpperCase()}${row.tier.slice(1)}` : '';
     const visits = `${row.visits} visit${row.visits === 1 ? '' : 's'}`;
-    console.log(
-      `  member  ${row.id} / ${MEMBER_PASSWORD}   (${kd(row.balanceFils)} KD${tier}, ${visits})`,
-    );
+    return `(${kd(row.balanceFils)} KD${tier}, ${visits})`;
+  };
+  for (const row of printed) {
+    // Maha has her own password, and it is not printed — see the forest line.
+    if (row.id === FOREST.memberId) continue;
+    console.log(`  member  ${row.id} / ${MEMBER_PASSWORD}   ${summaryOf(row)}`);
   }
+  const forestRow = printed.find((r) => r.id === FOREST.memberId);
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
+  // SAL-FOREST's passwords are NOT printed. They are demo credentials, and a
+  // line of output travels further than the constant does — a pasted report,
+  // a CI log. The constant names say where to read them.
+  console.log(
+    `  forest  ${FOREST.salonId}: web ${FOREST.staffHandle} / FOREST_STAFF_PASSWORD · ` +
+      `member ${FOREST.memberId} ${FOREST.memberPhone} / FOREST_MEMBER_PASSWORD ` +
+      `${forestRow ? summaryOf(forestRow) : '(missing)'} · walletCard brand, ${FOREST.brandColor}`,
+  );
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
   console.log(`  console yousef / ${PLATFORM_PASSWORD}       (owner, every section)`);
   console.log(`  console mariam.k / ${PLATFORM_PASSWORD}     (analyst — no approvals, no policies)`);

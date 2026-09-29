@@ -83,7 +83,7 @@
 import { formatMoney, type Fils } from '@avo/types';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { branch, salon } from '../db/schema/salon';
+import { branch, salon, type WalletCard } from '../db/schema/salon';
 import { staffPasswordReset, staffUser } from '../db/schema/staff';
 import {
   PERM_COLUMN,
@@ -113,7 +113,13 @@ import { parseLoyaltyConfig, type LoyaltyConfig } from './loyaltyRules';
  * module, so there is no cycle; moving all three into a service module would be a
  * better home and a bigger refactor than this slice.
  */
-import { branchId, parseDepositFils, serialiseSalon, type SalonView } from '../routes/salons';
+import {
+  branchId,
+  parseDepositFils,
+  parseWalletCard,
+  serialiseSalon,
+  type SalonView,
+} from '../routes/salons';
 
 /**
  * Every field this endpoint accepts. Anything else is refused BY NAME, not
@@ -143,6 +149,12 @@ const ACCEPTED = new Set([
   'stampReward',
   'stampRewardAr',
   'brandColor',
+  /**
+   * Beside `brandColor`, as on both edit doors (migration 0069). The wizard
+   * draws no control for it yet, so it defaults to `tier` — today's card — and
+   * a console that adds one needs no API change.
+   */
+  'walletCard',
   /**
    * Not drawn by the wizard, accepted because the columns are NOT NULL and a
    * default is a decision either way. See `DEFAULT_BUSINESS_HOURS` and
@@ -237,6 +249,7 @@ export interface OnboardInput {
   depositFils: Fils;
   loyalty: LoyaltyConfig;
   brandColor: string;
+  walletCard: WalletCard;
   timezone: string;
   businessHours: { morning: [string, string]; evening: [string, string] };
   ownerName: string;
@@ -448,6 +461,7 @@ export function parseOnboardInput(
      */
     brandColor:
       body.brandColor === undefined ? DEFAULT_BRAND_COLOR : parseBrandColor(body.brandColor),
+    walletCard: body.walletCard === undefined ? 'tier' : parseWalletCard(body.walletCard),
     timezone: body.timezone === undefined ? 'Asia/Kuwait' : parseTimeZone(body.timezone),
     businessHours: businessHoursOrDefault(body.businessHours),
     ownerName: body.ownerName === undefined ? `${name} owner` : requireString(body.ownerName, 'ownerName', 120),
@@ -542,6 +556,7 @@ export async function onboardSalon(
         ownerPhone: input.ownerPhone,
         plan: input.plan,
         brandColor: input.brandColor,
+        walletCard: input.walletCard,
         moduleBooking: input.moduleBooking,
         moduleShop: input.moduleShop,
         /**
@@ -641,7 +656,7 @@ export async function onboardSalon(
         // function in `@avo/types` and an audit line is a display.
         `deposit ${formatMoney(created.depositFils)} · ` +
         `${input.loyalty.mode === 'tiers' ? 'tiers' : `stamps (${input.loyalty.stampTarget})`} · ` +
-        `brand ${created.brandColor} · modules ` +
+        `brand ${created.brandColor} · card ${created.walletCard} · modules ` +
         `${[created.moduleBooking ? 'booking' : null, created.moduleShop ? 'shop' : null]
           .filter(Boolean)
           .join(', ') || 'none'}`,
@@ -652,6 +667,7 @@ export async function onboardSalon(
         plan: created.plan,
         city: created.city,
         brandColor: created.brandColor,
+        walletCard: created.walletCard,
         depositFils: created.depositFils,
         loyaltyMode: input.loyalty.mode,
         modules: { booking: created.moduleBooking, shop: created.moduleShop },
