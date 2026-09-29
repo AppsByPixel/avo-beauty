@@ -2289,3 +2289,27 @@ What was built:
 Accessibility calls:
 - **Four translucent overlays on forest's light card stop are accepted as documented exceptions:** the offline stamp (4.33), the pill (4.03), the panel title (4.40) and the panel body (3.68). All are above 3:1 and pinned. Every brand card shares these overlays, and forest is the most legible brand card shipped: solid white on Amara's light stop is 2.75.
 - **Rule #9 violation fixed.** The booking tick drew white on `brand`, which breaks #9. It moves to `brandDeep` as compliance, not as a restyle.
+
+**Found running the Forest demo on the simulator, 2026-09-29. All three are fixed.**
+- **Stamp fields broke the wallet (938c937).** `SalonSchema.stampTarget` and `stampReward` were
+  `.optional()` (undefined only), but the API sends `null` when a salon has none, and onboarding
+  writes `stampReward: null` for every new salon. The wallet refused the salon read and showed "We
+  couldn't load your wallet" for any salon without stamp config. Amara only worked because its seed
+  sets both. Both fields are now `.nullable().optional()`.
+- **The brand colour never reached a signed-in session (ca1867e, 24f1ec5).** The wallet and the
+  till only applied the salon's `brandColor` from a hex cached on the previous launch, so the
+  session in which a phone first learned its salon's colour ran in the default green throughout.
+  Sheets that read a brand token now rebuild on a brand change, and the app repaints from the root.
+  - One gap remains: a fresh install's sign-in screen still shows the default palette. Closing it
+    needs an unauthenticated salon-identity read, which is lane A's call.
+- **Render tests lost taps under gate load (8b5b5ca).** On a busy machine, react-native-web's
+  `Pressable` picked up `disabled=false` a moment after `waitFor` saw the button enabled, so the
+  next tap was dropped. Taps that start a read now go through `act`.
+
+**The Forest demo workspace.** `SAL-FOREST` uses brand `#1F5A36` with `walletCard: 'brand'`.
+- Manager: `forest`. Member: Maha, `+96599124450`, Gold tier. Passwords are the seed constants
+  `FOREST_STAFF_PASSWORD` and `FOREST_MEMBER_PASSWORD`, local only.
+- For the hosted demo, run `db:demo-forest` with operator-chosen passwords. Never run `db:seed`
+  there.
+- The wallet is one build per salon (`EXPO_PUBLIC_AVO_SALON`), so a phone demo of Forest needs its
+  own build.
