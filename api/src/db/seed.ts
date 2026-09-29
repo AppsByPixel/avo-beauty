@@ -14,7 +14,7 @@
  * A seed that drifted from the fixtures would make every one of those specs fail
  * for a reason that has nothing to do with the API.
  *
- * Four things exist here that the fixtures do not have:
+ * Five things exist here that the fixtures do not have:
  *
  *   SAL-LUMIERE   a second salon whose Arabic name columns are NULL, on purpose.
  *                 The client fallback is `nameAr ?? name`, and a row that merely
@@ -32,6 +32,10 @@
  *
  *   services      the mock kept these in memory. `POST /charges` prices its
  *                 basket from the database, so they have to exist as rows.
+ *
+ *   rosters       every workspace has two open branches and an artist at each
+ *                 (db/rosterFixture.ts, shared with `db:demo-roster`), so the
+ *                 wallet's Book flow asks for the branch at all three salons.
  *
  *   SAL-FOREST    the dark-green demo workspace (`walletCard: 'brand'`), with a
  *                 gold member whose card keeps the salon's colour anyway. Its
@@ -51,7 +55,7 @@ import { PUBLISHED_LEGAL_SET, SUPPORT_CONFIG } from './legalSeed';
 import { legalDocumentSet, supportConfig, supportTopic } from './schema/legal';
 import { boost, happyHour } from './schema/promotion';
 import { branch, salon } from './schema/salon';
-import { artist, type ArtistWindows } from './schema/artist';
+import { artist } from './schema/artist';
 import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
 import { walletAdjustedPosting, walletSpendPosting } from '../money/ledger';
@@ -70,6 +74,7 @@ import {
   upsertForestWorkspace,
   writeForestOpeningBalance,
 } from './forestFixture';
+import { amaraBranchOf, upsertRosterFixture, week } from './rosterFixture';
 import { env } from '../env';
 
 /**
@@ -151,34 +156,9 @@ const RESET = (process.env.SEED_RESET ?? '1') !== '0';
 const RESET_SESSIONS = process.env.SEED_RESET_SESSIONS === '1';
 
 /**
- * A week of availability windows, keyed '0'..'6' JS `getDay()` order.
- *
- * The design fixture (`artistSched` in AVO Merchant Dashboard.dc.html) stores
- * minutes past midnight — 600, 1260 — because its steppers do arithmetic on
- * them. The contract stores "HH:mm". Converting here rather than storing minutes
- * keeps the database holding the contract's shape, and keeps the two
- * representations from both being half-true.
- *
- * Days not named are CLOSED, and still carry a from/to. A closed day with no
- * times cannot be reopened by ticking one box — the dashboard's steppers need
- * something to start from, which is why the schema keeps the values and only the
- * `open` flag decides anything. Friday is closed everywhere in the fixture; it
- * is the Kuwaiti weekend day, not an oversight.
+ * `week()` — a week of availability windows in the contract's "HH:mm" — lives
+ * in db/rosterFixture.ts now, beside the other artists that use it.
  */
-function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', [number, number]>>): ArtistWindows {
-  const order = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
-  const hhmm = (m: number) =>
-    `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-
-  const out: ArtistWindows = {};
-  order.forEach((name, index) => {
-    const span = open[name];
-    out[String(index)] = span
-      ? { open: true, from: hhmm(span[0]), to: hhmm(span[1]) }
-      : { open: false, from: '10:00', to: '21:00' };
-  });
-  return out;
-}
 
 async function seed(): Promise<void> {
   const [
@@ -442,10 +422,16 @@ async function seed(): Promise<void> {
        * off, so leaving them false would make the whole of phase 6 unreachable in
        * development and start every proof run with a PATCH.
        *
-       * SAL-LUMIERE below stays OFF on both deliberately, which is what keeps the
-       * refusals themselves testable: two salons, one with the module and one
+       * SAL-LUMIERE below stays OFF for the SHOP deliberately, which is what
+       * keeps that refusal testable: two salons, one with the module and one
        * without, is the only fixture shape that can prove a gate exists rather
-       * than that it is merely absent.
+       * than that it is merely absent. ITS BOOKING IS NOW ON, and so is
+       * Forest's (db/rosterFixture.ts, 2026-09-29): every workspace has a
+       * bookable roster at two branches, and a roster in a salon that takes no
+       * bookings is unreachable. So NO SEEDED SALON HAS BOOKING OFF any more.
+       * `booking_not_enabled` is proven by routes/salons.test.ts against the
+       * gate itself; a spec that needs it against a real row makes its own
+       * salon, as the int files that insert `module_booking` already do.
        *
        * WHAT THIS COMMENT USED TO CLAIM, AND WHY IT WAS WRONG. It said Lumière
        * "has no products either, so `shop_not_enabled` and an empty catalog are
@@ -594,6 +580,9 @@ async function seed(): Promise<void> {
       { id: 'BR-LUM-JAB', salonId: 'SAL-LUMIERE', name: 'Jabriya', nameAr: null },
     ])
     .onConflictDoNothing();
+  // Lumière's ROSTER — two services, two artists per branch, booking on — is
+  // not here: it is db/rosterFixture.ts, applied after the artists below. The
+  // two inserts above stay byte-identical to lane D's harness, as they say.
 
   // The Book flow's service list, in both languages. SV-05 has NO Arabic name
   // deliberately, for the reason migration 0006 gives about the branch fixture:
@@ -889,6 +878,11 @@ async function seed(): Promise<void> {
   // the read-only refusal in PUT /artists/{id}/availability is only provable
   // against a row that is actually synced.
   //
+  // WHERE THEY WORK (migration 0044): Rana and Dana at Kuwait City, Hessa and
+  // Shaikha at Salmiya — trunk's layout, in db/rosterFixture.ts. Hessa is at
+  // Salmiya because ST-002 is the Salmiya till (`branchAccessIds` above).
+  // Before 2026-09-29 all four were NULL, which hid the wallet's branch step.
+  //
   // AR-003 is Hessa, and she is the only one wired to a `staff_user`. She holds
   // a scanner PIN (ST-002), so she is the fixture that makes
   // `PUT /artists/me/availability` reachable — and, because ST-002 is the
@@ -901,6 +895,7 @@ async function seed(): Promise<void> {
       {
         id: 'AR-001',
         salonId: SALON_ID,
+        branchId: amaraBranchOf('AR-001'),
         name: 'Rana Al-Sabah',
         nameAr: 'رنا الصباح',
         // Google-sourced: windows are read-only until switched to manual.
@@ -912,6 +907,7 @@ async function seed(): Promise<void> {
       {
         id: 'AR-002',
         salonId: SALON_ID,
+        branchId: amaraBranchOf('AR-002'),
         name: 'Dana Yousef',
         nameAr: 'دانة يوسف',
         availabilitySource: 'google',
@@ -922,6 +918,7 @@ async function seed(): Promise<void> {
       {
         id: 'AR-003',
         salonId: SALON_ID,
+        branchId: amaraBranchOf('AR-003'),
         staffUserId: 'ST-002',
         name: 'Hessa M.',
         nameAr: 'حصة م.',
@@ -935,6 +932,7 @@ async function seed(): Promise<void> {
       {
         id: 'AR-004',
         salonId: SALON_ID,
+        branchId: amaraBranchOf('AR-004'),
         name: 'Shaikha B.',
         // No Arabic name and no Google connection: the null-fallback row, and
         // the one that proves switching TO google is refused without a calendar.
@@ -949,7 +947,13 @@ async function seed(): Promise<void> {
       target: artist.id,
       // Re-running resets the availability state, so a spec that switched AR-001
       // to manual does not leave the next run without a synced fixture.
+      //
+      // `branch_id` too, so a warm database converges on the layout: every
+      // database seeded before it existed holds all four at NULL, and DO
+      // NOTHING there would leave the wallet's branch step hidden while the
+      // seed printed success (db/rosterFixture.ts).
       set: {
+        branchId: sql`excluded.branch_id`,
         availabilitySource: sql`excluded.availability_source`,
         googleConnected: sql`excluded.google_connected`,
         slotMinutes: sql`excluded.slot_minutes`,
@@ -984,6 +988,14 @@ async function seed(): Promise<void> {
      WHERE a.id IN ('AR-001', 'AR-002', 'AR-003', 'AR-004')
        AND s.id IN ('SV-01', 'SV-02', 'SV-03', 'SV-04', 'SV-05')
     ON CONFLICT DO NOTHING`);
+
+  // ------------------------------------------- forest and lumière rosters ----
+  //
+  // Two branches per workspace and two artists at each, with their services and
+  // booking switched on — db/rosterFixture.ts, shared with `db:demo-roster`.
+  // After the salons, the forest workspace and Amara's artists, which is all it
+  // depends on.
+  await upsertRosterFixture(db);
 
   // Dana — the fixture member. 24.500 KD, 5 visits, Silver.
   await db

@@ -317,9 +317,18 @@ suite('an artist belongs to one branch', () => {
       expect(res.statusCode).toBe(200);
       expect(names(res.body)).toContain(`EN Nobranch ${RUN}`);
       expect(names(res.body)).not.toContain(`EN Salmiya ${RUN}`);
-      // The seed's four artists are unassigned too — SAL-AMARA is multi-branch,
-      // so 0044 deliberately backfilled none of them.
-      expect(names(res.body)).toContain('Rana Al-Sabah');
+      // The seed's four artists are NOT: 0044 backfilled none of them, and the
+      // seed now places them itself (db/rosterFixture.ts) — Rana at Kuwait City.
+      expect(names(res.body)).not.toContain('Rana Al-Sabah');
+    });
+
+    it("the seed's roster is where trunk put it: Rana and Dana at Kuwait City, Hessa and Shaikha at Salmiya", async () => {
+      const kwc = names((await get(`/salons/${SALON}/artists?branch=${KUWAIT_CITY}`, manager)).body);
+      const sal = names((await get(`/salons/${SALON}/artists?branch=${SALMIYA}`, manager)).body);
+      expect(kwc).toEqual(expect.arrayContaining(['Rana Al-Sabah', 'Dana Yousef']));
+      expect(sal).toEqual(expect.arrayContaining(['Hessa M.', 'Shaikha B.']));
+      expect(kwc).not.toContain('Hessa M.');
+      expect(sal).not.toContain('Rana Al-Sabah');
     });
 
     it('the CUSTOMER bookable list filters too, and never asserts a branch', async () => {

@@ -17,6 +17,7 @@
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/db/seed.ts",
     "db:demo-forest": "tsx src/db/demoForest.ts",
+    "db:demo-roster": "tsx src/db/demoRoster.ts",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
     "db:reset": "docker compose down -v && docker compose up -d --wait && pnpm run db:migrate",

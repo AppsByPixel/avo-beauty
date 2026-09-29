@@ -28,9 +28,12 @@
  *
  * NO PASSWORD LIVES IN THIS FILE. Both callers pass hashes.
  *
- * WHAT IS DELIBERATELY NOT HERE: artists, a scanner PIN, products, promotions,
- * consent events, bookings. Booking and shop are OFF, the modules' own default,
- * so nothing here needs a roster or a catalogue. `nameAr` is NULL — Arabic copy
+ * WHAT IS DELIBERATELY NOT HERE: a scanner PIN, products, promotions, consent
+ * events, bookings — and the roster. Forest's second branch, its four artists
+ * and switching its booking module ON live in db/rosterFixture.ts, applied by
+ * `db:seed` and `db:demo-roster`; the salon is created here with both modules
+ * OFF, the modules' own default, and the upsert below never touches either
+ * flag, so a re-run of `db:demo-forest` does not switch booking back off. `nameAr` is NULL — Arabic copy
  * is written, not invented, and the wallet falls back to "Forest" through
  * `nameAr ?? name` exactly as it does for SAL-LUMIERE.
  */
