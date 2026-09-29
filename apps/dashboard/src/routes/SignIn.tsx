@@ -34,7 +34,43 @@ const COPY = {
    * that conditional cost.
    */
   missingWorkspace: 'Enter the workspace for your salon.',
+  /*
+   * NOT FROM THE DESIGN, and only ever a fallback. A 429 from the sign-in limiter
+   * (`api/src/services/signInLimit.ts`) carries the server's own sentence, and
+   * that sentence is what renders: "Too many attempts. Wait a moment and try
+   * again." for the 15-minute burst, "Too many sign-in attempts. Try again later,
+   * or use the reset link." for the hourly ceiling. This line is for a 429 that
+   * arrives without one. It names no wait time because the server sends none:
+   * both windows roll, so the client cannot know when the next attempt counts.
+   */
+  rateLimited: 'Too many sign-in attempts. Wait a few minutes and try again.',
 } as const;
+
+/**
+ * What the form says when `POST /auth/web/session` did not open a session.
+ *
+ * "COULDN'T REACH" IS FOR NOT REACHING IT, AND NOTHING ELSE. It used to be the
+ * fallthrough for every status that was not a 401 or a 400, so the limiter's
+ * 429 read as an outage: Aftab, after several wrong passwords, was told "We
+ * couldn't reach your workspace" by a server that had just answered him, and
+ * concluded it was down. Now: no response at all or a 5xx is unreachable; a 429
+ * is the server's own refusal; any other refusal renders the server's message,
+ * which is written for the person reading it.
+ */
+export function signInErrorCopy(cause: unknown): string {
+  if (!(cause instanceof ApiError)) return COPY.unreachable;
+  if (cause.isConnectivity || cause.status >= 500) return COPY.unreachable;
+  /*
+   * The API answers every credential failure identically and on purpose —
+   * "wrong password", "no such user" and "no such salon" are one 401 with one
+   * body, because distinguishing them turns this form into a staff-list oracle.
+   * So this does not try to be more specific than the server was.
+   */
+  if (cause.isUnauthenticated) return COPY.rejected;
+  if (cause.status === 400) return COPY.missingWorkspace;
+  if (cause.status === 429) return cause.message.trim() || COPY.rateLimited;
+  return cause.message.trim() || COPY.unreachable;
+}
 
 const MIN_PASSWORD_LENGTH = 6;
 
@@ -174,16 +210,7 @@ export function SignIn() {
       setWelcome(session.displayName || displayNameFor(username));
     } catch (cause) {
       setPassword('');
-      /*
-       * The API answers every credential failure identically and on purpose —
-       * "wrong password", "no such user" and "no such salon" are one 401 with
-       * one body, because distinguishing them turns this form into a staff-list
-       * oracle. So this branch does not try to be more specific than the server
-       * was: one message for a refusal, one for not reaching it at all.
-       */
-      if (cause instanceof ApiError && cause.isUnauthenticated) setError(COPY.rejected);
-      else if (cause instanceof ApiError && cause.status === 400) setError(COPY.missingWorkspace);
-      else setError(COPY.unreachable);
+      setError(signInErrorCopy(cause));
     } finally {
       setSubmitting(false);
     }

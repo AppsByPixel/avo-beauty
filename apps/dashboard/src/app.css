@@ -214,6 +214,8 @@ a:hover {
   border-right: 1px solid var(--avo-hairline);
   /* The sidebar never scrolls with content — interaction-spec.md §1. */
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
   transition: width var(--avo-motion-fast) ease;
 }
 
@@ -239,6 +241,24 @@ a:hover {
   flex: 1;
   overflow: auto;
   padding: 28px 30px;
+  /*
+   * THE SHELL SCROLLS HERE, NOT IN THE WINDOW, SO THIS BOX MUST ALSO BE THE
+   * CONTAINING BLOCK. Without `position`, an absolutely positioned descendant
+   * with no positioned ancestor (every `.avo-sr-only` chart alternative on the
+   * Overview) takes the INITIAL containing block, escapes this box's overflow
+   * clip, and stretches the document to where it would sit in this box's full
+   * scroll height. Measured on /overview at 1440x900: the document was 2564px
+   * tall against a 900px viewport. Once this box reached its end the wheel
+   * chained to the window and scrolled the whole shell (rail, header, content)
+   * up into a blank page. `relative` keeps those spans inside the clip, and the
+   * document back at exactly the viewport.
+   *
+   * `overscroll-behavior: contain` is the second half: nothing past this box's
+   * end is ever chained to the window, whatever lands in the document later.
+   * Asserted in shell/shellScrollContainment.test.ts.
+   */
+  position: relative;
+  overscroll-behavior: contain;
 }
 
 .dash[data-bp='base'] .dash__content {
@@ -608,6 +628,8 @@ a:hover {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .dash-header__date {
@@ -775,6 +797,8 @@ a:hover {
 .dash-bell__list {
   max-height: 340px;
   overflow: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 /* One row. A `div` when it goes nowhere, a `button` when it does - same box. */
@@ -921,17 +945,112 @@ a:hover {
 
 /* =============================================================== overview == */
 
-.overview__kpis {
+/*
+ * ONE GRID FOR THE WHOLE OVERVIEW.
+ *
+ * Aftab: "the widgets on the dashboards, none of them align with each other
+ * indentation-wise." They could not: the KPI row was four 1fr tracks at 16px,
+ * the trend/activity pair 1.35fr + 1fr at 18px, and the analytics grid two 1fr
+ * at 18px, so no two rows shared a seam. Measured at 1440: KPI seams at
+ * 275/291, 566/582, 857/873; the pair's at 649/667; the analytics' at 565/583.
+ *
+ * Now every row is quarters of the same column with the one gap token. A KPI
+ * tile is one quarter; a half card is two quarters and its gap, which is
+ * exactly `(100% - gap) / 2`, so the halves' seam IS the KPI row's middle seam;
+ * a full card is all four.
+ *
+ * AND THE COLUMN COUNT FOLLOWS THE CONTENT, NOT A BREAKPOINT. Aftab, next: "nah
+ * still too many empty spaces on the dashboard". At 800px the old `tablet` rule
+ * put the KPIs 2x2 (370x120 tiles round one short number) and every analytics
+ * card on its own full-width row. Now:
+ *
+ *   - the KPI row stays four across. A tile needs 160px for its figure, so four
+ *     fit down to a 688px column, and the narrowest supported one is 708px
+ *     (768px viewport, interaction-spec.md §1). Below that the page is not drawn.
+ *   - the pair and the analytics go one-up only when a half would be narrower
+ *     than `--ovw-half-min`, the narrowest a half card's content is readable at
+ *     (the artists table and a bar row, measured). `max(min, (100% - gap) / 2)`
+ *     inside `auto-fit` is what caps them at two.
+ *
+ * interaction-spec.md §1 says "KPI row 2x2" at narrow and "everything 1-up" at
+ * tablet. That is superseded here, at trunk's instruction, for these widgets:
+ * the spec's rule predates them, and Aftab's complaint is its result.
+ *
+ * NO CARD IS STRETCHED to its neighbour's height: that only moves the blank
+ * under a short card inside it. The pair keeps each card at its own height, and
+ * the analytics pack as masonry (below, and `OverviewAnalytics.tsx §
+ * useMasonry`), so each column stacks one gap under the card above it.
+ */
+.overview__kpis,
+.overview__grid,
+.ovw-grid {
+  --ovw-half-min: 340px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
   gap: var(--avo-space-grid-gap);
-  margin-bottom: 22px;
 }
 
-/* narrow and tablet: KPI row becomes 2x2. */
-.dash[data-bp='narrow'] .overview__kpis,
-.dash[data-bp='tablet'] .overview__kpis {
-  grid-template-columns: repeat(2, 1fr);
+.overview__kpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: var(--avo-space-grid-gap);
+}
+
+.overview__grid,
+.ovw-grid {
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(max(var(--ovw-half-min), calc((100% - var(--avo-space-grid-gap)) / 2)), 1fr)
+  );
+  align-items: start;
+}
+
+/*
+ * MASONRY. `data-masonry` is set by `useMasonry` once every card has been
+ * measured into `--ovw-rows` (its height plus the gap, in 1px rows). The row gap
+ * is 0 because the gap is inside that count; the column gap is still the token.
+ * `dense` places each card at the earliest free row in any column, which is the
+ * shortest column's end.
+ */
+.ovw-grid[data-masonry] {
+  grid-auto-rows: 1px;
+  row-gap: 0;
+  grid-auto-flow: row dense;
+}
+
+.ovw-grid[data-masonry] > * {
+  /* Overwritten per card, inline, by `useMasonry`. */
+  --ovw-rows: 1;
+  grid-row-end: span var(--ovw-rows);
+}
+
+/* The platform's own masonry, where it exists. `useMasonry` stands down there. */
+@supports (grid-template-rows: masonry) {
+  .ovw-grid {
+    grid-template-rows: masonry;
+  }
+}
+
+/*
+ * THE KPI TILE'S VERTICAL PADDING IS TIGHTER ON THE OVERVIEW. The tile is the
+ * design's (`StatCard`, AVO Merchant Dashboard.dc.html); 14px top and bottom
+ * instead of the card's 20 is trunk's density call for this row, and the side
+ * padding, the one inset every card shares, is untouched.
+ */
+.overview__kpis > .avo-card {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+/*
+ * THE EMPTY AND ERROR STATES SIT ON THE CARD'S INSET. `.avo-state` carries 4px
+ * of side padding of its own, which put every empty Overview card's copy at 25px
+ * against 21px for every loaded one. Inside a card the card's padding is the
+ * inset; the state keeps its vertical padding.
+ */
+.overview__kpis .avo-state,
+.overview__grid .avo-state,
+.ovw-grid .avo-state {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 /*
@@ -948,17 +1067,11 @@ a:hover {
  * a tablet. The bars are percentage-height inside a flexible track, so the
  * chart is free to be as narrow as the layout wants once that floor is removed.
  */
-.overview__grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 18px;
-  align-items: start;
-}
-
-.dash[data-bp='base'] .overview__grid,
-.dash[data-bp='wide'] .overview__grid {
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-}
+/*
+ * `.overview__grid` is two halves on the Overview's one grid (§ ONE GRID above).
+ * The trend's fourteen bars are a shape at half width, so it gave up its wider
+ * track rather than keep a seam that lined up with nothing.
+ */
 
 /* ============================================================ sales trend == */
 
@@ -1125,7 +1238,7 @@ a:hover {
  * routes/Overview.tsx § AssumedNote.
  */
 .overview__kpi-note {
-  margin: -6px 0 16px;
+  margin: 0 0 var(--avo-space-grid-gap);
   font-size: 12px;
   line-height: 1.45;
   color: var(--avo-text-muted);
@@ -1205,13 +1318,14 @@ a:hover {
 /*
  * THE ANALYTICS GRID — NEW WORK, the design bundle draws none of these widgets
  * (routes/OverviewAnalytics.tsx). Every value below is one this file already
- * uses: the cards borrow `.overview__card-title`, the Overview's 18px grid gap,
+ * uses: the cards borrow `.overview__card-title`, the Overview's grid gap token,
  * the trend card's caption type and the feed's hairlines, so thirteen new
  * panels read as the same screen rather than a second design.
  *
- * interaction-spec.md §1: two-column grids stay 2-up at `wide` and `base` and go
- * 1-up at `narrow` and `tablet`. The heatmap spans both columns where there are
- * two, because 7 × N cells need width to be a shape.
+ * The grid itself is § ONE GRID FOR THE WHOLE OVERVIEW, above. The heatmap used
+ * to span both columns; its cells now flex to the card (§ THE GRID FILLS THE
+ * CARD), so at half width they are near square, and it packs as a column card
+ * like the rest instead of cutting the masonry into bands.
  */
 .ovw-section {
   margin-top: 28px;
@@ -1238,23 +1352,6 @@ a:hover {
 
 .ovw-section > .avo-stale {
   margin-bottom: 12px;
-}
-
-.ovw-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
-}
-
-.dash[data-bp='base'] .ovw-grid,
-.dash[data-bp='wide'] .ovw-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.dash[data-bp='base'] .ovw[data-wide],
-.dash[data-bp='wide'] .ovw[data-wide] {
-  grid-column: 1 / -1;
 }
 
 .ovw {
@@ -1324,16 +1421,33 @@ a:hover {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
+  display: grid;
+  row-gap: 9px;
+}
+
+/*
+ * THE FIGURE COLUMN IS THE SAME SHARE OF EVERY BAR CARD, so bars in cards
+ * stacked above each other end on the same line. It was `auto` on each ROW, so
+ * a tier count ("8") and a sum ("8.000 KD") ended their bars 49px apart, in
+ * different cards and inside the same one.
+ *
+ * The three columns are the LIST's, and each row takes them by `subgrid`, so a
+ * card's rows cannot disagree. The figure column is 28% of the card: at a half
+ * card on a 1440 screen that is 147px, which holds the widest figure these cards
+ * print at a realistic size ("12 units · 1,234.500 KD", 144px), and it scales
+ * with the card. `max-content` lets a larger figure widen its own card rather
+ * than clip.
+ */
+.ovw-bars {
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) minmax(28%, max-content);
+  column-gap: 10px;
 }
 
 .ovw-bars__row {
   display: grid;
-  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 10px;
   font-size: 13px;
 }
 
@@ -1528,6 +1642,8 @@ a:hover {
 
 .ovw-table {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .ovw-table table {
@@ -1542,6 +1658,17 @@ a:hover {
   text-align: left;
   border-top: 1px solid var(--avo-hairline-inner);
   white-space: nowrap;
+}
+
+/* The outer cells sit on the card's inset, not 6px inside it. */
+.ovw-table th:first-child,
+.ovw-table td:first-child {
+  padding-left: 0;
+}
+
+.ovw-table th:last-child,
+.ovw-table td:last-child {
+  padding-right: 0;
 }
 
 .ovw-table thead th {
@@ -1562,13 +1689,35 @@ a:hover {
 
 /* ------------------------------------------------------------- heatmap ---- */
 
+/*
+ * THE GRID FILLS THE CARD. The cells were a fixed 28x20, so a week with a dozen
+ * busy hours used about two thirds of a full-width card and left the rest
+ * blank. Now the hour columns share the width (`table-layout: fixed`, the table
+ * at 100%) and a cell's height follows its width, near square, between 20px and
+ * 36px so a narrow week never grows a tall card. `--hours` is set on the table
+ * by `BusiestTimesCard`; `cqw` is this scroller's width.
+ *
+ * The scroller reaches 3px into the card's padding on each side because the
+ * cells' 3px `border-spacing` also runs round the outside: that way the day
+ * labels and the last column sit on the card's inset, not 3px inside it.
+ */
 .ovw-heat {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
+  container-type: inline-size;
+  margin: 0 -3px;
 }
 
 .ovw-heat table {
   border-collapse: separate;
   border-spacing: 3px;
+  table-layout: fixed;
+  width: 100%;
+  /* Overwritten inline by `BusiestTimesCard` with the number of hour columns. */
+  --hours: 1;
+  /* Below 18px a column stops being a cell: scroll rather than crush. */
+  min-width: calc(40px + var(--hours) * 21px);
 }
 
 .ovw-heat th {
@@ -1597,9 +1746,7 @@ a:hover {
  * wrapper scrolls inside the card at the 1-up widths (interaction-spec §1).
  */
 .ovw-heat tbody td {
-  width: 28px;
-  min-width: 28px;
-  height: 20px;
+  height: clamp(20px, calc((100cqw - 40px) / var(--hours) * 0.8), 36px);
   border-radius: 3px;
   background: var(--avo-surface-alt);
 }
@@ -3360,6 +3507,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .audit__table {
@@ -3472,6 +3621,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .appts__table {
@@ -4105,6 +4256,8 @@ a:hover {
 .apweek__scroll {
   overflow-x: auto;
   padding: 0 20px 18px;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .apweek__grid {
@@ -4745,6 +4898,8 @@ a:hover {
   overflow-y: auto;
   margin: 0 calc(-1 * var(--avo-space-card-padding))
     calc(-1 * var(--avo-space-card-padding));
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .deposits__table {
@@ -6822,6 +6977,8 @@ a:hover {
  */
 .reports__card[data-wide] .reports__table {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .reports__card[data-wide] .reports__cols,
@@ -7118,6 +7275,8 @@ a:hover {
 /* interaction-spec.md §1: data tables scroll, they never drop columns. */
 .salons__scroll {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .salons__table {
@@ -7467,6 +7626,8 @@ a:hover {
 /* interaction-spec.md §1: data tables scroll, they never drop columns. */
 .saloned__scroll {
   overflow-x: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .saloned__tiers {
@@ -7778,6 +7939,8 @@ a:hover {
   background: var(--avo-surface);
   border-radius: 22px;
   box-shadow: 0 40px 80px -30px color-mix(in srgb, var(--avo-ink) 50%, transparent);
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .wiz__head {
@@ -8554,6 +8717,8 @@ a:hover {
   overflow-x: auto;
   max-height: 620px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .accounts-console__table {
@@ -9276,6 +9441,8 @@ a:hover {
   overflow-x: auto;
   max-height: 640px;
   overflow-y: auto;
+  /* A scroller is the containing block for what it scrolls: see .dash__content. */
+  position: relative;
 }
 
 .orders__table {
