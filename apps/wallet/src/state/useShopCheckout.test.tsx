@@ -73,7 +73,7 @@ const ORDER = {
 
 async function mountReady(balance = 24500) {
   const onPaid = vi.fn();
-  const hook = renderHook(() => useShop(balance, onPaid, []));
+  const hook = renderHook(() => useShop('SAL-AMARA', balance, onPaid, []));
   await waitFor(() => expect(hook.result.current.status).toBe('ready'));
   return { ...hook, onPaid };
 }

@@ -62,7 +62,7 @@ import { SignUpScreen } from './src/screens/SignUpScreen';
 import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
 import { signOut } from './src/api/auth';
 import { refreshSession } from './src/api/client';
-import { isSignedIn, onSessionEnded, restore } from './src/api/session';
+import { isSignedIn, onSessionEnded, restore, sessionOwner } from './src/api/session';
 import { bootDestination } from './src/domain/bootGate';
 import { LanguageProvider, useCopy, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
@@ -247,7 +247,23 @@ function Gate() {
       <SignUpScreen onSignedUp={() => setState('in')} onLogIn={() => setState('signIn')} />
     );
   }
-  return <Wallet onSignedOut={() => setState('signIn')} onForgotPassword={() => setState('forgot')} />;
+  /*
+    THE WORKSPACE IS THE SESSION'S. `state === 'in'` is only reached with one, so
+    a null here is the single render between a session ending and
+    `onSessionEnded` moving the gate — blank, not a wallet with no salon.
+    `key` is the workspace and the member: a different one is a different
+    wallet, mounted fresh, with nothing carried over from the last.
+  */
+  const owner = sessionOwner();
+  if (owner === null) return <View style={styles.blank} />;
+  return (
+    <Wallet
+      key={`${owner.salonId}:${owner.memberId}`}
+      salonId={owner.salonId}
+      onSignedOut={() => setState('signIn')}
+      onForgotPassword={() => setState('forgot')}
+    />
+  );
 }
 
 /**
@@ -263,9 +279,12 @@ function Gate() {
  * to `GET /members/me`, never a figure this app computed.
  */
 function Wallet({
+  salonId,
   onSignedOut,
   onForgotPassword,
 }: {
+  /** The signed-in workspace — `sessionOwner().salonId`. Never the build's. */
+  salonId: string;
   onSignedOut: () => void;
   /** Contract rule 5 — pwForgot drops into the reset-link flow, owned by App. */
   onForgotPassword: () => void;
@@ -307,6 +326,7 @@ function Wallet({
    * anyway — so no button is ever labelled against a balance we do not have.
    */
   const shop = useShop(
+    salonId,
     snapshotBalance(home.snapshot),
     home.retry,
     /*

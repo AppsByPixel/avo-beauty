@@ -202,13 +202,72 @@ export function parseSnapshot(raw: unknown): CachedSnapshot | null {
   return null;
 }
 
-export async function readSnapshot(): Promise<CachedSnapshot | null> {
+/**
+ * Whose wallet, at which workspace. The session's half that is not a secret —
+ * `api/session.ts § sessionOwner`.
+ */
+export interface SnapshotOwner {
+  salonId: string;
+  memberId: string;
+}
+
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * ONE KEY, AND IT IS CHECKED AGAINST THE SESSION RATHER THAN SCOPED BY SALON.
+ *
+ * One wallet app serves every workspace now, so a phone can hold a session at
+ * Forest while `avo.wallet.home.v1` still holds her Amara wallet — a session that
+ * EXPIRED does not clear it (that is what keeps the offline Home reachable), so
+ * the next sign-in can be somewhere else entirely. Seeded as it was, Home would
+ * paint Amara's balance, activity and tier card for the length of the first
+ * read.
+ *
+ * Two ways out were on the table: a key per salon, or one key that is cleared on
+ * a workspace change and refused when it is not hers. This is the second, on
+ * purpose. A key per salon keeps every workspace's balance and activity on the
+ * phone after she has left it, which is the one thing a sign-out exists to stop;
+ * one wallet is on screen at a time, so one cached wallet is all that is needed.
+ *
+ *   - `discardSnapshotNotOwnedBy` runs at every sign-in and sign-up
+ *     (`state/workspace.ts`) and drops a snapshot that is not the new session's.
+ *   - `readSnapshot(owner)` refuses one anyway — the member AND the salon must be
+ *     the session's — so a path that forgets the first still cannot show it.
+ *
+ * `owner` null means "no session to check against" and skips the check. The
+ * wallet is only mounted signed in, so that is a spec with no session; it is
+ * not a path the app takes.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export function ownedBy(snapshot: WalletSnapshot, owner: SnapshotOwner): boolean {
+  return (
+    snapshot.member.id === owner.memberId &&
+    snapshot.member.salonId === owner.salonId &&
+    snapshot.salon.id === owner.salonId
+  );
+}
+
+export async function readSnapshot(owner: SnapshotOwner | null = null): Promise<CachedSnapshot | null> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     if (!raw) return null;
-    return parseSnapshot(JSON.parse(raw));
+    const cached = parseSnapshot(JSON.parse(raw));
+    if (cached && owner && !ownedBy(cached.snapshot, owner)) return null;
+    return cached;
   } catch {
     return null;
+  }
+}
+
+/** Drop the cached wallet unless it is this session's. See `ownedBy`. */
+export async function discardSnapshotNotOwnedBy(owner: SnapshotOwner): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(KEY);
+    if (!raw) return;
+    const cached = parseSnapshot(JSON.parse(raw));
+    if (cached && ownedBy(cached.snapshot, owner)) return;
+    await AsyncStorage.removeItem(KEY);
+  } catch {
+    // `readSnapshot(owner)` still refuses it; nothing else to do.
   }
 }
 

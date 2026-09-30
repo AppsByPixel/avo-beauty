@@ -123,7 +123,7 @@ const OPENED = {
 };
 
 function Shell() {
-  const shop = useShop(25350, vi.fn(), [KWC_OPTION]);
+  const shop = useShop('SAL-AMARA', 25350, vi.fn(), [KWC_OPTION]);
   return (
     <ShopScreen
       shop={shop}

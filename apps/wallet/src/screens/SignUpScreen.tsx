@@ -69,6 +69,7 @@ import {
   type SignupRecovery,
 } from '../domain/signup';
 import { SALON_ID } from '../config/salon';
+import { enterWorkspace } from '../state/workspace';
 import { useLanguage } from '../i18n/language';
 import { PrimaryButton } from '../components/Buttons';
 import { PolicySheet } from '../components/account/PolicySheet';
@@ -201,7 +202,18 @@ export function SignUpScreen({
 
     setStatus({ state: 'working' });
     try {
-      await signUp({
+      const member = await signUp({
+        /*
+          THE ONE RUNTIME USE OF THE BUILD'S SALON LEFT, AND IT IS A PRODUCT
+          QUESTION RATHER THAN A SETTLED ANSWER. Sign-in no longer names a
+          workspace — the account decides it. Sign-up has no account yet, so
+          something must, and the only thing on hand is the build default
+          (`config/salon.ts`). With one app serving every workspace, a new
+          customer at Forest who installs it and taps Create account is
+          registered at Amara. Which workspace a new sign-up joins (a picker,
+          an invite link, a salon code) is for trunk and the client; this
+          keeps today's behaviour until then.
+        */
         salonId: SALON_ID,
         name: name.trim(),
         phone: phone.trim(),
@@ -217,6 +229,9 @@ export function SignUpScreen({
       // #6 a side effect of the navigation shape.
       setPassword('');
       setConfirm('');
+      // Into the workspace she joined: the palette, and no other workspace's
+      // cached wallet — `state/workspace.ts`.
+      await enterWorkspace({ salonId: member.salonId, memberId: member.id });
       onSignedUp();
     } catch (err) {
       setPassword('');

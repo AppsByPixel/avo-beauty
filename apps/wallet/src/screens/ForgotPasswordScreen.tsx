@@ -49,6 +49,7 @@ import {
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { requestPasswordReset } from '../api/auth';
+import { lastWorkspace } from '../state/lastWorkspace';
 import { resetRequestRefusal } from '../domain/resetRequest';
 import { MIN_TAP_TARGET, WHITE, color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
@@ -80,7 +81,8 @@ export function ForgotPasswordScreen({ onBack }: { onBack: () => void }) {
     }
     setStatus({ state: 'working' });
     try {
-      await requestPasswordReset(phone.trim());
+      // The last workspace she signed in to, or none — `api/auth.ts`.
+      await requestPasswordReset(phone.trim(), lastWorkspace()?.salonId ?? null);
       setStatus({ state: 'sent' });
     } catch (err) {
       const refusal = resetRequestRefusal(err);

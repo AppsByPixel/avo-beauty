@@ -123,7 +123,7 @@ function orderResult(pickupBranch: unknown) {
 }
 
 function Shell({ branches }: { branches: readonly PickupBranchOption[] }) {
-  const shop = useShop(BALANCE, vi.fn(), branches);
+  const shop = useShop('SAL-AMARA', BALANCE, vi.fn(), branches);
   return (
     <ShopScreen
       shop={shop}

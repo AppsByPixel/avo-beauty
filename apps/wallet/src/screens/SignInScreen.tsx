@@ -52,9 +52,11 @@
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { ApiError } from '../api/client';
-import { signIn } from '../api/auth';
-import { SALON_ID } from '../config/salon';
+import { signIn, workspaceChoices, type WorkspaceChoice } from '../api/auth';
+import { salonName } from '../domain/names';
 import { useLanguage } from '../i18n/language';
+import { lastWorkspace } from '../state/lastWorkspace';
+import { enterWorkspace } from '../state/workspace';
 import { PrimaryButton } from '../components/Buttons';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
@@ -64,7 +66,9 @@ type Status =
   | { state: 'idle' }
   | { state: 'working' }
   /** A sentence to show inline. Never a screen-level failure. */
-  | { state: 'refused'; message: string };
+  | { state: 'refused'; message: string }
+  /** `409 choose_workspace` — her phone and password open more than one. */
+  | { state: 'choosing'; workspaces: WorkspaceChoice[] };
 
 export function SignInScreen({
   onSignedIn,
@@ -82,7 +86,19 @@ export function SignInScreen({
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<Status>({ state: 'idle' });
 
-  const submit = useCallback(async () => {
+  /**
+   * ONE DOOR, TWO KNOCKS. The first post sends phone and password ALONE — the
+   * account decides the workspace, not the build (`api/auth.ts`). If they open
+   * more than one, the server answers `choose_workspace` and the second post is
+   * the same pair WITH the `salonId` she picked.
+   *
+   * #6, AND THE ONE PLACE THE PASSWORD OUTLIVES A CALL. It is cleared the moment
+   * a call resolves — except on `choose_workspace`, where the re-post needs it
+   * and she has not finished signing in. It stays component state, exactly as it
+   * was while she typed it, and any keystroke in either field drops the picker
+   * (the choice is for THOSE credentials). The re-post clears it either way.
+   */
+  const submit = useCallback(async (picked: WorkspaceChoice | null = null) => {
     if (status.state === 'working') return;
 
     if (phone.trim() === '' || password === '') {
@@ -92,15 +108,34 @@ export function SignInScreen({
 
     setStatus({ state: 'working' });
     try {
-      await signIn({ salonId: SALON_ID, phone: phone.trim(), password });
+      const member = await signIn(
+        picked === null
+          ? { phone: phone.trim(), password }
+          : { salonId: picked.salonId, phone: phone.trim(), password },
+      );
       /*
         Cleared before the parent swaps the screen out. Unmounting would drop the
         state anyway, but relying on that would make the guarantee a side effect of
         the navigation shape rather than something this screen does.
       */
       setPassword('');
+      /*
+        Into the workspace the SERVER named, before the wallet mounts: its
+        palette, and no other workspace's cached wallet — so a Forest sign-in
+        never paints a frame of Amara. `state/workspace.ts`.
+      */
+      await enterWorkspace(
+        { salonId: member.salonId, memberId: member.id },
+        picked === null ? null : { ...picked, nameAr: picked.nameAr ? picked.nameAr : null },
+      );
       onSignedIn();
     } catch (err) {
+      const workspaces = picked === null ? workspaceChoices(err) : null;
+      if (workspaces !== null) {
+        // The password is kept for the re-post — see above.
+        setStatus({ state: 'choosing', workspaces });
+        return;
+      }
       setPassword('');
       if (err instanceof ApiError) {
         setStatus({
@@ -114,6 +149,13 @@ export function SignInScreen({
   }, [status.state, phone, password, copy, onSignedIn]);
 
   const working = status.state === 'working';
+  /*
+    WHOSE SIGN-IN SCREEN THIS IS: the workspace she was last in, remembered
+    across sign-out (`state/lastWorkspace.ts`), or the build's default name when
+    the phone has never been signed in. Boot painted the same workspace's hex.
+  */
+  const last = lastWorkspace();
+  const salonLabel = last ? salonName(last, lang) : copy.salonName;
 
   return (
     <ScrollView
@@ -123,12 +165,14 @@ export function SignInScreen({
     >
       {/* design:86 — the salon, then the word Wallet. */}
       <View style={styles.brand}>
-        <Text style={[text('displayM', lang), styles.salon]}>{copy.salonName}</Text>
+        <Text style={[text('displayM', lang), styles.salon]} testID="signin-salon">
+          {salonLabel}
+        </Text>
         <Text style={[text('bodyS', lang), styles.walletWord]}>{copy.walletWord}</Text>
       </View>
 
       <Text style={[text('displayS', lang), styles.title]}>{copy.signInTitle}</Text>
-      <Text style={[text('bodyS', lang), styles.sub]}>{copy.signInSub}</Text>
+      <Text style={[text('bodyS', lang), styles.sub]}>{copy.signInSub(salonLabel)}</Text>
 
       <View style={styles.fields}>
         <Field
@@ -138,7 +182,7 @@ export function SignInScreen({
             setPhone(v);
             // The design clears the error on any keystroke (:1728). Leaving it up
             // while she corrects the thing it complained about is nagging.
-            if (status.state === 'refused') setStatus({ state: 'idle' });
+            if (status.state === 'refused' || status.state === 'choosing') setStatus({ state: 'idle' });
           }}
           lang={lang}
           testID="signin-phone"
@@ -150,7 +194,7 @@ export function SignInScreen({
           value={password}
           onChange={(v) => {
             setPassword(v);
-            if (status.state === 'refused') setStatus({ state: 'idle' });
+            if (status.state === 'refused' || status.state === 'choosing') setStatus({ state: 'idle' });
           }}
           lang={lang}
           testID="signin-password"
@@ -183,13 +227,23 @@ export function SignInScreen({
         </View>
       )}
 
-      <PrimaryButton
-        label={working ? copy.signInWorking : copy.signInAction}
-        onPress={() => void submit()}
-        disabled={working}
-        testID="signin-submit"
-        style={styles.submit}
-      />
+      {status.state === 'choosing' ? (
+        <WorkspacePicker
+          workspaces={status.workspaces}
+          lang={lang}
+          title={copy.workspacePickerTitle}
+          sub={copy.workspacePickerSub}
+          onPick={(ws) => void submit(ws)}
+        />
+      ) : (
+        <PrimaryButton
+          label={working ? copy.signInWorking : copy.signInAction}
+          onPress={() => void submit()}
+          disabled={working}
+          testID="signin-submit"
+          style={styles.submit}
+        />
+      )}
 
       {/* design:107 — "New here? · Create account". */}
       <View style={styles.footer}>
@@ -205,6 +259,63 @@ export function SignInScreen({
         </Pressable>
       </View>
     </ScrollView>
+  );
+}
+
+/**
+ * The workspace picker — `409 choose_workspace`. NO DESIGN SOURCE: the design
+ * has one salon per build and so never drew it. Kept as small as the question:
+ * a title, one line, and a row per workspace — its own name in the reading
+ * language (`salonName`, so Arabic falls back to the Latin name only when the
+ * salon has none) beside a dot in its own brand colour.
+ *
+ * THE DOT IS A SURFACE, NOT INK. #9 keeps white text off a brand fill; a dot
+ * carries no text, and it is the workspace's OWN hex rather than the palette
+ * on screen, which is still the last workspace's. The name is `ink`.
+ *
+ * RTL: the row is `flexDirection: 'row'`, which Yoga and CSS both lay along the
+ * inline axis — so the dot leads on the right in Arabic with no conditional.
+ */
+function WorkspacePicker({
+  workspaces,
+  lang,
+  title,
+  sub,
+  onPick,
+}: {
+  workspaces: WorkspaceChoice[];
+  lang: 'en' | 'ar';
+  title: string;
+  sub: string;
+  onPick: (ws: WorkspaceChoice) => void;
+}) {
+  return (
+    <View style={styles.picker} testID="signin-workspaces">
+      <Text style={[text('bodyL', lang, '600'), styles.pickerTitle]} accessibilityRole="header">
+        {title}
+      </Text>
+      <Text style={[text('bodyS', lang), styles.pickerSub]}>{sub}</Text>
+      {workspaces.map((ws) => {
+        const name = salonName(ws, lang);
+        return (
+          <Pressable
+            key={ws.salonId}
+            onPress={() => onPick(ws)}
+            accessibilityRole="button"
+            accessibilityLabel={name}
+            dataSet={focusable}
+            testID={`signin-workspace-${ws.salonId}`}
+            style={styles.pickerRow}
+          >
+            <View
+              style={[styles.pickerDot, { backgroundColor: ws.brandColor }]}
+              testID={`signin-workspace-dot-${ws.salonId}`}
+            />
+            <Text style={[text('bodyL', lang, '600'), styles.pickerName]}>{name}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -290,6 +401,23 @@ const styles = brandedStyles(() => ({
   },
   refusalText: { color: color.dangerText, flex: 1 },
   submit: { marginTop: 20 },
+  picker: { marginTop: 20, gap: 10 },
+  pickerTitle: { color: color.ink, textAlign: 'center' },
+  pickerSub: { color: color.textMuted, textAlign: 'center', marginBottom: 4 },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: MIN_TAP_TARGET,
+    borderWidth: 1.5,
+    borderColor: color.borderControl,
+    backgroundColor: color.white,
+    borderRadius: radius.input,
+    paddingVertical: 14,
+    paddingHorizontal: 15,
+  },
+  pickerDot: { width: 12, height: 12, borderRadius: 6, flexShrink: 0 },
+  pickerName: { color: color.ink, flex: 1 },
   // design:104 — text-align:right, margin-top 11. flex-end mirrors under RTL.
   forgot: {
     alignSelf: 'flex-end',

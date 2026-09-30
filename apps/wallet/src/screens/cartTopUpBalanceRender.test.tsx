@@ -155,7 +155,7 @@ function Shell({ initialFetchedAt }: { initialFetchedAt: number | null }) {
     fetchedAt: initialFetchedAt,
   });
   const [rereads, setRereads] = useState(0);
-  const shop = useShop(member.balanceFils, () => setRereads((n) => n + 1), []);
+  const shop = useShop('SAL-AMARA', member.balanceFils, () => setRereads((n) => n + 1), []);
 
   handle = {
     reread: (balanceFils, fetchedAt) => setMember({ balanceFils, fetchedAt }),
