@@ -66,9 +66,17 @@ export function branchName(branch: Named, lang: Language): string {
  * rule today; one collapsed helper would make a future divergence — a salon
  * with a legal name and a trading name, say — a change to branches as well.
  * The shared implementation is one line; the shared NAME would be the mistake.
+ *
+ * One divergence already: an EMPTY `nameAr` falls back too, not only a null
+ * one. The salon's name is interpolated into sentences now ("…prepaid credit
+ * for ${salon} only", `state/workspaceName.ts`), and `''` would leave a hole in
+ * the middle of an Arabic sentence where `nameAr ?? name` lets it through. The
+ * contract's `nameAr` is `z.string().nullable()`, so `''` can reach the wire;
+ * `lastWorkspace.ts` already stores it as null for the same reason.
  */
 export function salonName(salon: Named, lang: Language): string {
-  return lang === 'ar' ? (salon.nameAr ?? salon.name) : salon.name;
+  if (lang !== 'ar') return salon.name;
+  return salon.nameAr && salon.nameAr.trim() ? salon.nameAr : salon.name;
 }
 
 /**
