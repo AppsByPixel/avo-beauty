@@ -140,8 +140,9 @@ const CHOOSE = {
   status: 409,
   body: {
     error: 'choose_workspace',
-    message: 'This number has a wallet at more than one salon.',
-    // `ApiError.toJSON` on the API spreads details at the top level.
+    // Lane A's sentence (api/src/routes/auth.ts). English only, so never shown.
+    message: 'That number has a wallet at more than one salon. Choose one to continue.',
+    // `ApiError.toBody` on the API spreads details at the TOP LEVEL — trunk, 2026-09-30.
     workspaces: [AMARA_ROW, FOREST_ROW],
   },
 };
@@ -279,13 +280,27 @@ describe('3. choose_workspace shows the picker and re-posts with the choice', ()
     expect((screen.getByTestId('signin-password') as HTMLInputElement).value).toBe('');
   });
 
-  it('a malformed list is not a picker — the server sentence shows instead', async () => {
-    stubApi([{ status: 409, body: { ...CHOOSE.body, workspaces: [{ salonId: 'SAL-X' }] } }]);
+  it('the server’s English sentence is never on screen for this state', async () => {
+    stubApi([CHOOSE]);
     draw();
     await typeAndSubmit();
-    await waitFor(() => expect(screen.getByTestId('signin-refusal').textContent).toBe(CHOOSE.body.message));
-    expect(screen.queryByTestId('signin-workspaces')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('signin-workspaces')).toBeTruthy());
+    expect(screen.queryByText(CHOOSE.body.message)).toBeNull();
+    expect(screen.queryByTestId('signin-refusal')).toBeNull();
   });
+
+  it.each(['en', 'ar'] as const)(
+    'a list that does not parse is not a picker — our own line, not the server’s (%s)',
+    async (lang) => {
+      stubApi([{ status: 409, body: { ...CHOOSE.body, workspaces: [{ salonId: 'SAL-X' }] } }]);
+      draw(lang);
+      await typeAndSubmit();
+      const copy = lang === 'ar' ? ar : en;
+      await waitFor(() => expect(screen.getByTestId('signin-refusal').textContent).toBe(copy.workspacePickerSub));
+      expect(screen.queryByText(CHOOSE.body.message)).toBeNull();
+      expect(screen.queryByTestId('signin-workspaces')).toBeNull();
+    },
+  );
 });
 
 // ═══════════════════════════════════════════════ 5 · whose screen ══
@@ -352,6 +367,7 @@ describe('7. the picker in Arabic — non-negotiable #12', () => {
     expect(ar.workspacePickerTitle).toBe('اختاري صالونك');
     expect(ar.workspacePickerSub).toBe('لرقم هاتفك محفظة في أكثر من صالون.');
     expect(screen.getByText(ar.workspacePickerSub)).toBeTruthy();
+    expect(screen.queryByText(CHOOSE.body.message)).toBeNull();
     expect(screen.getByTestId('signin-workspace-SAL-AMARA').textContent).toBe('أمارا');
     // No Arabic name on file → the Latin one, not a blank row.
     expect(screen.getByTestId('signin-workspace-SAL-FOREST').textContent).toBe('Forest');

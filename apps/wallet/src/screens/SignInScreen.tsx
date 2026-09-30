@@ -137,6 +137,17 @@ export function SignInScreen({
         return;
       }
       setPassword('');
+      /*
+        `choose_workspace` WITHOUT A LIST WE CAN READ — a contract break, not a
+        state the server means to send (lane A serves two to four rows). Its
+        `message` is English only, and this state is ours to word in both
+        languages, so the server's sentence is never shown for it; the
+        picker's own line says what is true.
+      */
+      if (err instanceof ApiError && err.code === 'choose_workspace') {
+        setStatus({ state: 'refused', message: copy.workspacePickerSub });
+        return;
+      }
       if (err instanceof ApiError) {
         setStatus({
           state: 'refused',

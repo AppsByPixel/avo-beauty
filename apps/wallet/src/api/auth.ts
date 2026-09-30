@@ -136,11 +136,14 @@ export async function signIn(
 /**
  * One row of `choose_workspace` — a workspace her phone and password both open.
  *
- * `ApiError.toJSON` on the API spreads an error's details at the top level
+ * `ApiError.toBody` on the API (api/src/http/errors.ts) spreads an error's details at the top level
  * (`{ error, message, ...details }`), and `client.ts` gathers everything that is
  * not `error`/`message` into `ApiError.details` — so the list is
  * `details.workspaces`, exactly as the contract names it.
  */
+// LOCAL UNTIL TRUNK LANDS `ChooseWorkspaceSchema` IN `@avo/types` (trunk,
+// 2026-09-30) — the same shape as lane A's 16414a3 serves. Swap this for the
+// shared schema on the next merge of dev rather than keeping two.
 const WorkspaceChoiceSchema = z.object({
   salonId: z.string().min(1),
   name: z.string().min(1),
