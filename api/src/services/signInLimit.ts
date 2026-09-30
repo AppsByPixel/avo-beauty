@@ -1,7 +1,7 @@
 /**
  * Per-identity budget for the three PASSWORD sign-ins.
  *
- *   POST /auth/member/session     the customer wallet    (salonId + phone)
+ *   POST /auth/member/session     the customer wallet    (salonId + phone, or phone alone)
  *   POST /auth/web/session        the merchant dashboard (salonId + username)
  *   POST /auth/platform/session   the owner console      (handle)
  *
@@ -133,6 +133,39 @@
  * names the real proxy, and is a platform-wide outage before then. Neither of these
  * is a regression — both are unbounded today in every direction, and this file
  * bounds the one direction that can be bounded without a caller key.
+ *
+ * =========================================================================
+ * ONE PHONE, TWO KINDS OF BUCKET
+ * =========================================================================
+ * `POST /auth/member/session` has two shapes since the one-app wallet
+ * (routes/auth.ts § SIGN-IN WITHOUT A SALON), and each is charged its own key:
+ *
+ *   WITH `salonId`     `member|{salon}|{phone}` — unchanged, per salon.
+ *   WITHOUT `salonId`  `member||{phone}` — ONE bucket for the phone across every
+ *                      salon, because one such attempt tests the password
+ *                      against every wallet that number holds. There is no
+ *                      salon field on the request to rotate, so it cannot be
+ *                      sprayed round.
+ *
+ * INDEPENDENT, AND WHY THEY ARE NOT MERGED. The tempting design charges a
+ * salon-scoped attempt to the phone-wide bucket as well, so the phone-wide one
+ * would be a true ceiling on every guess at one person. Rejected for two
+ * reasons. It changes the path every installed build uses: a salon-scoped
+ * sign-in would start to be refused because of attempts made somewhere else,
+ * which is not "exactly today's behaviour" (and it moves `e2e/sign-in-limit`'s
+ * boundaries, whose beforeAll clears only the salon-scoped bucket). And the
+ * reverse coupling — a salon-less attempt charging each salon-scoped bucket of
+ * the wallets it found — is an ORACLE: ten salon-less guesses followed by one
+ * salon-scoped attempt at SAL-X would answer 429 exactly when the phone holds a
+ * wallet there. A bucket keyed on what the database holds is § THE TRAP again.
+ *
+ * THE COST, STATED. One wallet can now be guessed at through two doors, each
+ * with the full budget: 10 per 15 minutes (20 an hour) salon-scoped plus 10
+ * (20) salon-less — double the per-wallet ceiling there was before. Against the
+ * six-character minimum that is still a handful of dictionary guesses an hour,
+ * which is the level § THRESHOLDS claims; and the salon-scoped door is the one
+ * that goes away as white-labelled builds retire. If the two should share one
+ * ceiling, the fix is to halve both here, not to couple them.
  *
  * =========================================================================
  * WHERE THE CHECK SITS

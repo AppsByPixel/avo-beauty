@@ -145,6 +145,12 @@ export const member = pgTable(
     // can hold a wallet at two salons.
     uniqueIndex('member_salon_phone_uq').on(t.salonId, t.phone),
     index('member_salon_idx').on(t.salonId),
+    /**
+     * Every live wallet one phone holds, across salons — the salon-less sign-in
+     * and reset lookups in routes/auth.ts. The unique index above has the phone
+     * second, so it cannot serve `WHERE phone = $1`. Migration 0070.
+     */
+    index('member_live_phone_idx').on(t.phone).where(sql`erased_at IS NULL`),
 
     // ---------------------------------------------------------------------
     // THE constraint. Nothing in the application is trusted to hold this.

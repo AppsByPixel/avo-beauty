@@ -491,6 +491,13 @@
       "when": 1791002000000,
       "tag": "0069_a_workspace_keeps_its_own_card",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1791088400000,
+      "tag": "0070_a_phone_finds_its_wallets",
+      "breakpoints": true
     }
   ]
 }

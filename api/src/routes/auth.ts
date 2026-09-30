@@ -74,7 +74,7 @@
  * `services/signInLimit.ts § THERE IS NO EXEMPTION` keeps the measurement.
  */
 
-import { and, eq, gte, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
@@ -103,7 +103,7 @@ import { hashPasswordResetToken, mintPasswordResetToken } from '../auth/tokens';
 import { badRequest, conflict, forbidden, tooManyRequests, unauthorized } from '../http/errors';
 import { parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
-import { writeAudit } from '../services/audit';
+import { type Executor, writeAudit } from '../services/audit';
 import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
 import { tierForVisits } from '../services/loyalty';
 import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
@@ -149,6 +149,227 @@ function clientMeta(req: FastifyRequest) {
     ipAddress: req.ip ?? null,
     userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
   };
+}
+
+// =============================================================================
+// SIGN-IN WITHOUT A SALON — ONE WALLET APP, AND THE ACCOUNT DECIDES THE WORKSPACE
+// =============================================================================
+/**
+ * Aftab, 2026-09-29: "different wallet themes for different workspaces … If I
+ * logged in, it has the forest green themed wallet … not a separate app."
+ *
+ * Until now every salon shipped its own white-labelled build, so the salon was
+ * configuration and `POST /auth/member/session` required it. One app for every
+ * workspace means the client no longer knows the salon before she signs in, and
+ * a phone number alone is not a person (`member_salon_phone_uq` is per salon).
+ * So without a `salonId` the handler asks a different question: WHICH OF THIS
+ * PHONE'S WALLETS DOES THIS PASSWORD OPEN?
+ *
+ *   none         401 `invalid_credentials` — byte-identical to an unknown phone
+ *   exactly one  a session on that wallet, exactly as a salon-scoped sign-in
+ *                mints it; `member.salonId` names the workspace
+ *   several      409 `choose_workspace` listing ONLY the salons whose wallet
+ *                this password opened; the client re-posts with the one she
+ *                picks, which is an ordinary salon-scoped sign-in
+ *
+ * THE 409 DISCLOSES NOTHING THE CALLER DOES NOT ALREADY HOLD. Every salon in it
+ * is one this caller could sign straight into with the password she just sent,
+ * so naming it tells her nothing a salon-scoped sign-in would not. A wallet the
+ * password did NOT open is never named — not in the list, not in a count, not in
+ * the message — because that would turn "I know your password at one salon" into
+ * "and here is where else you shop".
+ *
+ * AND IT IS NOT A SESSION. No row is written and nothing is minted until the
+ * re-post, which is charged against its own salon-scoped bucket like any other.
+ */
+
+/**
+ * THE BOUND: at most this many wallets are considered for one phone, and every
+ * salon-less attempt costs EXACTLY this many argon2 verifies, whatever it finds.
+ *
+ * WHY CONSTANT, NOT ONE PER WALLET FOUND. This file's header promises that "no
+ * such phone number" and "wrong password" cost the same. Verifying once per
+ * wallet found would keep that for a single-wallet phone and break it for every
+ * other: an unknown phone (one dummy verify) would answer measurably faster than
+ * a phone with two wallets (two real verifies), and the difference would say
+ * both "this number is a customer" and "at more than one salon". So the loop
+ * below runs the full bound every time — real hashes for the wallets it found,
+ * `burnVerifyTime` for the rest — and the wall time carries no count.
+ *
+ * WHY FOUR. Measured on the development machine: one verify at these parameters
+ * is ~8 ms, four in sequence ~33 ms. Four covers the realistic case (a customer
+ * with a wallet at a handful of AVO salons) at a latency nobody notices, and it
+ * caps what one unauthenticated request can make the API spend. The cost is
+ * stated rather than hidden: `signInLimit.ts § WHAT THAT LEAVES UNBOUNDED`
+ * already notes that a caller inventing a fresh phone per request is bounded by
+ * nothing and pays a hash each time; on this path it pays four.
+ *
+ * A PHONE WITH MORE THAN FOUR LIVE WALLETS is served its oldest four (by
+ * `joined_at`, then id, so the choice is deterministic). A fifth wallet is still
+ * reachable by a salon-scoped sign-in — the path every installed build uses —
+ * and is never disclosed by this one.
+ */
+export const MAX_WALLETS_PER_PHONE = 4;
+
+/**
+ * Every live wallet a phone holds, with the salon fields `choose_workspace`
+ * names. Erased members are excluded explicitly: the erasure scrub already
+ * replaces the phone with an unguessable tombstone, but a query whose
+ * correctness depends on another module's scrub is a query that breaks the day
+ * that module changes. `member_live_phone_idx` (migration 0070) serves it.
+ */
+async function liveWalletsForPhone(phone: string) {
+  return db
+    .select({
+      member,
+      salonName: salon.name,
+      salonNameAr: salon.nameAr,
+      brandColor: salon.brandColor,
+    })
+    .from(member)
+    .innerJoin(salon, eq(salon.id, member.salonId))
+    .where(and(eq(member.phone, phone), isNull(member.erasedAt)))
+    .orderBy(asc(member.joinedAt), asc(member.id))
+    .limit(MAX_WALLETS_PER_PHONE);
+}
+
+/**
+ * `POST /auth/member/session` with no `salonId`. Resolves to the one wallet this
+ * password opens, or throws.
+ */
+async function signInAcrossWorkspaces(
+  phone: string,
+  password: string,
+): Promise<typeof member.$inferSelect> {
+  /**
+   * THE BUDGET IS THE PHONE, ACROSS EVERY SALON — `salonId` null in the key,
+   * `avo.sign-in-limit.v1|member||{phone}`. One salon-less attempt tests the
+   * password against every wallet the number holds, so it is charged ONE bucket
+   * that no choice of request can vary: there is no salon field to rotate, so
+   * spraying across salons is not a way round the limit. Before the lookup and
+   * before any hashing, for every reason the salon-scoped call gives.
+   *
+   * It is a DIFFERENT bucket from each salon-scoped `(salon, phone)` one, and
+   * `signInLimit.ts § ONE PHONE, TWO KINDS OF BUCKET` says why they are not
+   * merged and what that costs.
+   */
+  await chargeSignInBudget(db, 'member', null, phone);
+
+  const wallets = await liveWalletsForPhone(phone);
+
+  const opened: typeof wallets = [];
+  for (let i = 0; i < MAX_WALLETS_PER_PHONE; i++) {
+    const w = wallets[i];
+    if (w) {
+      if (await verifySecret(w.member.passwordHash, password)) opened.push(w);
+    } else {
+      // Pad to the bound, so the wall time says nothing about how many exist.
+      await burnVerifyTime(password);
+    }
+  }
+
+  const [only] = opened;
+  if (!only) throw BAD_CREDENTIALS();
+  if (opened.length === 1) return only.member;
+
+  throw conflict(
+    'choose_workspace',
+    'That number has a wallet at more than one salon. Choose one to continue.',
+    {
+      workspaces: opened.map((w) => ({
+        salonId: w.member.salonId,
+        name: w.salonName,
+        nameAr: w.salonNameAr,
+        brandColor: w.brandColor,
+      })),
+    },
+  );
+}
+
+/**
+ * The session a member sign-in mints — ONE function for both paths, so the
+ * salon-less sign-in cannot drift from the salon-scoped one in what it writes
+ * (the `session` row) or what it answers. No audit row, on either path: member
+ * sign-in has never written one.
+ */
+async function memberSessionBody(
+  req: FastifyRequest,
+  m: typeof member.$inferSelect,
+  deviceId: string | null,
+) {
+  const issued = await issueSession(db, {
+    principalKind: 'member',
+    memberId: m.id,
+    salonId: m.salonId,
+    scope: 'wallet',
+    deviceId,
+    ...clientMeta(req),
+  });
+
+  return {
+    accessToken: issued.accessToken,
+    refreshToken: issued.refreshToken,
+    expiresAt: issued.expiresAt.toISOString(),
+    member: serialiseMember(m),
+  };
+}
+
+/**
+ * One wallet's reset link, on the caller's transaction: spend its outstanding
+ * link, issue a fresh one, write the audit row. The salon-scoped and the
+ * salon-less request both come through here, so a wallet's link and its audit
+ * row are the same whichever way it was asked for.
+ */
+async function issueMemberResetLink(
+  tx: Executor,
+  req: FastifyRequest,
+  m: typeof member.$inferSelect,
+  ipAddress: string | null,
+): Promise<void> {
+  const token = mintPasswordResetToken();
+  const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60_000);
+
+  // Issuing a second link spends the first — otherwise the older one, which
+  // somebody may already be walking around with, is the one nobody knows is
+  // still valid. Same rule as both sibling flows.
+  await tx
+    .update(memberPasswordReset)
+    .set({ usedAt: new Date() })
+    .where(
+      and(eq(memberPasswordReset.memberId, m.id), isNull(memberPasswordReset.usedAt)),
+    );
+
+  await tx.insert(memberPasswordReset).values({
+    memberId: m.id,
+    tokenHash: hashPasswordResetToken(token),
+    requestedIp: ipAddress,
+    expiresAt,
+  });
+
+  /**
+   * AS HER, because the row is about her account — but the detail says what
+   * is actually known: a reset was REQUESTED for this wallet, by an
+   * unauthenticated caller holding her phone number. Never the token.
+   */
+  await writeAudit(
+    tx,
+    { kind: 'member', id: m.id, name: m.name, role: 'Customer' },
+    {
+      salonId: m.salonId,
+      kind: 'access',
+      action: 'Password reset link requested',
+      detail: `Reset link requested for ${m.name} — valid for ${RESET_TTL_MINUTES} minutes`,
+      source: 'wallet',
+      subjectType: 'member',
+      subjectId: m.id,
+      metadata: {
+        expiresAt: expiresAt.toISOString(),
+        ttlMinutes: RESET_TTL_MINUTES,
+        deletionPending: m.deletionRequestedAt !== null,
+      },
+      ...clientMeta(req),
+    },
+  );
 }
 
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
@@ -461,18 +682,36 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------------------------------ member sign-in --
   app.post('/auth/member/session', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const deviceId = typeof body.deviceId === 'string' ? body.deviceId : null;
+
     /**
-     * The salon is part of the identity, not a convenience.
+     * NO SALON: THE ACCOUNT DECIDES THE WORKSPACE. `signInAcrossWorkspaces`
+     * below carries the whole argument.
      *
+     * ABSENT MEANS ABSENT — `undefined` or `null`. A present-but-blank `salonId`
+     * is still the 400 it always was, so a client bug that sends `''` is not
+     * silently promoted into a different flow.
+     */
+    if (body.salonId === undefined || body.salonId === null) {
+      const phone = requireString(body.phone, 'phone', 20);
+      const password = typeof body.password === 'string' ? body.password : '';
+      const m = await signInAcrossWorkspaces(phone, password);
+      return reply.send(await memberSessionBody(req, m, deviceId));
+    }
+
+    /**
+     * WITH A SALON: EXACTLY THE PATH EVERY INSTALLED BUILD USES, UNCHANGED —
+     * same key, same lookup, same verify, same session, same body.
+     *
+     * The salon is part of the identity, not a convenience.
      * `member_salon_phone_uq` is on (salon_id, phone), because api-contract.md
      * § Branch means one wallet per salon and the schema comment spells it out:
      * "the same person can hold a wallet at two salons". So a phone number does
-     * NOT identify a member — looking one up by phone alone returns an arbitrary
-     * row among the salons she belongs to, which is both a wrong-wallet bug and,
-     * if the hashes differ, a way to authenticate against the wrong record.
-     *
-     * Each salon ships its own white-labelled wallet, so the client always knows
-     * which salon it is.
+     * NOT identify a member — looking one up by phone alone and taking the first
+     * row returns an arbitrary wallet among the salons she belongs to, which is
+     * both a wrong-wallet bug and, if the hashes differ, a way to authenticate
+     * against the wrong record. The salon-less path never does that: it verifies
+     * against EVERY wallet the phone holds and never picks one for her.
      */
     const salonId = requireString(body.salonId, 'salonId', 100);
     const phone = requireString(body.phone, 'phone', 20);
@@ -514,21 +753,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
     if (!(await verifySecret(m.passwordHash, password))) throw BAD_CREDENTIALS();
 
-    const issued = await issueSession(db, {
-      principalKind: 'member',
-      memberId: m.id,
-      salonId: m.salonId,
-      scope: 'wallet',
-      deviceId: typeof body.deviceId === 'string' ? body.deviceId : null,
-      ...clientMeta(req),
-    });
-
-    return reply.send({
-      accessToken: issued.accessToken,
-      refreshToken: issued.refreshToken,
-      expiresAt: issued.expiresAt.toISOString(),
-      member: serialiseMember(m),
-    });
+    return reply.send(await memberSessionBody(req, m, deviceId));
   });
 
   // --------------------------------------------------------------- web sign-in --
@@ -893,8 +1118,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    *   - IDENTITY IS (salonId, phone), the sign-in pair. `member_salon_phone_uq`
    *     means a phone alone is not a person — she can hold wallets at two salons,
    *     and a reset issued against "whichever row matched first" would set a
-   *     password on an arbitrary one of them. Each white-labelled wallet knows its
-   *     salon; the shape here is the shape sign-in already demands.
+   *     password on an arbitrary one of them. A white-labelled build sends its
+   *     salon; the one-app wallet sends none, and then every wallet the phone
+   *     holds gets its OWN link (the policy is argued at the lookup below).
    *
    * THE DELETION GRACE WINDOW IS DELIBERATELY NOT A BAR, in either half. The
    * window exists so she can change her mind ("sessions are not revoked and
@@ -922,7 +1148,15 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     await recordResetRequestAttempt(db, ipAddress);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const salonId = requireString(body.salonId, 'salonId', 100);
+    /**
+     * `salonId` IS OPTIONAL, for the one-app wallet — the sign-in reasoning at
+     * `signInAcrossWorkspaces`. Absent means `undefined` or `null`; a blank string
+     * is still the 400 it was.
+     */
+    const salonId =
+      body.salonId === undefined || body.salonId === null
+        ? null
+        : requireString(body.salonId, 'salonId', 100);
     const phone = parseE164(body.phone);
 
     /**
@@ -934,62 +1168,57 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
      */
     const ACCEPTED = { accepted: true };
 
-    const rows = await db
-      .select()
-      .from(member)
-      .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
-      .limit(1);
-    const m = rows[0];
-    if (!m) return reply.code(202).send(ACCEPTED);
+    /**
+     * WITHOUT A SALON: ONE LINK PER WALLET THE PHONE HOLDS. The policy, and why
+     * it is this one of the three available:
+     *
+     *   EXACTLY ONE WALLET — one link, exactly as the salon-scoped request issues.
+     *   NONE — the same 202 as ever.
+     *   SEVERAL — a SEPARATE link for each (up to `MAX_WALLETS_PER_PHONE`), each
+     *   bound to one member row and resetting only that wallet's password.
+     *
+     * WHY NOT ONE LINK THAT RESETS THEM ALL. Each wallet is its own credential —
+     * that is what `member_salon_phone_uq` says — and she may have kept them
+     * different on purpose. A single token that rewrote every password would
+     * widen what one leaked link is worth to every salon at once, and would need
+     * a new token shape the redeem half does not have.
+     *
+     * WHY NOT REFUSE THE SEVERAL CASE UNTIL SHE NAMES A SALON. The refusal would
+     * have to be a DIFFERENT answer from the 202, which is the membership oracle
+     * this endpoint exists not to be; so it would have to be the same 202 with no
+     * link behind it — telling exactly the customers the one-app wallet is for
+     * that a link is on its way, and then sending nothing.
+     *
+     * NOTHING HERE NAMES A SALON TO THE CALLER, before or after redemption: this
+     * half answers the constant `ACCEPTED`, and the redeem half answers 204 with
+     * no body. The only place a salon name may appear is inside the message
+     * DELIVERED TO THE PHONE — the verified channel, to its holder — so she can
+     * tell her links apart. No sender is wired yet (`member_password_reset.sent_at`
+     * is the outbox stamp waiting on it); whoever wires it carries that rule.
+     *
+     * THE RESIDUAL TIMING CHANNEL SCALES WITH THE WALLETS. A match does two writes
+     * and an audit row per wallet more than a miss — up to four sets here, where
+     * the salon-scoped request does one. Still bounded by the per-address budget
+     * above (six an hour is not a measurement platform), and stated rather than
+     * denied, as it is for the single-wallet case.
+     */
+    const matched =
+      salonId === null
+        ? (await liveWalletsForPhone(phone)).map((w) => w.member)
+        : await db
+            .select()
+            .from(member)
+            .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
+            .limit(1);
+    if (matched.length === 0) return reply.code(202).send(ACCEPTED);
 
-    const token = mintPasswordResetToken();
-    const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60_000);
-
+    // ONE transaction for every wallet's link: all of them issue, or none do and
+    // every outstanding link is left exactly as it was.
     await db.transaction(async (tx) => {
-      // Issuing a second link spends the first — otherwise the older one, which
-      // somebody may already be walking around with, is the one nobody knows is
-      // still valid. Same rule as both sibling flows.
-      await tx
-        .update(memberPasswordReset)
-        .set({ usedAt: new Date() })
-        .where(
-          and(eq(memberPasswordReset.memberId, m.id), isNull(memberPasswordReset.usedAt)),
-        );
-
-      await tx.insert(memberPasswordReset).values({
-        memberId: m.id,
-        tokenHash: hashPasswordResetToken(token),
-        requestedIp: ipAddress,
-        expiresAt,
-      });
-
-      /**
-       * AS HER, because the row is about her account — but the detail says what
-       * is actually known: a reset was REQUESTED for this wallet, by an
-       * unauthenticated caller holding her phone number. Never the token.
-       */
-      await writeAudit(
-        tx,
-        { kind: 'member', id: m.id, name: m.name, role: 'Customer' },
-        {
-          salonId: m.salonId,
-          kind: 'access',
-          action: 'Password reset link requested',
-          detail: `Reset link requested for ${m.name} — valid for ${RESET_TTL_MINUTES} minutes`,
-          source: 'wallet',
-          subjectType: 'member',
-          subjectId: m.id,
-          metadata: {
-            expiresAt: expiresAt.toISOString(),
-            ttlMinutes: RESET_TTL_MINUTES,
-            deletionPending: m.deletionRequestedAt !== null,
-          },
-          ...clientMeta(req),
-        },
-      );
+      for (const m of matched) await issueMemberResetLink(tx, req, m, ipAddress);
     });
 
-    // The identical body and code as the miss path. What differs is two database
+    // The identical body and code as the miss path. What differs is the database
     // writes' worth of time, bounded by the budget above.
     return reply.code(202).send(ACCEPTED);
   });
