@@ -37,20 +37,28 @@
  * is added and the Arabic is listed in `AR_GAPS` like the other 31, rather than
  * machine-translated into a women's-salon product.
  *
- * THE SALON IS NOT A FIELD. `POST /auth/member/session` needs `salonId` because
- * `member_salon_phone_uq` is on (salon_id, phone) — the same woman can hold a
- * wallet at two salons, so a phone number alone does not identify a member. The
- * design shows no salon picker, and that is correct rather than an omission: each
- * salon ships its own white-labelled build, so the salon is configuration. See
- * `config/salon.ts`.
+ * THE SALON IS NOT A FIELD — AND NO LONGER CONFIGURATION EITHER. This paragraph
+ * used to say each salon ships its own white-labelled build, so the salon was
+ * `config/salon.ts`. Aftab, 2026-09-29, reversed that: one wallet app, and the
+ * signed-in account decides the workspace and the theme. So sign-in sends phone
+ * and password ALONE and the server resolves the workspace:
+ *
+ *   one match                → a session; `member.salonId` names the workspace.
+ *   several, same password   → 409 `choose_workspace` with `workspaces:
+ *                              [{ salonId, name, nameAr, brandColor }]`; the
+ *                              screen shows a short picker and re-posts WITH the
+ *                              chosen `salonId`. `workspaceChoices` reads it.
+ *   no match                 → the same 401 as ever.
+ *
+ * `member_salon_phone_uq` is still on (salon_id, phone), which is why the second
+ * row exists at all: the same woman can hold a wallet at two salons.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
 import { z } from 'zod';
 import { MemberSchema } from '@avo/types';
-import { postAction, postNoContent } from './client';
+import { ApiError, postAction, postNoContent } from './client';
 import { clearSession, setSession } from './session';
-import { SALON_ID } from '../config/salon';
 
 /**
  * `POST /auth/refresh`, re-exported rather than reimplemented.
@@ -97,12 +105,20 @@ export type Member = z.infer<typeof MemberSchema>;
  * signing in on a second device is.
  */
 export async function signIn(
-  credentials: { salonId: string; phone: string; password: string },
+  credentials: {
+    /** Only on the re-post after `choose_workspace`. Absent, the server resolves it. */
+    salonId?: string;
+    phone: string;
+    password: string;
+  },
   signal?: AbortSignal,
 ): Promise<Member> {
   const body = await postAction(
     '/auth/member/session',
-    credentials,
+    // Built key by key so an absent `salonId` is ABSENT on the wire, not `null`.
+    credentials.salonId === undefined
+      ? { phone: credentials.phone, password: credentials.password }
+      : { salonId: credentials.salonId, phone: credentials.phone, password: credentials.password },
     MemberSessionSchema,
     // Spread rather than `{ signal }`: under `exactOptionalPropertyTypes` an
     // explicit `undefined` is not the same as an absent key.
@@ -115,6 +131,38 @@ export async function signIn(
     memberId: body.member.id,
   });
   return body.member;
+}
+
+/**
+ * One row of `choose_workspace` — a workspace her phone and password both open.
+ *
+ * `ApiError.toBody` on the API (api/src/http/errors.ts) spreads an error's details at the top level
+ * (`{ error, message, ...details }`), and `client.ts` gathers everything that is
+ * not `error`/`message` into `ApiError.details` — so the list is
+ * `details.workspaces`, exactly as the contract names it.
+ */
+// LOCAL UNTIL TRUNK LANDS `ChooseWorkspaceSchema` IN `@avo/types` (trunk,
+// 2026-09-30) — the same shape as lane A's 16414a3 serves. Swap this for the
+// shared schema on the next merge of dev rather than keeping two.
+const WorkspaceChoiceSchema = z.object({
+  salonId: z.string().min(1),
+  name: z.string().min(1),
+  nameAr: z.string().nullable(),
+  brandColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+});
+
+export type WorkspaceChoice = z.infer<typeof WorkspaceChoiceSchema>;
+
+/**
+ * The workspaces to choose between, when `err` is `choose_workspace`; null for
+ * every other failure. A list that does not parse is null too — the screen then
+ * shows the server's sentence as a refusal rather than a picker with holes in
+ * it. An empty list is treated the same way: there is nothing to pick.
+ */
+export function workspaceChoices(err: unknown): WorkspaceChoice[] | null {
+  if (!(err instanceof ApiError) || err.code !== 'choose_workspace') return null;
+  const parsed = z.array(WorkspaceChoiceSchema).safeParse(err.details['workspaces']);
+  return parsed.success && parsed.data.length > 0 ? parsed.data : null;
 }
 
 /**
@@ -201,20 +249,25 @@ export async function signUp(
  * answer a caller could legitimately branch on, and a richer type here would
  * invite the screen to invent a distinction the server spent effort erasing.
  *
- * THE SALON IS THE BUILD'S, NOT A PARAMETER. Identity is the sign-in pair —
- * `member_salon_phone_uq` means a phone alone is not a person — and this wallet
- * knows which salon it is the same way sign-in does: `SALON_ID` from build
- * config (config/salon.ts). Asking her which salon would be asking a question
- * the white-label model already answered.
+ * THE SALON IS THE LAST WORKSPACE SHE WAS IN, OR NONE. The build no longer
+ * names one (see the header), so the caller passes what the device remembers —
+ * `state/lastWorkspace.ts` — and with nothing remembered the request goes
+ * WITHOUT a `salonId` and the server resolves the phone itself. Never the
+ * build's default: that would send a Forest member's reset to Amara.
  *
  * WHAT CAN STILL REFUSE, because the throttle answers BEFORE validation:
  * 429 `reset_hourly_limit` / `reset_rate_limited` — the caller renders the
  * server's own sentence and no our-side failure. See domain/resetRequest.ts.
  */
-export async function requestPasswordReset(phone: string, signal?: AbortSignal): Promise<void> {
+export async function requestPasswordReset(
+  phone: string,
+  /** The last signed-in workspace, or null for none known. */
+  salonId: string | null,
+  signal?: AbortSignal,
+): Promise<void> {
   await postAction(
     '/auth/member/password-reset/request',
-    { salonId: SALON_ID, phone },
+    salonId === null ? { phone } : { salonId, phone },
     AcceptedSchema,
     signal === undefined ? {} : { signal },
   );

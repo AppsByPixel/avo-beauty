@@ -202,7 +202,7 @@ function rowName(testID: string): string {
 let stale = 0;
 
 function Shell({ branches }: { branches: readonly PickupBranchOption[] }) {
-  const shop = useShop(BALANCE, vi.fn(), branches, () => {
+  const shop = useShop('SAL-AMARA', BALANCE, vi.fn(), branches, () => {
     stale += 1;
   });
   return (

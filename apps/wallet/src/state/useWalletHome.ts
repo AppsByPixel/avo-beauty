@@ -22,6 +22,8 @@ import { ApiError, type FailureKind } from '../api/client';
 import { getMember, getPromotions, getSalon, getTransactions } from '../api/wallet';
 import { readSnapshot, writeSnapshot, type WalletSnapshot } from './cache';
 import { cacheBrandColor } from './brandCache';
+import { rememberWorkspace } from './lastWorkspace';
+import { sessionOwner } from '../api/session';
 import { applyBrandColor } from '../theme/brand';
 
 export type HomeStatus = 'loading' | 'ready' | 'stale' | 'offline' | 'error' | 'blocked';
@@ -132,7 +134,9 @@ export function useWalletHome(): HomeState & { retry: () => void } {
     // customer who reopened the app on a plane seeing a failure page.
     let cachedAt: number | null = null;
     if (options.seedFromCache) {
-      const cached = await readSnapshot();
+      // Only HER wallet at THIS workspace — `cache.ts § ownedBy`. A snapshot
+      // left by another workspace's session is refused, not painted.
+      const cached = await readSnapshot(sessionOwner());
       if (cached && mountedRef.current && !controller.signal.aborted) {
         cachedAt = cached.fetchedAt;
         setState((prev) =>
@@ -162,6 +166,14 @@ export function useWalletHome(): HomeState & { retry: () => void } {
       */
       applyBrandColor(snapshot.salon.brandColor);
       void cacheBrandColor(snapshot.salon.brandColor);
+      // And the workspace itself, so the sign-in screen after a sign-out is
+      // titled and painted for the salon she was last in.
+      void rememberWorkspace({
+        salonId: snapshot.salon.id,
+        name: snapshot.salon.name,
+        nameAr: snapshot.salon.nameAr,
+        brandColor: snapshot.salon.brandColor,
+      });
       setState({
         status: 'ready',
         snapshot,

@@ -46,6 +46,7 @@ import { StyleSheet, View } from 'react-native';
 import { theme } from '@avo/tokens/native';
 import { applyBrandColor } from './src/theme/brand';
 import { readCachedBrandColor } from './src/state/brandCache';
+import { readLastWorkspace } from './src/state/lastWorkspace';
 import { cacheLanguage, readStoredLanguage } from './src/i18n/languagePreference';
 
 export default function Boot() {
@@ -69,7 +70,15 @@ export default function Boot() {
         a session)" — and the staff scanner's PIN screen needs the same endpoint
         for the same reason. One endpoint, two surfaces. Lane A's call.
       */
-      const hex = await readCachedBrandColor();
+      /*
+        THE LAST WORKSPACE FIRST. One app serves every workspace now, so the
+        sign-in screen is painted and titled for the salon she was last in
+        (`state/lastWorkspace.ts`), which also holds it in memory for that
+        screen's first render. A device from before that record existed has
+        only the bare hex, which is the same salon's.
+      */
+      const last = await readLastWorkspace();
+      const hex = last?.brandColor ?? (await readCachedBrandColor());
       applyBrandColor(hex);
 
       /*

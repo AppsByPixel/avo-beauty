@@ -261,7 +261,10 @@ export const en: Copy = {
   salonName: 'Amara',
   walletWord: 'Wallet',
   signInTitle: 'Welcome back',
-  signInSub: 'Log in to your Amara wallet',
+  signInSub: (salon) => `Log in to your ${salon} wallet`,
+  // NEW COPY, NO DESIGN SOURCE — the workspace picker. See copy/types.ts.
+  workspacePickerTitle: 'Choose your salon',
+  workspacePickerSub: 'Your number has a wallet at more than one salon.',
   signInAction: 'Log in',
   /**
    * INVENTED — the design's button carries no busy label. Same pattern as the

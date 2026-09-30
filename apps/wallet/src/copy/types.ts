@@ -400,7 +400,22 @@ export interface Copy {
   salonName: string;
   walletWord: string;
   signInTitle: string;
-  signInSub: string;
+  /**
+   * design:1246 / :1353 — "Log in to your Amara wallet", with the salon's name
+   * interpolated. One app serves every workspace now, so the sign-in screen is
+   * the LAST workspace's (`state/lastWorkspace.ts`), and a Forest sign-in
+   * screen that said "your Amara wallet" would be wrong in its own words. The
+   * words are the design's; only the name moves. Pass `salonName()` — or
+   * `salonName` above when nothing is remembered.
+   */
+  signInSub(salon: string): string;
+  /**
+   * THE WORKSPACE PICKER — NEW COPY, NO DESIGN SOURCE. Shown when her phone and
+   * password open more than one workspace (`409 choose_workspace`); each row is
+   * the workspace's own name, so these two are the only words it adds.
+   */
+  workspacePickerTitle: string;
+  workspacePickerSub: string;
   signInAction: string;
   signInWorking: string;
   signInErrEmpty: string;

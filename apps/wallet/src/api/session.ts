@@ -88,6 +88,24 @@ let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
 /**
+ * WHOSE WALLET, AT WHICH WORKSPACE — the half of the stored session that is not
+ * a secret.
+ *
+ * One wallet app serves every workspace (Aftab, 2026-09-29: "not a separate
+ * app"), so the salon is no longer build configuration: it is whatever the
+ * server put on the session she signed in to. Every salon-scoped read — the
+ * salon, its promotions, its shop, its booking policy — takes its id from here
+ * or from `GET /members/me`, which the server derives from the same session.
+ * `config/salon.ts` is only the sign-up default and the pre-cache branding.
+ */
+let owner: { salonId: string; memberId: string } | null = null;
+
+/** The signed-in workspace and member, or null when signed out. */
+export function sessionOwner(): { salonId: string; memberId: string } | null {
+  return owner;
+}
+
+/**
  * Called when the session ends in a way the customer has to see: a refresh that
  * failed, or an explicit sign-out. The app subscribes and shows the sign-in
  * screen. A callback rather than an event emitter because there is exactly one
@@ -127,6 +145,7 @@ export async function setSession(next: {
 }): Promise<void> {
   accessToken = next.accessToken;
   refreshToken = next.refreshToken;
+  owner = { salonId: next.salonId, memberId: next.memberId };
   const stored: StoredSession = {
     refreshToken: next.refreshToken,
     salonId: next.salonId,
@@ -182,6 +201,7 @@ export async function restore(): Promise<StoredSession | null> {
       return null;
     }
     refreshToken = parsed.refreshToken;
+    owner = { salonId: parsed.salonId, memberId: parsed.memberId };
     // Note: no access token yet. The first authenticated call will 401 and the
     // client will exchange this refresh token for one — which is the same path a
     // mid-session expiry takes, so boot is not a special case with its own bugs.
@@ -208,6 +228,7 @@ export async function restore(): Promise<StoredSession | null> {
 export async function clearSession(notify = true): Promise<void> {
   accessToken = null;
   refreshToken = null;
+  owner = null;
   /*
     On native this clears BOTH stores. A device whose migration never completed
     still holds a plaintext token, and "sign me out of this phone" has to remove
@@ -221,5 +242,6 @@ export async function clearSession(notify = true): Promise<void> {
 export function __resetSessionForTest(): void {
   accessToken = null;
   refreshToken = null;
+  owner = null;
   onEnded = null;
 }

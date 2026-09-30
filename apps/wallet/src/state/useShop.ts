@@ -128,8 +128,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Fils } from '@avo/types';
 import { ApiError, newIdempotencyKey, type FailureKind } from '../api/client';
 import { toLoadFailure, type LoadFailure } from '../domain/loadFailure';
-// The salon is configuration, not a request — see config/salon.ts.
-import { SALON_ID as SALON_FROM_CONFIG } from '../config/salon';
 import { getProducts, placeOrder, type CartLine, type OrderResult, type Product } from '../api/shop';
 import {
   affordable,
@@ -321,6 +319,13 @@ export interface ShopActions {
 export type ShopController = ShopState & ShopActions;
 
 export function useShop(
+  /**
+   * THE SESSION'S WORKSPACE, not the build's. This used to be `SALON_ID` from
+   * `config/salon.ts`, which after a Forest sign-in would have put Amara's
+   * catalogue in a Forest wallet. The shell passes `sessionOwner().salonId`;
+   * a change re-reads the catalogue.
+   */
+  salonId: string,
   balanceFils: number,
   onPaid: () => void,
   /**
@@ -371,7 +376,7 @@ export function useShop(
     */
     setStatus((prev) => (products === null ? 'loading' : prev));
 
-    getProducts(SALON_FROM_CONFIG, controller.signal)
+    getProducts(salonId, controller.signal)
       .then((items) => {
         if (!aliveRef.current) return;
         setProducts(items);
@@ -404,7 +409,7 @@ export function useShop(
     // `products` is read only to decide whether to blank; re-running on it would
     // refetch the catalogue every time it arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload]);
+  }, [reload, salonId]);
 
   // ------------------------------------------------------------------ cart --
   const lines = useMemo(() => pricedLines(cart, products ?? []), [cart, products]);

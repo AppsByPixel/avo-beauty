@@ -407,7 +407,13 @@ export const ar: Copy = {
   salonName: 'أمارا', // design:1275
   walletWord: 'المحفظة', // design:1353
   signInTitle: 'أهلاً بعودتك', // design:1353
-  signInSub: 'سجّلي الدخول إلى محفظة أمارا', // design:1353
+  signInSub: (salon) => `سجّلي الدخول إلى محفظة ${salon}`, // design:1353, the name interpolated
+  // NEW COPY, NO DESIGN SOURCE — the workspace picker. Feminine imperative
+  // (اختاري, not اختر) for the reason `signInSub` gives above; هاتفك is the
+  // design's own form ("رقم هاتفك هو وسيلة تسجيل الدخول", :1294).
+  // Native-speaker review wanted on both. See copy/types.ts.
+  workspacePickerTitle: 'اختاري صالونك',
+  workspacePickerSub: 'لرقم هاتفك محفظة في أكثر من صالون.',
   signInAction: 'تسجيل الدخول', // design:1355
   // The three below have no Arabic source. `signInErrEmpty` is the interesting
   // one: the bundle HAS an Arabic string for the empty-fields error (:1363
