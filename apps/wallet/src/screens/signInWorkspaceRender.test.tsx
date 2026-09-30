@@ -57,6 +57,7 @@ import { SignInScreen } from './SignInScreen';
 import { ForgotPasswordScreen } from './ForgotPasswordScreen';
 import { LanguageProvider } from '../i18n/language';
 import { en } from '../copy/en';
+import { DEFAULT_SALON_NAME } from '../config/salon';
 import { ar } from '../copy/ar';
 import { __resetSessionForTest, sessionOwner } from '../api/session';
 import { requestPasswordReset } from '../api/auth';
@@ -308,8 +309,9 @@ describe('3. choose_workspace shows the picker and re-posts with the choice', ()
 describe('5. the sign-in screen is the last workspace’s, or the default', () => {
   it('nothing remembered → the default name', () => {
     draw();
-    expect(screen.getByTestId('signin-salon').textContent).toBe(en.salonName);
-    expect(screen.getByText(en.signInSub(en.salonName))).toBeTruthy();
+    // The build default's name, from `config/salon.ts` — no longer a copy key.
+    expect(screen.getByTestId('signin-salon').textContent).toBe(DEFAULT_SALON_NAME.name);
+    expect(screen.getByText(en.signInSub(DEFAULT_SALON_NAME.name))).toBeTruthy();
     // The design's own words, for the design's own salon.
     expect(en.signInSub('Amara')).toBe('Log in to your Amara wallet');
     expect(ar.signInSub('أمارا')).toBe('سجّلي الدخول إلى محفظة أمارا');

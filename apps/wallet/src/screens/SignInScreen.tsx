@@ -55,7 +55,7 @@ import { ApiError } from '../api/client';
 import { signIn, workspaceChoices, type WorkspaceChoice } from '../api/auth';
 import { salonName } from '../domain/names';
 import { useLanguage } from '../i18n/language';
-import { lastWorkspace } from '../state/lastWorkspace';
+import { workspaceName } from '../state/workspaceName';
 import { enterWorkspace } from '../state/workspace';
 import { PrimaryButton } from '../components/Buttons';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -164,9 +164,9 @@ export function SignInScreen({
     WHOSE SIGN-IN SCREEN THIS IS: the workspace she was last in, remembered
     across sign-out (`state/lastWorkspace.ts`), or the build's default name when
     the phone has never been signed in. Boot painted the same workspace's hex.
+    There is no session here, so no salon: `workspaceName(null)`.
   */
-  const last = lastWorkspace();
-  const salonLabel = last ? salonName(last, lang) : copy.salonName;
+  const salonLabel = workspaceName(null, lang);
 
   return (
     <ScrollView
