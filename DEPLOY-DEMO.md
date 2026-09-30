@@ -85,17 +85,18 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | **Vercel** — project `avo-dashboard` → `avo-dashboard-coral.vercel.app` | static Vite build |
 | API | **Vercel** — project `avo-api` → `avo-api.vercel.app` | serverless function, `api/index.ts` |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0069 on 2026-09-29** |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0070 on 2026-09-30** |
 
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
-exists and is not what serves anything. **Deployed state as of 2026-09-29 (evening): both
-projects on `main` @ `05f26d7`, database migrated to `0069`**. Live: API `avo-o7jomml5o`,
-dashboard `avo-dashboard-q2zv147y1` (bundle `index-B57K15Lz.js`). Rollback targets: API
-`avo-4579sakqb` (405b20f), dashboard `avo-dashboard-exdknuraj` (729609c). The demo workspace
-`SAL-FOREST` (dark green, wallet card "Our colour", manager `forest`, member Maha
-+96599124450) was created on the hosted DB with `db:demo-forest` and operator-chosen passwords —
-none of them is in the repo. Deployed by hand from the CLI — **neither
+exists and is not what serves anything. **Deployed state as of 2026-09-30: API on `main` @ `8624879`, dashboard @ `05f26d7`
+(nothing under `apps/dashboard` changed between them), database migrated to `0070`**. Live:
+API `avo-5w1sho82e` (salon-less member sign-in: the account decides the workspace),
+dashboard `avo-dashboard-q2zv147y1`. Rollback targets: API `avo-o7jomml5o` (05f26d7).
+Hosted data: `SAL-FOREST` via `db:demo-forest` (operator passwords), and every workspace's
+two-branch roster via `db:demo-roster` — Hessa (AR-003) left unassigned because of a live
+booking at BR-KWC on 2026-09-30; re-run `db:demo-roster` after it to move her to Salmiya.
+Deployed by hand from the CLI — **neither
 project auto-deploys from git**, so a push to `main` changes nothing live.
 
 Postgres is **not on Render** deliberately: its own free database has
@@ -125,7 +126,7 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated (through `0069`, applied 2026-09-29), is seeded, and passed all
+is migrated (through `0070`, applied 2026-09-30), is seeded, and passed all
 **103** invariants on 2026-09-14.
 
 **THE OWNER PASSWORD IS IN AFTAB'S PASSWORD MANAGER, AND NOWHERE ELSE.** This
