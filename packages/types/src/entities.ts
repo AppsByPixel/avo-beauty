@@ -267,6 +267,27 @@ export const SalonSchema = z.object({
 
 // ----------------------------------------------------------------- member --
 
+/**
+ * One wallet app, and the account decides the workspace (Aftab, 2026-09-29).
+ * A salon-less `POST /auth/member/session` whose phone and password open more
+ * than one salon's wallet answers 409 with this body — `workspaces` at the TOP
+ * level, per `ApiError.toBody`. It lists only salons where the password verified,
+ * never a salon that merely holds the phone. The client re-posts with the chosen
+ * `salonId`. Lane A's 16414a3 serialises it.
+ */
+export const WorkspaceChoiceSchema = z.object({
+  salonId: IdSchema,
+  name: z.string(),
+  nameAr: z.string().nullable(),
+  brandColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+});
+
+export const ChooseWorkspaceSchema = z.object({
+  error: z.literal('choose_workspace'),
+  message: z.string(),
+  workspaces: z.array(WorkspaceChoiceSchema).min(2).max(4),
+});
+
 export const MemberSchema = z.object({
   id: IdSchema,
   salonId: IdSchema,
@@ -1454,6 +1475,8 @@ export type HappyHour = z.infer<typeof HappyHourSchema>;
 export type PromotionSet = z.infer<typeof PromotionSetSchema>;
 export type RewardKey = z.infer<typeof RewardKeySchema>;
 export type Campaign = z.infer<typeof CampaignSchema>;
+export type WorkspaceChoice = z.infer<typeof WorkspaceChoiceSchema>;
+export type ChooseWorkspace = z.infer<typeof ChooseWorkspaceSchema>;
 export type CancellationRule = z.infer<typeof CancellationRuleSchema>;
 export type BookingPolicy = z.infer<typeof BookingPolicySchema>;
 export type BookingPolicyStamp = z.infer<typeof BookingPolicyStampSchema>;
