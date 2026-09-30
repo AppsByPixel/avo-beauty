@@ -69,6 +69,7 @@ import {
   type SignupRecovery,
 } from '../domain/signup';
 import { SALON_ID } from '../config/salon';
+import { defaultWorkspaceName } from '../state/workspaceName';
 import { enterWorkspace } from '../state/workspace';
 import { useLanguage } from '../i18n/language';
 import { PrimaryButton } from '../components/Buttons';
@@ -382,7 +383,15 @@ export function SignUpScreen({
       <Brand />
 
       <Text style={[text('displayS', lang), styles.title]}>{copy.signUpTitle}</Text>
-      <Text style={[text('bodyS', lang), styles.sub]}>{copy.signUpSub}</Text>
+      {/*
+        The DEFAULT workspace's name, not the last one signed in to on this
+        phone: sign-up registers at `SALON_ID` (see `submit`), so this is the
+        name of the salon she is joining. When trunk settles which workspace a
+        new sign-up joins, this name moves with that answer.
+      */}
+      <Text style={[text('bodyS', lang), styles.sub]}>
+        {copy.signUpSub(defaultWorkspaceName(lang))}
+      </Text>
 
       <View style={styles.fields}>
         {/* design:118, minus the `optional` marker — the name is required here. */}
@@ -578,12 +587,18 @@ export function SignUpScreen({
   );
 }
 
-/** design:113 — the salon, then the word Wallet. Shared shape with sign-in. */
+/**
+ * design:113 — the salon, then the word Wallet. Shared shape with sign-in, and
+ * the same name `signUpSub` carries: the default workspace's, the one sign-up
+ * registers at.
+ */
 function Brand() {
   const { lang, copy } = useLanguage();
   return (
     <View style={styles.brand}>
-      <Text style={[text('displayM', lang), styles.salon]}>{copy.salonName}</Text>
+      <Text style={[text('displayM', lang), styles.salon]} testID="signup-salon">
+        {defaultWorkspaceName(lang)}
+      </Text>
       <Text style={[text('bodyS', lang), styles.walletWord]}>{copy.walletWord}</Text>
     </View>
   );

@@ -216,6 +216,11 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   // pair (already formatted, hence strings), a stamp count and the reward.
   tierFine: ['Amara'],
   signInSub: ['Amara'],
+  // The other four sentences that name the salon — a name, never a number.
+  signUpSub: ['Amara'],
+  nOffersSub: ['Amara'],
+  walletFine: ['Amara'],
+  cSentSalon: ['Amara'],
   tierRequirement: [4, 10],
   tierBonusIllustration: ['10', '11'],
   stampCountOf: [4, 8],

@@ -79,6 +79,14 @@ describe('a null nameAr falls back to Latin, and never to blank', () => {
     expect(salonName({ name: 'Amara' }, 'ar')).toBe('Amara');
   });
 
+  it('falls back for a salon whose Arabic name is EMPTY, not only null', () => {
+    // The name is interpolated into sentences now; '' would leave a hole in the
+    // middle of one. `nameAr` is `z.string().nullable()`, so '' can reach here.
+    expect(salonName({ name: 'Forest', nameAr: '' }, 'ar')).toBe('Forest');
+    expect(salonName({ name: 'Forest', nameAr: '  ' }, 'ar')).toBe('Forest');
+    expect(salonName({ name: 'Forest', nameAr: '' }, 'en')).toBe('Forest');
+  });
+
   it('is never empty, in either language, for any fixture here', () => {
     const all = [SALMIYA, KUWAIT_CITY, AMARA, LUMIERE, HAWALLY];
     for (const entity of all) {

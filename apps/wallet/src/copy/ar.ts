@@ -404,7 +404,7 @@ export const ar: Copy = {
   // The happy path IS in the bundle's `ar` block, so these three are lifted.
   // Note the feminine imperative in `signInSub` — سجّلي, not سجّل. The customer
   // base is women's salons and a masculine form is a copy defect.
-  salonName: 'أمارا', // design:1275
+  // The salon's name above the form is not copy any more — see copy/types.ts.
   walletWord: 'المحفظة', // design:1353
   signInTitle: 'أهلاً بعودتك', // design:1353
   signInSub: (salon) => `سجّلي الدخول إلى محفظة ${salon}`, // design:1353, the name interpolated
@@ -456,7 +456,9 @@ export const ar: Copy = {
     it is NOT a gap.
   */
   signUpTitle: 'أنشئي حسابك', // design:1357
-  signUpSub: 'محفظتك في أمارا — صالحة في كل فروع أمارا', // design:1357
+  // design:1357, the name interpolated at both places — the DEFAULT
+  // workspace's, because sign-up registers there. See copy/types.ts.
+  signUpSub: (salon) => `محفظتك في ${salon} — صالحة في كل فروع ${salon}`,
   signUpAction: 'إنشاء الحساب', // design:1358
   signUpWorking: en.signUpWorking, // AR GAP
   signUpPassHint: '٦ أحرف على الأقل', // design:1355
@@ -948,7 +950,7 @@ export const ar: Copy = {
   nReceipt: 'إيصالات بالبريد', // design:1312
   nReceiptSub: 'إيصال مفصّل بالبريد الإلكتروني عن كل عملية دفع أو شحن أو استرجاع', // design:1312
   nOffers: 'عروض الصالون', // design:1313
-  nOffersSub: 'عروض من أمارا بين حين وآخر. مغلقة افتراضياً.', // design:1313
+  nOffersSub: (salon) => `عروض من ${salon} بين حين وآخر. مغلقة افتراضياً.`, // design:1313
   notifErr: en.notifErr, // AR GAP
   notifSaveErr: en.notifSaveErr, // AR GAP
 
@@ -957,8 +959,20 @@ export const ar: Copy = {
   // money — and the Arabic month name, not a transliteration of the English one.
   legalUpdated: (effectiveFrom, version) =>
     `آخر تحديث ${formatEffectiveFromAr(effectiveFrom)} · إصدار ${ea(version)}`,
-  walletFine:
-    'محفظتك تحتوي رصيداً مدفوعاً مسبقاً لصالون أمارا فقط. الرصيد لا ينتهي، ولا يمكن تحويله لصالون آخر، وليس وديعة بنكية.', // design:1321
+  /*
+    design:1321, the name interpolated — and here `لصالون` STAYS, where the
+    English drops "Salon". They are not the same word doing the same job. The
+    English "Amara Salon" is a proper noun built by appending to the name; the
+    API's Arabic name is `أمارا`, and `لصالون` is the sentence's own noun, the
+    one the preposition ل is written onto ("for the salon Amara"). Dropping it
+    would put the clitic ل on the name itself — `لForest`, since Forest has no
+    `nameAr` — or need a tatweel, and neither is the designer's Arabic. So the
+    sentence keeps its own wording around the name, verbatim. (A salon whose
+    Arabic name itself begins `صالون` would read it twice; none does today, and
+    `tierFine` avoided it only because its `من` stands alone.)
+  */
+  walletFine: (salon) =>
+    `محفظتك تحتوي رصيداً مدفوعاً مسبقاً لصالون ${salon} فقط. الرصيد لا ينتهي، ولا يمكن تحويله لصالون آخر، وليس وديعة بنكية.`,
   logOut: 'تسجيل الخروج', // design:1322
   deleteAcct: 'حذف حسابي', // design:1322
 
@@ -1042,7 +1056,7 @@ export const ar: Copy = {
   cSentTitle: 'تم إرسال رسالتك', // design:1333
   cSentRef: 'رقمك المرجعي', // design:1333
   cSentDone: 'تم', // design:1333
-  cSentSalon: 'وصلت رسالتك إلى أمارا وسيتم الرد على واتساب.', // design:1334
+  cSentSalon: (salon) => `وصلت رسالتك إلى ${salon} وسيتم الرد على واتساب.`, // design:1334
   cSentAvo: 'وصلت رسالتك إلى فريق AVO.', // design:1335
 
   deleteTitle: 'حذف حسابك؟', // design:1336

@@ -257,8 +257,8 @@ export const en: Copy = {
   // takes the same possessive `stampsGoal` uses one line above.
   stampRule3: (reward) => `Your card resets after you claim your ${reward}.`,
 
-  // sign-in — design:1168, :1246, :1248
-  salonName: 'Amara',
+  // sign-in — design:1168, :1246, :1248. The salon's name above the form is
+  // not copy any more: `state/workspaceName.ts`. See copy/types.ts.
   walletWord: 'Wallet',
   signInTitle: 'Welcome back',
   signInSub: (salon) => `Log in to your ${salon} wallet`,
@@ -314,7 +314,9 @@ export const en: Copy = {
 
   // signup — design:1250, :1251, :1210-1212, :1247-1248, :1256
   signUpTitle: 'Create your account',
-  signUpSub: 'Your Amara wallet — valid at every Amara branch',
+  // design:1250, the name interpolated at both places. The DEFAULT workspace's
+  // name, because sign-up registers there — see copy/types.ts.
+  signUpSub: (salon) => `Your ${salon} wallet — valid at every ${salon} branch`,
   signUpAction: 'Create account',
   /** INVENTED — the design's button carries no busy label, same as `signInWorking`. */
   signUpWorking: 'Creating your account…',
@@ -842,7 +844,7 @@ export const en: Copy = {
   nReceipt: 'Email receipts',
   nReceiptSub: 'An itemised receipt by email for every payment, top-up and refund',
   nOffers: 'Salon offers',
-  nOffersSub: 'Occasional promotions from Amara. Off by default.',
+  nOffersSub: (salon) => `Occasional promotions from ${salon}. Off by default.`, // design:1206
   notifErr: "We couldn't load your notification settings.",
   notifSaveErr: "That didn't save, so the switch has been put back. Try again.",
 
@@ -850,8 +852,13 @@ export const en: Copy = {
   // composes the whole stamp including the version.
   legalUpdated: (effectiveFrom, version) =>
     `Last updated ${formatEffectiveFrom(effectiveFrom)} · v${version}`,
-  walletFine:
-    'Your wallet holds prepaid credit for Amara Salon only. Credit does not expire, cannot be transferred to another salon, and is not a bank deposit.',
+  // design:1214. The design appends "Salon" to the name ("Amara Salon"), the
+  // same construction `tierFine` met at design:1173, and it goes the same way:
+  // the name goes in bare, as the salon gave it. "Forest Salon" is a name
+  // Forest did not choose, and a salon already called "… Salon" would read
+  // "… Salon Salon". The rest of the sentence is the design's, verbatim.
+  walletFine: (salon) =>
+    `Your wallet holds prepaid credit for ${salon} only. Credit does not expire, cannot be transferred to another salon, and is not a bank deposit.`,
   logOut: 'Log out',
   deleteAcct: 'Delete my account',
 
@@ -945,7 +952,7 @@ export const en: Copy = {
   cSentTitle: 'Message sent',
   cSentRef: 'Your reference',
   cSentDone: 'Done',
-  cSentSalon: 'Amara has your message and will reply on WhatsApp.',
+  cSentSalon: (salon) => `${salon} has your message and will reply on WhatsApp.`, // design:1227
   cSentAvo: 'AVO support has your message.',
 
   deleteTitle: 'Delete your account?',

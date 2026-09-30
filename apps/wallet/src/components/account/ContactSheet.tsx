@@ -50,6 +50,12 @@ interface Props {
   memberPhone: string;
   /** Set when the sheet was opened from a receipt. */
   prefillRef: string;
+  /**
+   * The signed-in workspace's name in the reading language (`salonName()`), for
+   * the salon-routed confirmation. Passed in rather than read here: the screen
+   * that owns the salon read owns its name.
+   */
+  salonLabel: string;
   onClose: () => void;
 }
 
@@ -61,6 +67,7 @@ export function ContactSheet({
   memberEmail,
   memberPhone,
   prefillRef,
+  salonLabel,
   onClose,
 }: Props) {
   const { lang, copy } = useLanguage();
@@ -153,7 +160,7 @@ export function ContactSheet({
               still not sending a route.
             */}
             <Text style={[text('body', lang), styles.sentLine]}>
-              {sent.route === 'salon' ? copy.cSentSalon : copy.cSentAvo}
+              {sent.route === 'salon' ? copy.cSentSalon(salonLabel) : copy.cSentAvo}
             </Text>
           </View>
 

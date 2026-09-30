@@ -159,6 +159,12 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
 
   const { member, salon, policies, support } = data;
   const offline = status === 'offline';
+  /**
+   * The signed-in workspace's name, in the reading language. Every sentence on
+   * this screen that names the salon takes this — never a literal, which read
+   * "Amara" to a Forest member (trunk's demo, 2026-09-30).
+   */
+  const salonLabel = salonName(salon, lang);
 
   const openProfile = () => setProfileOpen(true);
   const onSaved = (updated: Member, message: string) => {
@@ -178,7 +184,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
     { key: 'wa', label: copy.nWa, sub: copy.nWaSub },
     { key: 'remind', label: copy.nRemind, sub: copy.nRemindSub },
     { key: 'receipt', label: copy.nReceipt, sub: copy.nReceiptSub },
-    { key: 'offers', label: copy.nOffers, sub: copy.nOffersSub },
+    { key: 'offers', label: copy.nOffers, sub: copy.nOffersSub(salonLabel) },
   ];
 
   const docs = policies?.docs ?? [];
@@ -220,6 +226,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
             memberEmail={member.email}
             memberPhone={member.phone}
             prefillRef={contactRef}
+            salonLabel={salonLabel}
             onClose={() => setContactOpen(false)}
           />
           <DeleteAccountSheet
@@ -404,7 +411,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
             which is why it is app copy and not a clause from the API. It makes no
             representation the published terms do not.
           */}
-          <CardNote>{copy.walletFine}</CardNote>
+          <CardNote>{copy.walletFine(salonLabel)}</CardNote>
         </>
       ) : null}
 
@@ -493,7 +500,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
               from `??` on an empty string, which only a CHECK constraint on
               `salon.name_ar` currently prevents from reaching a customer.
             */}
-            {copy.followTitle(salonName(salon, lang))}
+            {copy.followTitle(salonLabel)}
           </SectionLabel>
           <FollowSalon social={salon.social} />
         </>

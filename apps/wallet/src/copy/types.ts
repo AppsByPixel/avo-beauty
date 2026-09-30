@@ -384,20 +384,15 @@ export interface Copy {
   resetSentSub: string;
   backToLogin: string;
   /**
-  /**
-   * The salon's name and the word "Wallet", above the sign-in form (design:86).
-   *
-   * IN THE COPY FILE, AND ONLY BECAUSE SIGN-IN IS PRE-AUTH. Everywhere after
-   * sign-in the name comes off `Salon.name` from the API, which is correct for a
-   * white-label product. Here there is no session yet and therefore no salon to
-   * fetch, so the build carries its own name — and that, not a missing field, is
-   * why the Arabic form lives here. The clause that used to follow ("`Salon.name`
-   * is a single string with no `nameAr`, the contract gap HomeScreen already
-   * reports") was stale: `SalonSchema.nameAr` exists and is served. Pre-auth
-   * still cannot read it, so this key stays; the reason is the session, not the
-   * schema.
+   * NO `salonName` KEY ANY MORE. The salon's name above the sign-in form
+   * (design:86) used to live here as `salonName: 'Amara'`, "only because sign-in
+   * is pre-auth". One app serves every workspace now, so a literal name is
+   * another salon's name to every other workspace's customers — and the five
+   * sentences below that wrote it in literally proved it (a Forest member's
+   * Account: "prepaid credit for Amara Salon only"). Every name now comes from
+   * `state/workspaceName.ts`: the session's salon, then the last workspace, then
+   * the build default in `config/salon.ts`.
    */
-  salonName: string;
   walletWord: string;
   signInTitle: string;
   /**
@@ -405,8 +400,7 @@ export interface Copy {
    * interpolated. One app serves every workspace now, so the sign-in screen is
    * the LAST workspace's (`state/lastWorkspace.ts`), and a Forest sign-in
    * screen that said "your Amara wallet" would be wrong in its own words. The
-   * words are the design's; only the name moves. Pass `salonName()` — or
-   * `salonName` above when nothing is remembered.
+   * words are the design's; only the name moves. Pass `workspaceName()`.
    */
   signInSub(salon: string): string;
   /**
@@ -446,7 +440,14 @@ export interface Copy {
    * `api/signup.ts` for the code → key mapping and the test that keeps it total.
    */
   signUpTitle: string;
-  signUpSub: string;
+  /**
+   * design:1250 / :1357 — "Your Amara wallet — valid at every Amara branch",
+   * with the name interpolated at both places. Pass `defaultWorkspaceName()`,
+   * NOT `workspaceName()`: sign-up registers at the build's default workspace
+   * (`SignUpScreen`, an open product question for trunk), so the name here is
+   * the one she is registered at.
+   */
+  signUpSub(salon: string): string;
   signUpAction: string;
   signUpWorking: string;
   /** The password field's placeholder — design:127 reuses `passHint`. */
@@ -1325,7 +1326,8 @@ export interface Copy {
   nReceipt: string;
   nReceiptSub: string;
   nOffers: string;
-  nOffersSub: string;
+  /** design:1206 / :1313 — "Occasional promotions from Amara…", the name interpolated. */
+  nOffersSub(salon: string): string;
   /**
    * The five switches could not be read. NOT a generic error: five switches
    * drawn from defaults look like her settings and are not, so the section says
@@ -1346,8 +1348,16 @@ export interface Copy {
    * itself contributes to a policy document; every other character is the API's.
    */
   legalUpdated(effectiveFrom: string, version: number): string;
-  /** The fine print under the policy list. Not a legal document — a summary. */
-  walletFine: string;
+  /**
+   * The fine print under the policy list. Not a legal document — a summary, and
+   * the frame around the published set, which still comes from the API (#10).
+   *
+   * design:1214 / :1321, the salon's name interpolated. English drops the
+   * design's appended "Salon" ("for Amara Salon only") for `tierFine`'s reason:
+   * it is part of a proper noun the salon did not choose. Arabic keeps its own
+   * `لصالون` — see the note in `ar.ts`.
+   */
+  walletFine(salon: string): string;
   logOut: string;
   deleteAcct: string;
 
@@ -1463,8 +1473,12 @@ export interface Copy {
   cSentTitle: string;
   cSentRef: string;
   cSentDone: string;
-  /** Chosen by the route the SERVER returned, not the one the client displayed. */
-  cSentSalon: string;
+  /**
+   * Chosen by the route the SERVER returned, not the one the client displayed.
+   * design:1227 / :1334 — "Amara has your message…", the name interpolated: the
+   * salon the ticket was routed to is the session's own.
+   */
+  cSentSalon(salon: string): string;
   cSentAvo: string;
 
   // delete account sheet
