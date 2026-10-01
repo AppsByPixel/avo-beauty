@@ -182,8 +182,10 @@ const ANONYMOUS: Record<string, string> = {
     'the customer asks for her own reset link, holding no credential — that is the ' +
     'premise. Open by necessity and defended by posture instead: IP rate limit BEFORE ' +
     'the phone is parsed, and a constant 202 regardless of whether the phone matches, ' +
-    'so it is not a member-enumeration oracle. Identity is (salonId, phone), not phone ' +
-    'alone, because one phone can hold wallets at two salons.',
+    'so it is not a member-enumeration oracle. salonId is OPTIONAL since 16414a3 (the ' +
+    'one-app wallet): with it, identity is (salonId, phone); without it, every live wallet ' +
+    'the phone holds gets its own link and the answer is the same 202, naming no salon. ' +
+    'Driven in workspace-sign-in.test.ts.',
   'POST /auth/member/password-reset':
     'the redeem half — the link IS the credential, exactly as the staff and console ' +
     'redeem endpoints are open for. Single-use, hashed, expiring. The console twin is ' +
@@ -253,7 +255,10 @@ const ANONYMOUS: Record<string, string> = {
     'a header — so the token is the credential: 16 bytes CSPRNG, sha256-stored, 60s, ' +
     'single-use, burnt on any touch. Authority is RE-READ from the staff row at ' +
     'redemption, so a revoked permission or a deactivated account stops the download. ' +
-    'Owed a driven spec of its own; named in the lane report as the next slice.',
+    'Since ab81e81 it also redeems the Overview export (kind `overview` / `overview:<section>`), ' +
+    'dispatched before the Reports permission map and re-checking perm_dashboard plus every ' +
+    'section gate live. Driven: report-download-capability.test.ts (Reports kinds) and ' +
+    'overview-export.test.ts (overview kinds).',
   'GET /_gateway/:ref': 'the sandbox gateway, not a product route',
   'POST /_gateway/:ref': 'the sandbox gateway, not a product route',
 };
@@ -1048,6 +1053,24 @@ const PINNED_COVERAGE: string[] = [
    * then on.
    */
   'GET /v1/salons/:id/overview/analytics → dashboard',
+  /**
+   * THE OVERVIEW EXPORT — lane A's `ab81e81`, both doors pasted from the census's own
+   * output on the first run after the merge, not from the brief.
+   *
+   * `dashboard`, THE JSON ROUTE'S GATE, ON BOTH, and that is the claim: the file is the
+   * card's answer (`routes/overview.ts § loadOverview`), so it is gated exactly as the
+   * card is and the five second-permission blocks are withheld INSIDE it, as rows naming
+   * the permission. The census cannot see a row any more than it can see a block;
+   * `overview-export.test.ts` drives the `appointments` half by request — upcoming
+   * customers' names in the file with it on, absent with it off, on the `.csv` door
+   * AND on the link's redemption, which re-reads the staff row live.
+   *
+   * THE MINT IS THE ONLY GATE THE LINK HAS AT MINT TIME; the redemption,
+   * `GET /report-downloads/:token [ANONYMOUS]` above, re-checks `perm_dashboard` off the
+   * staff row before serving. A PIN session is refused at both doors by the SURFACE half
+   * of `requireDashboardPerm`, which this format does not print — driven in the same file.
+   */
+  'GET /v1/salons/:id/overview/analytics.csv → dashboard',
   'GET /v1/salons/:id/promotions [requireSalonScoped]',
   'GET /v1/support/tickets → dashboard',
   'GET /v1/support/tickets → policies',
@@ -1232,6 +1255,8 @@ const PINNED_COVERAGE: string[] = [
   'POST /v1/salons/:id/campaigns → marketing',
   /** The bell's write. No perm gate BY DESIGN — see the GET's note above. */
   'POST /v1/salons/:id/notifications/read [requireDashboardScope]',
+  // The Overview export's one-time link. See the `.csv` line's note above.
+  'POST /v1/salons/:id/overview/analytics/download-url → dashboard',
   'POST /v1/salons/:id/products/:oid/image → shop',
   'POST /v1/salons/:id/promotions/happy-hours → marketing',
   'POST /v1/salons/:id/services/:oid/image → appointments',

@@ -1569,6 +1569,24 @@ const SALON_ROUTES: SalonRoute[] = [
    * row cannot see.
    */
   { method: 'GET', template: '/v1/salons/{id}/overview/analytics' },
+  /**
+   * THE OVERVIEW EXPORT — lane A's `ab81e81`, both named by the gap ledger below on
+   * the first run after the merge. The FILE door and the LINK mint, and the mint is
+   * the one that matters more, for the Reports mint's reason above: it hands out a
+   * bearer capability later redeemed with no session, so a cross-salon mint would be
+   * a sixty-second link to another salon's upcoming customers by name.
+   *
+   * No `?branch=` and no body branch, for the JSON row's reason. The mint's control
+   * really mints a token at salon B; nothing redeems it, so it expires unused. 200, as
+   * the Reports mint answers. The `.csv` control is CSV text, not JSON — `treq` keeps
+   * it as a string, and `expectNoSalonALeak` reads `raw` either way.
+   *
+   * The deeper half — that salon B's manager is refused at both doors AND that no
+   * `report_download` row or audit row is written for salon A — is
+   * `overview-export.test.ts`'s, in SQL.
+   */
+  { method: 'GET', template: '/v1/salons/{id}/overview/analytics.csv' },
+  { method: 'POST', template: '/v1/salons/{id}/overview/analytics/download-url', body: {} },
   {
     method: 'PATCH',
     template: '/v1/salons/{id}/orders/{tid}',
