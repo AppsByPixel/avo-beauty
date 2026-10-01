@@ -329,6 +329,9 @@ suite('the Overview export', () => {
       const m = await mint(SALON, 'noDash', { period: '30d' });
       expect(m.statusCode).toBe(403);
       expect(JSON.parse(m.body).message).toContain("You don't have permission to see the dashboard");
+      // No side effect: the refused mint wrote no link.
+      const [n] = await exec(sql`SELECT count(*)::int AS n FROM report_download WHERE staff_id = ${ST.noDash}`);
+      expect(n!.n).toBe(0);
     });
 
     it('appointments off: the customer names are absent, and the counts stay', async () => {
