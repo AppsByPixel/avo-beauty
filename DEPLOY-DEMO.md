@@ -89,10 +89,12 @@ Hit the URL a minute before showing it to anybody.
 
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
-exists and is not what serves anything. **Deployed state as of 2026-09-30: API on `main` @ `8624879`, dashboard @ `05f26d7`
-(nothing under `apps/dashboard` changed between them), database migrated to `0070`**. Live:
-API `avo-5w1sho82e` (salon-less member sign-in: the account decides the workspace),
-dashboard `avo-dashboard-q2zv147y1`. Rollback targets: API `avo-o7jomml5o` (05f26d7).
+exists and is not what serves anything. **Deployed state as of 2026-10-02: both projects on `main` @ `66b79d4`, database
+migrated to `0070`**. Live: API `avo-6f94ttyl2` (adds the Overview export:
+`overview/analytics.csv` and its one-time link), dashboard `avo-dashboard-j3457oza2` (bundle
+`index-BjvrZZ3F.js`, the Export buttons). Rollback targets: API `avo-5w1sho82e` (8624879),
+dashboard `avo-dashboard-8h26vgumu` — a production deploy made on 2026-09-30 13:28 from this
+account but **not by the trunk session**, built from code matching main at the time.
 Hosted data: `SAL-FOREST` via `db:demo-forest` (operator passwords), and every workspace's
 two-branch roster via `db:demo-roster` — Hessa (AR-003) left unassigned because of a live
 booking at BR-KWC on 2026-09-30; re-run `db:demo-roster` after it to move her to Salmiya.
