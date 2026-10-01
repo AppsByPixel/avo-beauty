@@ -488,8 +488,14 @@ describe('every section this client mints is one the server names', () => {
   const SERVER = (() => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(resolve(here, '../../../../api/src/services/overviewExport.ts'), 'utf8');
-    const list = /export const OVERVIEW_SECTIONS = \[([\s\S]*?)\]/.exec(src)?.[1] ?? '';
-    return [...list.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]!);
+    /*
+     * `OVERVIEW_SECTIONS` is now spread from `WIDGET_SECTIONS` and
+     * `ANALYTICS_SECTIONS` (lane A, 238b061), so read every literal
+     * `export const *_SECTIONS = [...]` in the file — the union is what
+     * `parseOverviewSection` accepts.
+     */
+    const lists = [...src.matchAll(/export const \w+_SECTIONS = \[([^\]]*)\]/g)].map((m) => m[1]!);
+    return [...new Set(lists.flatMap((l) => [...l.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]!)))];
   })();
 
   it('the parser found the server’s list', () => {
