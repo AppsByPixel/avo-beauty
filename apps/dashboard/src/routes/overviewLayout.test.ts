@@ -210,3 +210,51 @@ describe('the trend/activity pair shares one row height, and the chart grows int
     expect(getComputedStyle(document.querySelector('.overview__grid')!).alignItems).toBe('stretch');
   });
 });
+
+/*
+ * Aftab, 2026-10-02: export the widgets. The controls arrived after the seams
+ * and insets were measured, and the brief was that they disturb neither:
+ * measured live at 1440px before and after — every card head 39px, the
+ * section head 21px, column gaps 16px, stack gaps 16.0–16.6px, insets 21px —
+ * identical. What is pinned here is the CSS that keeps each control inside the
+ * line box it shares, so the head's height does not depend on whether the
+ * control is drawn.
+ */
+describe('the Export controls take no height of their own', () => {
+  it('the card head carries the title’s old padding, and the title gives its own up', () => {
+    expect(rulesFor('.ovw__head')).toContain('padding: 14px 0 4px');
+    expect(rulesFor('.ovw__head')).toContain('align-items: center');
+    expect(rulesFor('.ovw__head .overview__card-title')).toContain('padding: 0');
+  });
+
+  it('computed in the real cascade: the head pads 14/4 and the title inside it pads nothing', () => {
+    document.body.innerHTML =
+      '<div class="avo-card ovw"><div class="ovw__head"><h3 class="overview__card-title">T</h3>' +
+      '<button class="avo-iconbtn avo-iconbtn--neutral avo-iconbtn--quiet ovw__export"></button></div></div>';
+    const head = getComputedStyle(document.querySelector('.ovw__head')!);
+    expect(head.paddingTop).toBe('14px');
+    expect(head.paddingBottom).toBe('4px');
+    const title = getComputedStyle(document.querySelector('.ovw__head .overview__card-title')!);
+    expect(title.paddingTop).toBe('0px');
+    expect(title.paddingBottom).toBe('0px');
+    /* 24px tall less 2px each way = 20px, inside the title's 21px line. */
+    const button = getComputedStyle(document.querySelector('.ovw__export')!);
+    expect(button.minHeight).toBe('24px');
+    expect(button.marginTop).toBe('-2px');
+    expect(button.marginBottom).toBe('-2px');
+    /* Its padding plus border, so the LABEL ends on the 21px inset. */
+    expect(button.marginRight).toBe('-8px');
+  });
+
+  it('the quiet control has no hairline at rest', () => {
+    expect(
+      cssFrom('../../../../packages/ui/src/ui.css')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .match(/\.avo-iconbtn--quiet \{([^}]*)\}/)?.[1],
+    ).toContain('border-color: transparent');
+  });
+
+  it('the section head’s Export is pulled back inside the 21px title line', () => {
+    expect(rulesFor('.ovw-head__export')).toContain('margin: -6px 0 -4px auto');
+  });
+});

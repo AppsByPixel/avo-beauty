@@ -1,10 +1,39 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import { onlineManager } from '@tanstack/react-query';
 import { fils, formatMoney, subtract, type OverviewAnalytics } from '@avo/types';
-import { Button, Card, EmptyState, ErrorState, Money, Segmented, Skeleton, StaleBanner } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  IconDownload,
+  InlineError,
+  Money,
+  Segmented,
+  Skeleton,
+  StaleBanner,
+} from '@avo/ui';
 import { ApiError } from '../api/client.js';
-import { ANALYTICS_PERIOD, useOverviewAnalytics } from '../api/analytics.js';
-import { useReport, windowLabel, windowPhrase, type Report } from '../api/reports.js';
+import {
+  ANALYTICS_PERIOD,
+  downloadAnalyticsCsv,
+  useOverviewAnalytics,
+  type AnalyticsSectionKey,
+} from '../api/analytics.js';
+import { downloadReportViaLink, useReport, windowLabel, windowPhrase, type Report } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
+import { useSalonId } from '../auth/AuthProvider.js';
 import { useBranchScope } from '../shell/BranchScope.js';
 import { AppointmentLink } from './AppointmentLink.js';
 import { appointmentHref } from './appointmentHref.js';
@@ -87,15 +116,27 @@ export interface ReadState<T> {
 export function AnalyticsSection() {
   const { selected } = useBranchScope();
   const salon = useSalon();
+  const salonId = useSalonId();
   const analytics = useOverviewAnalytics(selected);
   const earnings = useReport('earnings-by-branch', {
     branch: selected,
     period: ANALYTICS_PERIOD,
     compare: null,
   });
+  /*
+   * THE BROWSER'S OWN ONLINE SIGNAL, the one TanStack already listens to. A
+   * failed read is the other half (`AnalyticsGrid` § offline): the browser can
+   * be "online" on a network that does not reach the workspace.
+   */
+  const online = useSyncExternalStore(
+    (notify) => onlineManager.subscribe(notify),
+    () => onlineManager.isOnline(),
+    () => true,
+  );
 
   return (
     <AnalyticsGrid
+      exporter={analyticsExporter(salonId, !online)}
       analytics={{
         data: analytics.data,
         pending: analytics.isPending,
@@ -122,6 +163,157 @@ function forbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.isForbidden;
 }
 
+/* ------------------------------------------------------------- the export -- */
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * EXPORT: THE WIDGETS AS A FILE. Aftab, 2026-10-02: "want export option to get
+ * the valuable widget info they are giving on the dashboard".
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Two controls, one mechanism — the Reports mint (`api/download.ts`):
+ *
+ *   THE HEAD'S "Export"  every block, `section` absent. The server writes the
+ *       blocks she may see and a row naming the reason for each she may not.
+ *   EACH CARD'S "Export" that card's `section` only. Quiet (`IconButton quiet`)
+ *       because it repeats thirteen times, and NOT DRAWN on a withheld card: a
+ *       file whose one row says "permission" is not worth a control.
+ *
+ * THE SCOPE IS THE SERVER'S ECHO, NOT THE REQUEST — the branch and window the
+ * grid is DRAWN against (`shown.branchId`, `shown.window.token`), for
+ * `Overview.tsx § appliedBranchOf`'s reason: if the workspace answered for a
+ * different branch than was asked, the file must match the cards, not the
+ * selector.
+ *
+ * Revenue by branch is not an analytics block; its card exports the
+ * `earnings-by-branch` report through that report's own mint, with the
+ * report's own echo.
+ *
+ * PERMISSION: the mint is `perms.dashboard`, the Overview's gate. The client
+ * hides nothing on a guess — a refusal is the server's sentence, inline.
+ */
+export type ExportTarget = AnalyticsSectionKey | 'all' | 'earnings-by-branch';
+
+export interface ExportScope {
+  /** A branch id or 'all'. */
+  branch: string;
+  period: string;
+}
+
+export interface AnalyticsExporter {
+  run: (target: ExportTarget, scope: ExportScope) => Promise<void>;
+  /** The browser says it is offline. A connectivity failure on the read is added by the grid. */
+  offline: boolean;
+}
+
+/**
+ * THE WIRING, as a function so the export tests drive exactly what the host
+ * mounts: an analytics target mints the analytics link, Revenue by branch mints
+ * the report's.
+ */
+export function analyticsExporter(salonId: string, offline: boolean): AnalyticsExporter {
+  return {
+    offline,
+    run: (target, scope) =>
+      target === 'earnings-by-branch'
+        ? downloadReportViaLink(salonId, 'earnings-by-branch', { ...scope, compare: null })
+        : downloadAnalyticsCsv(salonId, {
+            ...scope,
+            ...(target === 'all' ? {} : { section: target }),
+          }),
+  };
+}
+
+interface CardExportContext {
+  start: (target: ExportTarget) => Promise<void>;
+  offline: boolean;
+}
+
+/** Null in a render test that passes no exporter: no controls, the grid as it was. */
+const ExportContext = createContext<CardExportContext | null>(null);
+
+/** The on-control copy. "No connection" is the house's offline title, reused. */
+export const EXPORT_LABEL = { idle: 'Export', pending: 'Preparing…', offline: 'No connection' } as const;
+
+/**
+ * ONE EXPORT'S STATE: pending, and the last refusal. Per control, so two cards
+ * do not share a spinner or an error. A second press while pending is dropped
+ * here as well as by `disabled`, because the link is single-use and a double
+ * click would mint two.
+ */
+function useExportAction(run: (() => Promise<void>) | null) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const inFlight = useRef(false);
+  async function start() {
+    if (run === null || inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await run();
+    } catch (err) {
+      setError(err);
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  }
+  return { pending, error, start };
+}
+
+/**
+ * THE SERVER'S SENTENCE, VERBATIM — or nothing for a 401, which the shell is
+ * already turning into the sign-in screen.
+ */
+function exportErrorMessage(error: unknown): string | null {
+  if (error === null || error === undefined) return null;
+  if (error instanceof ApiError && error.isUnauthenticated) return null;
+  if (error instanceof Error && error.message) return error.message;
+  return "Couldn't export the file. Try again.";
+}
+
+function exportLabel(pending: boolean, offline: boolean): string {
+  if (pending) return EXPORT_LABEL.pending;
+  if (offline) return EXPORT_LABEL.offline;
+  return EXPORT_LABEL.idle;
+}
+
+/** The head's "Export": every block the grid shows, for the scope it shows. */
+function HeadExport({ run, offline }: { run: (() => Promise<void>) | null; offline: boolean }) {
+  const action = useExportAction(run);
+  const message = exportErrorMessage(action.error);
+  return (
+    <>
+      <IconButton
+        className="ovw-head__export"
+        icon={<IconDownload />}
+        label={exportLabel(action.pending, offline)}
+        aria-label={`${exportLabel(action.pending, offline)} all analytics`}
+        disabled={run === null || action.pending || offline}
+        onClick={() => void action.start()}
+      />
+      {message !== null ? (
+        <div className="ovw-head__error">
+          <InlineError message={message} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Which section a card may export: its own key once its block has arrived and
+ * is not withheld; null in every other state, which draws no control.
+ */
+function exportOf(
+  view: CardView,
+  data: OverviewAnalytics | undefined,
+  key: AnalyticsSectionKey,
+): AnalyticsSectionKey | null {
+  if (view.pending || view.failure !== null || data === undefined) return null;
+  return isWithheld(data[key] as { status: string }) ? null : key;
+}
+
 /**
  * Everything the grid draws, as a function of the two reads. Exported so
  * `overviewAnalyticsRender.test.tsx` can drive it with fixtures parsed through
@@ -133,6 +325,7 @@ export function AnalyticsGrid({
   timezone,
   modulesHint,
   updatedAt = Date.now(),
+  exporter,
 }: {
   analytics: ReadState<OverviewAnalytics>;
   earnings: ReadState<Report>;
@@ -140,6 +333,8 @@ export function AnalyticsGrid({
   /** The salon's modules, for the pending paint — before the payload says. */
   modulesHint: { booking: boolean; shop: boolean } | null;
   updatedAt?: number;
+  /** Absent: no Export controls are drawn (the render tests that predate it). */
+  exporter?: AnalyticsExporter;
 }) {
   const data = analytics.data;
   /*
@@ -165,6 +360,29 @@ export function AnalyticsGrid({
   const gridRef = useRef<HTMLDivElement>(null);
   useMasonry(gridRef);
 
+  /*
+   * OFFLINE IS EITHER SIGNAL: the browser says so, or the last read of this
+   * grid failed for want of a connection (stale or blank). Either way a mint
+   * would fail the same way, so the controls say "No connection" and wait.
+   */
+  const offline =
+    (exporter?.offline ?? false) ||
+    (analytics.error instanceof ApiError && analytics.error.isConnectivity);
+  const scope: ExportScope | null = shown
+    ? { branch: shown.branchId ?? 'all', period: shown.window.token }
+    : null;
+  const report = earnings.data;
+  const reportScope: ExportScope | null = report ? { branch: report.branchId, period: report.period } : null;
+  const cardExport: CardExportContext | null = exporter
+    ? {
+        offline,
+        start: (target) => {
+          const s = target === 'earnings-by-branch' ? reportScope : scope;
+          return s === null ? Promise.resolve() : exporter.run(target, s);
+        },
+      }
+    : null;
+
   return (
     <section className="ovw-section" aria-labelledby="ovw-heading">
       <div className="ovw-head">
@@ -176,6 +394,12 @@ export function AnalyticsGrid({
             {/* The SERVER'S echo, never the request — `Overview.tsx § appliedBranchOf`. */}
             {windowLabel(shown.window)} · {shown.branchName ?? 'All branches'}
           </span>
+        ) : null}
+        {exporter ? (
+          <HeadExport
+            run={scope === null ? null : () => exporter.run('all', scope)}
+            offline={offline}
+          />
         ) : null}
       </div>
 
@@ -191,6 +415,7 @@ export function AnalyticsGrid({
         The DOM order below is the reading order, for the keyboard and a screen
         reader alike. `useMasonry` moves only where each card is DRAWN.
       */}
+      <ExportContext.Provider value={cardExport}>
       <div className="ovw-grid" ref={gridRef}>
         <RevenueByBranchCard state={earnings} />
         {booking ? <TopServicesCard view={view} data={shown} phrase={phrase} /> : null}
@@ -208,6 +433,7 @@ export function AnalyticsGrid({
         ) : null}
         <CampaignsCard view={view} data={shown} phrase={phrase} timezone={timezone} />
       </div>
+      </ExportContext.Provider>
     </section>
   );
 }
@@ -288,18 +514,53 @@ export function Widget({
   title,
   caption,
   label,
+  exportTarget = null,
   children,
 }: {
   title: string;
   caption?: string | null;
   /** `data-widget`, for tests and for nobody else. */
   label: string;
+  /**
+   * What this card's Export downloads, or null for no control — pending,
+   * failed, withheld, or a grid drawn without an exporter. `exportOf` decides.
+   */
+  exportTarget?: ExportTarget | null;
   children: ReactNode;
 }) {
+  const exp = useContext(ExportContext);
+  const target = exp !== null ? exportTarget : null;
+  const action = useExportAction(target === null || exp === null ? null : () => exp.start(target));
+  const message = target === null ? null : exportErrorMessage(action.error);
+  const offline = exp?.offline ?? false;
+  const shownLabel = exportLabel(action.pending, offline);
   return (
     <Card className="ovw" flush data-widget={label}>
-      <h3 className="overview__card-title">{title}</h3>
+      {/*
+        THE HEAD'S HEIGHT IS THE TITLE'S, WITH OR WITHOUT THE CONTROL — the
+        control is shorter than the title's line box (app.css § .ovw__head), so
+        nothing moves when the answer lands and draws it.
+      */}
+      <div className="ovw__head">
+        <h3 className="overview__card-title">{title}</h3>
+        {target !== null ? (
+          <IconButton
+            quiet
+            className="ovw__export"
+            icon={<IconDownload />}
+            label={shownLabel}
+            aria-label={`${shownLabel} ${title}`}
+            disabled={action.pending || offline}
+            onClick={() => void action.start()}
+          />
+        ) : null}
+      </div>
       {caption ? <p className="ovw__caption">{caption}</p> : null}
+      {message !== null ? (
+        <div className="ovw__export-error">
+          <InlineError message={message} />
+        </div>
+      ) : null}
       <div className="ovw__body">{children}</div>
     </Card>
   );
@@ -474,6 +735,7 @@ export function RevenueByBranchCard({ state }: { state: ReadState<Report> }) {
       title="Revenue by branch"
       label="revenue-by-branch"
       caption={report && !failed ? windowLabel(report.window) : null}
+      exportTarget={report && !failed && !state.pending ? 'earnings-by-branch' : null}
     >
       {state.pending ? (
         <WidgetSkeleton rows={2} />
@@ -535,7 +797,7 @@ export function TopServicesCard({
 }) {
   const [sort, setSort] = useState<ServiceSort>('bookings');
   return (
-    <Widget title="Top services" label="top-services">
+    <Widget title="Top services" label="top-services" exportTarget={exportOf(view, data, 'topServices')}>
       {body(view, data, 'topServices', (block) => {
         const list = sort === 'bookings' ? block.byBookings : block.byRevenue;
         if (block.byBookings.length === 0) {
@@ -583,7 +845,7 @@ export function TopServicesCard({
 
 export function ArtistsCard({ view, data }: { view: CardView; data: OverviewAnalytics | undefined }) {
   return (
-    <Widget title="Artist performance" label="artists">
+    <Widget title="Artist performance" label="artists" exportTarget={exportOf(view, data, 'artists')}>
       {body(view, data, 'artists', (block, all) =>
         block.items.length === 0 ? (
           <EmptyState
@@ -657,6 +919,7 @@ export function BusiestTimesCard({
       title="Busiest times"
       label="busiest-times"
       caption={`Visits by day and hour, in the salon's time (${zone})`}
+      exportTarget={exportOf(view, data, 'busiestTimes')}
     >
       {body(
         view,
@@ -754,7 +1017,12 @@ export function UpcomingCard({
   timezone: string | null;
 }) {
   return (
-    <Widget title="Upcoming" label="upcoming" caption="Today and the next 7 days, in the salon's clock">
+    <Widget
+      title="Upcoming"
+      label="upcoming"
+      caption="Today and the next 7 days, in the salon's clock"
+      exportTarget={exportOf(view, data, 'upcoming')}
+    >
       {body(view, data, 'upcoming', (block) => (
         <>
           <div className="ovw-figures">
@@ -870,7 +1138,7 @@ export function NoShowsCard({
   phrase: string;
 }) {
   return (
-    <Widget title="No-shows and deposits" label="no-shows">
+    <Widget title="No-shows and deposits" label="no-shows" exportTarget={exportOf(view, data, 'noShows')}>
       {body(view, data, 'noShows', (block) => {
         const resolved = block.completed + block.noShows;
         return (
@@ -915,7 +1183,7 @@ export function NewMembersCard({
   phrase: string;
 }) {
   return (
-    <Widget title="New members" label="new-members">
+    <Widget title="New members" label="new-members" exportTarget={exportOf(view, data, 'newMembers')}>
       {body(
         view,
         data,
@@ -984,7 +1252,7 @@ export function VisitorsCard({
   phrase: string;
 }) {
   return (
-    <Widget title="First visit vs returning" label="visitors">
+    <Widget title="First visit vs returning" label="visitors" exportTarget={exportOf(view, data, 'visitors')}>
       {body(view, data, 'visitors', (block) => {
         if (block.total === 0) {
           return (
@@ -1050,6 +1318,7 @@ export function LoyaltyCard({ view, data }: { view: CardView; data: OverviewAnal
       title={stamps ? 'Stamp progress' : 'Members by tier'}
       label="loyalty"
       caption="Current members, now"
+      exportTarget={exportOf(view, data, 'loyalty')}
     >
       {body(
         view,
@@ -1148,7 +1417,7 @@ export function WalletCard({
   phrase: string;
 }) {
   return (
-    <Widget title="Wallet loaded vs spent" label="wallet">
+    <Widget title="Wallet loaded vs spent" label="wallet" exportTarget={exportOf(view, data, 'wallet')}>
       {body(
         view,
         data,
@@ -1224,7 +1493,7 @@ export function PaymentMixCard({
   phrase: string;
 }) {
   return (
-    <Widget title="Payment mix" label="payment-mix">
+    <Widget title="Payment mix" label="payment-mix" exportTarget={exportOf(view, data, 'paymentMix')}>
       {body(
         view,
         data,
@@ -1286,7 +1555,7 @@ export function ShopCard({
   phrase: string;
 }) {
   return (
-    <Widget title="Shop orders" label="shop">
+    <Widget title="Shop orders" label="shop" exportTarget={exportOf(view, data, 'shop')}>
       {body(view, data, 'shop', (block) => {
         if (block.orders === 0 && block.topProducts.length === 0) {
           return (
@@ -1349,7 +1618,7 @@ export function CampaignsCard({
   timezone: string | null;
 }) {
   return (
-    <Widget title="Campaigns" label="campaigns">
+    <Widget title="Campaigns" label="campaigns" exportTarget={exportOf(view, data, 'campaigns')}>
       {body(
         view,
         data,
