@@ -2,6 +2,7 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { OverviewAnalyticsSchema, type OverviewAnalytics } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
+import { mintAndFollow } from './download.js';
 
 /**
  * `GET /v1/salons/{id}/overview/analytics?branch=&period=` — `perms.dashboard`.
@@ -76,3 +77,62 @@ export function useOverviewAnalytics(
 }
 
 export type { OverviewAnalytics };
+
+/* -------------------------------------------------------------- the export -- */
+
+/**
+ * THE TWELVE BLOCK KEYS, AS `?section=` SPELLS THEM. Checked against the payload
+ * type, so a block renamed in `packages/types` fails to compile here rather than
+ * minting a link for a section the server no longer has.
+ *
+ * Revenue by branch is NOT one of them: it is the `earnings-by-branch` report,
+ * read separately (`OverviewAnalytics.tsx § TWO READS`), and its card exports
+ * through the report's own mint.
+ */
+export const ANALYTICS_SECTIONS = [
+  'topServices',
+  'artists',
+  'busiestTimes',
+  'upcoming',
+  'noShows',
+  'newMembers',
+  'visitors',
+  'loyalty',
+  'wallet',
+  'paymentMix',
+  'shop',
+  'campaigns',
+] as const satisfies ReadonlyArray<keyof OverviewAnalytics>;
+export type AnalyticsSectionKey = (typeof ANALYTICS_SECTIONS)[number];
+
+export interface AnalyticsExportRequest {
+  /** A branch id, or 'all' — the server's `resolveBranchFilter` reads both. */
+  branch: string;
+  /** The window token the grid is showing, e.g. `30d`. */
+  period: string;
+  /** One block, or absent for every block this staff member may see. */
+  section?: AnalyticsSectionKey;
+}
+
+/**
+ * `POST /v1/salons/{id}/overview/analytics/download-url` → `{ url }`, then
+ * follow it — the Reports mint's shape (`api/download.ts § mintAndFollow`).
+ *
+ * `perms.dashboard` on the mint, the Overview's own gate; the per-block gates
+ * are the SERVER'S, applied inside the file (a withheld block is a row naming
+ * the reason). Nothing here filters sections by what this client believes she
+ * may see.
+ *
+ * `section` IS OMITTED, NOT SENT AS NULL, for the whole file — "absent means
+ * all" is the contract's wording.
+ */
+export async function downloadAnalyticsCsv(
+  salonId: string,
+  request: AnalyticsExportRequest,
+): Promise<void> {
+  await mintAndFollow(`/v1/salons/${salonId}/overview/analytics/download-url`, {
+    branch: request.branch,
+    period: request.period,
+    ...(request.section ? { section: request.section } : {}),
+  });
+}
