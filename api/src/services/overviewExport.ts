@@ -648,10 +648,46 @@ export function salesTrendPeriod(timezone: string, now: Date): CalendarPeriod {
   return { basis: 'calendar', from: shiftDate(to, -(TREND_DAYS - 1)), to };
 }
 
+/**
+ * WHICH DAYS GROSS BY DAY EXPORTS (trunk, 2026-10-02).
+ *
+ *   A CALENDAR RANGE   exactly that range. The chart's own Export mints
+ *                      `section=salesTrend` with the window it drew, as a range
+ *                      (`2026-09-17_2026-09-30`), so the file is the bars on
+ *                      screen even if a salon-local midnight passes between the
+ *                      draw and the click. `parsePeriod` has already validated it,
+ *                      so a valid range is never refused here.
+ *   ROLLING, OR NONE   the chart's own fourteen complete days. No period is
+ *                      the full-file export. The Overview's `30d` is its period
+ *                      for the analytics grid. A rolling window cannot be drawn
+ *                      as whole days at all: the chart refuses one with its
+ *                      `rolling-window` state. So each of these falls back to
+ *                      the window the chart computes, `salesTrendRules.ts §
+ *                      trendWindow`.
+ *
+ * The rule is the same whatever `section` is, so a full-file export asked for a
+ * range carries that range here too. The Overview never sends one, so on screen
+ * the two always agree.
+ */
+export function salesTrendWindow(
+  period: Period,
+  timezone: string,
+  now: Date,
+): { period: CalendarPeriod; chartDefault: boolean } {
+  if (period.basis === 'calendar') return { period, chartDefault: false };
+  return { period: salesTrendPeriod(timezone, now), chartDefault: true };
+}
+
 export interface SalesTrendInput {
   block: ReportBlock;
   /** A branch was applied to the rest of the file, so this chart is wider than it. */
   branchApplied: boolean;
+  /**
+   * True when the window is the chart's fallback of fourteen COMPLETE days. False
+   * for a range the caller named, which can include today and so is not called
+   * complete.
+   */
+  chartDefault: boolean;
 }
 
 /**
@@ -677,7 +713,12 @@ export function salesTrendRows(t: SalesTrendInput): OverviewCsvRow[] {
   const push = (item: string, metric: string, value: string, unit: Unit) =>
     out.push({ section: title, item, metric, value, unit });
 
-  push('', 'window', `${w.fromDate} to ${w.toDate} (${w.days} complete days, salon clock)`, '');
+  push(
+    '',
+    'window',
+    `${w.fromDate} to ${w.toDate} (${w.days} ${t.chartDefault ? 'complete ' : ''}days, salon clock)`,
+    '',
+  );
   push('', 'branches', 'All branches', '');
   if (t.branchApplied) {
     push('', 'note', 'This chart covers all branches. The branch filter does not narrow it.', '');

@@ -20,6 +20,7 @@ import {
   revenueByBranchRows,
   salesTrendPeriod,
   salesTrendRows,
+  salesTrendWindow,
   type OverviewExportInput,
   overviewCsv,
   overviewDownloadKind,
@@ -232,7 +233,7 @@ function input(a: OverviewAnalytics = fixture()): OverviewExportInput {
   return {
     analytics: a,
     kpis: kpis(),
-    salesTrend: { block: { status: 'ok', report: salesReport() }, branchApplied: false },
+    salesTrend: { block: { status: 'ok', report: salesReport() }, branchApplied: false, chartDefault: true },
     revenueByBranch: { status: 'ok', report: earningsReport() },
   };
 }
@@ -538,7 +539,7 @@ describe('salesTrend — Gross by day, its own fourteen days at all branches', (
   });
 
   it('states the window and the scope, then one gross and one count per day, oldest first, gaps as zero', () => {
-    const rows = salesTrendRows({ block: { status: 'ok', report: salesReport() }, branchApplied: false });
+    const rows = salesTrendRows({ block: { status: 'ok', report: salesReport() }, branchApplied: false, chartDefault: true });
     expect(rows.slice(0, 2).map((r) => [r.metric, r.value])).toEqual([
       ['window', '2026-09-18 to 2026-10-01 (14 complete days, salon clock)'],
       ['branches', 'All branches'],
@@ -556,13 +557,27 @@ describe('salesTrend — Gross by day, its own fourteen days at all branches', (
   });
 
   it('with a branch applied elsewhere in the file, a note says this chart is wider', () => {
-    const rows = salesTrendRows({ block: { status: 'ok', report: salesReport() }, branchApplied: true });
+    const rows = salesTrendRows({ block: { status: 'ok', report: salesReport() }, branchApplied: true, chartDefault: true });
     expect(find(rows, '', 'branches')?.value).toBe('All branches');
     expect(find(rows, '', 'note')?.value).toBe('This chart covers all branches. The branch filter does not narrow it.');
   });
 
+  it('a range is exported as that range; rolling or none falls back to the chart window', () => {
+    const range = { basis: 'calendar', from: { year: 2026, month: 9, day: 17 }, to: { year: 2026, month: 9, day: 30 } } as const;
+    expect(salesTrendWindow(range, TZ, NOW)).toEqual({ period: range, chartDefault: false });
+    for (const preset of ['7d', '30d', '90d'] as const) {
+      expect(salesTrendWindow({ basis: 'rolling', preset }, TZ, NOW)).toEqual({
+        period: salesTrendPeriod(TZ, NOW),
+        chartDefault: true,
+      });
+    }
+    // A named range is not called complete: it may include today.
+    const rows = salesTrendRows({ block: { status: 'ok', report: salesReport() }, branchApplied: false, chartDefault: false });
+    expect(find(rows, '', 'window')?.value).toBe('2026-09-18 to 2026-10-01 (14 days, salon clock)');
+  });
+
   it('withheld is one row', () => {
-    expect(salesTrendRows({ block: W('dashboard'), branchApplied: false })).toEqual([
+    expect(salesTrendRows({ block: W('dashboard'), branchApplied: false, chartDefault: true })).toEqual([
       { section: 'Gross by day', item: '', metric: 'withheld', value: 'permission: dashboard', unit: '' },
     ]);
   });

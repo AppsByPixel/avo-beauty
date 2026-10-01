@@ -79,7 +79,7 @@ import {
   overviewFilename,
   overviewRows,
   parseOverviewSection,
-  salesTrendPeriod,
+  salesTrendWindow,
   sectionsOf,
   type OverviewExportInput,
   type OverviewSection,
@@ -210,8 +210,10 @@ async function reportBlock(
  *
  *   analytics         `computeOverviewAnalytics(period, branch)`  — as the JSON above
  *   kpis              `computeMetrics(period, branch)`            — as `/metrics`
- *   salesTrend        `computeReport('sales', ALL branches, the 14-day window)`
- *                     — as the Gross by day card asks `reports/sales`
+ *   salesTrend        `computeReport('sales', ALL branches, the chart's window)`
+ *                     — as the Gross by day card asks `reports/sales`. A range
+ *                     period is that range; otherwise the chart's 14 days.
+ *                     See `salesTrendWindow`.
  *   revenueByBranch   `computeReport('earnings-by-branch', branch, period)`
  *                     — as the Revenue by branch card asks it
  */
@@ -240,15 +242,12 @@ async function loadOverviewExport(input: {
     };
   }
   if (wanted.includes('salesTrend')) {
+    // A range is that range; anything else is the chart's own fourteen days.
+    const trend = salesTrendWindow(input.period, s.timezone, now);
     data.salesTrend = {
-      block: await reportBlock(
-        'sales',
-        s,
-        { branchId: null, period: salesTrendPeriod(s.timezone, now) },
-        input.perms,
-        now,
-      ),
+      block: await reportBlock('sales', s, { branchId: null, period: trend.period }, input.perms, now),
       branchApplied: branch !== null,
+      chartDefault: trend.chartDefault,
     };
   }
   if (wanted.includes('revenueByBranch')) {
