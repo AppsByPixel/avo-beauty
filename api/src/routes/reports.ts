@@ -72,6 +72,8 @@ import {
   type ReportResult,
 } from '../services/reports';
 import { writeAudit } from '../services/audit';
+import { parseOverviewDownloadKind } from '../services/overviewExport';
+import { redeemOverviewDownload } from './overview';
 
 interface ReportQuery {
   branch?: unknown;
@@ -394,8 +396,45 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       .returning({ id: reportDownload.id });
     if (spent.length === 0) throw REFUSED();
 
-    const kind = row.kind as ReportKind;
     const [staff] = await db.select().from(staffUser).where(eq(staffUser.id, row.staffId)).limit(1);
+    if (!staff || staff.deactivatedAt !== null || staff.salonId !== row.salonId) throw REFUSED();
+
+    /**
+     * AN OVERVIEW LINK, minted by `POST /v1/salons/:id/overview/analytics/download-url`
+     * into this same table (`kind` = `overview` or `overview:<section>`). Dispatched
+     * BEFORE the Reports kind is read, because `HOLDS` below is keyed on the six
+     * Reports kinds and an overview row reaching it would be a 500, not a refusal.
+     * Spent above like any other link; its own permission re-check and audit row are
+     * in `routes/overview.ts § redeemOverviewDownload`.
+     */
+    let overviewSection: ReturnType<typeof parseOverviewDownloadKind>;
+    try {
+      overviewSection = parseOverviewDownloadKind(row.kind);
+    } catch {
+      throw REFUSED();
+    }
+    if (overviewSection !== undefined) {
+      const served = await redeemOverviewDownload(row, overviewSection, staff);
+      if (served === null) throw REFUSED();
+      app.log.info(
+        {
+          event: 'report.download',
+          kind: row.kind,
+          salonId: row.salonId,
+          staffId: row.staffId,
+          rows: served.rowCount,
+          period: served.window,
+        },
+        'report download redeemed',
+      );
+      return reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="${served.filename}"`)
+        .header('cache-control', 'no-store')
+        .send(served.csv);
+    }
+
+    const kind = row.kind as ReportKind;
     /** The column behind each report's permission — the same map, read live. */
     const HOLDS: Record<ReportKind, (s: typeof staffUser.$inferSelect) => boolean> = {
       customers: (x) => x.permTeam,
@@ -405,14 +444,9 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       'artist-performance': (x) => x.permTeam,
       'earnings-by-branch': (x) => x.permDashboard,
     };
-    if (
-      !staff ||
-      staff.deactivatedAt !== null ||
-      staff.salonId !== row.salonId ||
-      !HOLDS[kind](staff)
-    ) {
-      throw REFUSED();
-    }
+    // Live, and of this salon, were checked above for every kind. A kind outside
+    // the map (a row nothing here wrote) is refused rather than dereferenced.
+    if (!HOLDS[kind] || !HOLDS[kind](staff)) throw REFUSED();
 
     const [s] = await db
       .select({ id: salon.id, timezone: salon.timezone })
