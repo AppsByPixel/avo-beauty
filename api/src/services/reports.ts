@@ -552,7 +552,7 @@ export function neutralise(value: string): string {
   return FORMULA_LEAD.test(value) ? `'${value}` : value;
 }
 
-function quote(value: string): string {
+export function quote(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
@@ -574,7 +574,7 @@ function moneyCell(value: number): string {
  * about digit grouping, so this keeps the promise that was made and drops the one
  * that was not.
  */
-function csvMoneyCell(value: number): string {
+export function csvMoneyCell(value: number): string {
   return moneyCell(value).replace(/,/g, '');
 }
 
@@ -638,12 +638,21 @@ export function reportFilename(
   branchName: string | null,
   period: Period,
 ): string {
+  return `${kind}_${branchTag(branchName)}_${periodToken(period)}.csv`;
+}
+
+/**
+ * The `{branchTag}` half of every export filename, Reports' and the Overview's
+ * (`services/overviewExport.ts`). One function so the two cannot name the same
+ * branch two ways in one downloads folder.
+ */
+export function branchTag(branchName: string | null): string {
   const tag = branchName ? branchName.toLowerCase().replace(/\s+/g, '-') : 'all-branches';
   // A branch is named by a salon, so it reaches a filename. Anything that is not a
   // safe filename character goes, which also closes the header-injection path into
   // Content-Disposition.
   const safe = tag.replace(/[^a-z0-9-]/g, '');
-  return `${kind}_${safe || 'branch'}_${periodToken(period)}.csv`;
+  return safe || 'branch';
 }
 
 // -------------------------------------------------------------- aggregates --
