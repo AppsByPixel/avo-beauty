@@ -256,7 +256,7 @@ suite('the Overview export', () => {
 
       const one = await get(csvUrl(`period=2026-09-01_2026-09-14&branch=${BRANCH}&section=topServices`), 'noura');
       expect(one.statusCode, one.body).toBe(200);
-      const [{ name }] = (await exec(sql`SELECT name FROM branch WHERE id = ${BRANCH}`)) as Array<{ name: string }>;
+      const name = ((await exec(sql`SELECT name FROM branch WHERE id = ${BRANCH}`))[0]?.name ?? '') as string;
       const tag = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'branch';
       expect(one.headers['content-disposition']).toBe(
         `attachment; filename="overview_${tag}_2026-09-01_2026-09-14_topServices.csv"`,
