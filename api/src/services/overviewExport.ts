@@ -272,6 +272,9 @@ export function sectionRows(a: OverviewAnalytics, section: OverviewSection): Ove
         if (hit) hit.rr = i + 1;
         else seen.set(s.serviceId, { name: s.name, bookings: s.bookings, revenueFils: s.revenueFils, rb: null, rr: i + 1 });
       });
+      // Always one widget-level row, so an empty ranking is a stated 0 and the
+      // section is never absent from the file.
+      push('', 'services ranked', count(seen.size), 'count');
       for (const s of seen.values()) {
         push(s.name, 'bookings', count(s.bookings), 'count');
         push(s.name, 'revenue', kd(s.revenueFils), 'KD');
@@ -285,6 +288,7 @@ export function sectionRows(a: OverviewAnalytics, section: OverviewSection): Ove
     case 'artists': {
       const b = a.artists;
       if (b.status === 'withheld') return [{ section: title, item: '', metric: 'withheld', value: withheldValue(b), unit: '' }];
+      push('', 'artists', count(b.items.length), 'count');
       for (const r of b.items) {
         push(r.name, 'bookings', count(r.bookings), 'count');
         push(r.name, 'no-shows', count(r.noShows), 'count');
@@ -433,7 +437,12 @@ export function sectionRows(a: OverviewAnalytics, section: OverviewSection): Ove
   }
 }
 
-/** Every requested section's rows, in the Overview's order. */
+/**
+ * Every requested section's rows, in the Overview's order. EVERY SECTION YIELDS AT
+ * LEAST ONE ROW — a withheld row, or a widget-level figure that is present even when
+ * it is 0 — so "the section is missing" never has to be read as "the section was
+ * empty". `overviewExport.test.ts` drives an all-empty answer to hold that.
+ */
 export function overviewRows(a: OverviewAnalytics, section: OverviewSection | null): OverviewCsvRow[] {
   const sections = section === null ? OVERVIEW_SECTIONS : [section];
   return sections.flatMap((s) => sectionRows(a, s));

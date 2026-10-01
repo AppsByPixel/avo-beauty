@@ -227,6 +227,7 @@ describe('the rows', () => {
 
   it('a service in both rankings is one item carrying both ranks', () => {
     const cut = rows.filter((r) => r.item === 'Cut' && r.section === 'Top services');
+    expect(find(rows, '', 'services ranked')?.value).toBe('3');
     expect(cut.map((r) => [r.metric, r.value])).toEqual([
       ['bookings', '3'],
       ['revenue', '16.000'],
@@ -294,6 +295,23 @@ describe('a withheld block is one row naming the reason', () => {
     for (const s of OVERVIEW_SECTIONS) if (s !== 'upcoming') a[s] = W('dashboard');
     const rows = overviewRows(a as unknown as OverviewAnalytics, null);
     expect(new Set(rows.map((r) => r.section)).size).toBe(12);
+  });
+});
+
+describe('no section is ever absent', () => {
+  it('an answer with every list empty still gives each of the twelve at least one row', () => {
+    const a = fixture();
+    Object.assign(a.topServices, { byBookings: [], byRevenue: [] });
+    Object.assign(a.artists, { items: [] });
+    Object.assign(a.busiestTimes, { cells: [], totalVisits: 0 });
+    Object.assign(a.upcoming.next, { items: [] });
+    Object.assign(a.newMembers, { weeks: [], total: 0 });
+    Object.assign(a.loyalty, { tiers: [], untiered: 0 });
+    Object.assign(a.shop, { topProducts: [] });
+    Object.assign(a.campaigns, { items: [], sent: 0, reached: 0, reach: 0 });
+    for (const s of OVERVIEW_SECTIONS) expect(sectionRows(a, s).length, s).toBeGreaterThan(0);
+    expect(find(sectionRows(a, 'topServices'), '', 'services ranked')?.value).toBe('0');
+    expect(find(sectionRows(a, 'artists'), '', 'artists')?.value).toBe('0');
   });
 });
 
