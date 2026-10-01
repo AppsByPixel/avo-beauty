@@ -403,6 +403,61 @@ let customCampaignId = '';
 
 // ---------------------------------------------------------------- the probes --
 
+/**
+ * `{ url, expiresAt }` — THE ONE-TIME LINK BOTH EXPORT MINTS ANSWER, written here
+ * because `packages/types` declares nothing for it (no `DownloadUrlSchema`; `grep -rn
+ * download packages/types/src` is empty) and `packages/types` is trunk-owned.
+ *
+ * HAND-WRITTEN TO `ParsesLikeZod` RATHER THAN IN ZOD, because `zod` is not a
+ * dependency of `@avo/e2e` and adding one is a `package.json` edit outside this
+ * lane's column. It behaves like a strict-enough `z.object` for this census's two
+ * directions: it REFUSES a body missing either key or carrying the wrong type, and it
+ * returns ONLY the two keys it models, so a third key the wire grows is reported as
+ * stripped by `keyDeltas` exactly as a zod object would strip it.
+ *
+ *   url        `/report-downloads/tok_…` — relative, because the dashboard prefixes
+ *              its own origin, and token-shaped (`tok_` + at least 22 base64url).
+ *   expiresAt  an ISO-8601 UTC instant (`DateTimeSchema`'s grain).
+ *
+ * The capability's behaviour (single use, sixty seconds, the permission re-read at
+ * redemption) is not a shape and is driven in `overview-export.test.ts`.
+ *
+ * WORTH A SCHEMA IN `packages/types` — Reports' mint returns the same object, and two
+ * dashboard helpers read it. Named in the lane report.
+ */
+const OVERVIEW_DOWNLOAD_URL_SHAPE: ParsesLikeZod = {
+  safeParse(value: unknown) {
+    const issues: Array<{ path: string[]; code: string; message: string }> = [];
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return {
+        success: false,
+        error: { issues: [{ path: [], code: 'invalid_type', message: 'expected an object' }] },
+      };
+    }
+    const v = value as Record<string, unknown>;
+    if (typeof v.url !== 'string' || !/^\/report-downloads\/tok_[A-Za-z0-9_-]{22,}$/.test(v.url)) {
+      issues.push({
+        path: ['url'],
+        code: 'invalid_string',
+        message: `expected a relative /report-downloads/tok_… url, got ${JSON.stringify(v.url)}`,
+      });
+    }
+    if (
+      typeof v.expiresAt !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(v.expiresAt) ||
+      Number.isNaN(Date.parse(v.expiresAt))
+    ) {
+      issues.push({
+        path: ['expiresAt'],
+        code: 'invalid_string',
+        message: `expected an ISO-8601 UTC instant, got ${JSON.stringify(v.expiresAt)}`,
+      });
+    }
+    if (issues.length > 0) return { success: false, error: { issues } };
+    return { success: true, data: { url: v.url, expiresAt: v.expiresAt } };
+  },
+};
+
 interface Probe {
   /** The route AS REGISTERED, for the census. `GET /salons/:id/services`. */
   route: string;
@@ -1150,6 +1205,19 @@ function probes(): Probe[] {
       requireNonEmpty: ['artists.items'],
     },
     /**
+     * THE OVERVIEW EXPORT'S ONE-TIME LINK — `POST /v1/salons/{id}/overview/analytics/
+     * download-url`, lane A's `ab81e81`. Not census-enforced (the census is GETs), so it
+     * is written here by hand, for `POST /orders/payments`' reason: it is the body the
+     * dashboard reads first, and a key this file does not know about is a key nobody
+     * has decided on. See `OVERVIEW_DOWNLOAD_URL_SHAPE`.
+     */
+    {
+      route: 'POST /v1/salons/:id/overview/analytics/download-url',
+      label: `POST /v1/salons/${SALON_A}/overview/analytics/download-url`,
+      schemaName: 'OVERVIEW_DOWNLOAD_URL_SHAPE',
+      schema: OVERVIEW_DOWNLOAD_URL_SHAPE,
+    },
+    /**
      * =====================================================================
      * ITEM 10 — AVO ISSUES, AVO LISTS, AVO VOIDS, SHE REDEEMS.
      * =====================================================================
@@ -1363,6 +1431,33 @@ const UNMODELLED: Record<string, string> = {
     'pinned in reports.test.ts down to the BOM, the CRLF, the RFC 4180 quoting and the ' +
     'formula neutralisation.',
   /**
+   * THE OVERVIEW'S WIDGETS AS A FILE — lane A's `ab81e81`, caught by the unclassified
+   * check on the first run after the merge, by name and with the file
+   * (`api/src/routes/overview.ts`). Its POST sibling, the one-time link, IS probed:
+   * see `OVERVIEW_DOWNLOAD_URL_SHAPE`.
+   *
+   * UNMODELLED FOR THE `.csv` REPORT'S REASON, AND CHECKED RATHER THAN ASSUMED. The
+   * body is `text/csv` with a BOM in five fixed columns (`section,item,metric,value,
+   * unit`), not JSON, so there is no object to parse and nothing for this file's
+   * pre/post key comparison to walk. `OverviewAnalyticsSchema` exists and is NOT this
+   * route's shape: the file is a projection of that object (`services/overviewExport.ts
+   * § sectionRows`), rows not keys, ids dropped, money as KD text. A note claiming
+   * "packages/types is silent about the Overview" would be false in the direction the
+   * `GET /v1/images/:imageId` entry below warns about.
+   *
+   * NOT UNASSERTED. `overview-export.test.ts` drives the bytes against this file's own
+   * JSON probe's route: every KD row in the twelve known sections reconciles to the
+   * fils figure the JSON serves for the same query, the `appointments` gate removes the
+   * customer names, and both cross-salon and PIN-session refusals are driven.
+   */
+  'GET /v1/salons/:id/overview/analytics.csv':
+    'the Overview\'s widgets as one long CSV table — text/csv with a BOM, columns ' +
+    'section,item,metric,value,unit, not JSON, so no Zod schema applies and this census ' +
+    'could not parse it if one existed. OverviewAnalyticsSchema is the object the file is ' +
+    'rendered FROM, not the file: rows not keys, ids dropped, money as KD to three ' +
+    'decimals. Behind requireDashboardPerm(dashboard) + requireSameSalon, audited on every ' +
+    'export. Its money rows are reconciled against the JSON route in overview-export.test.ts.',
+  /**
    * THE CONSOLE'S SALON LIST, arriving with dev `0a2a6ca` and caught here by name on the
    * first run after the rebase — the fourth new surface this census has named on arrival.
    * Behind `requirePlatform(analytics)` and probed permission-off by the generated sweep
@@ -1390,7 +1485,8 @@ const UNMODELLED: Record<string, string> = {
     'token is the credential and the staff row\'s authority is re-read at redemption; ' +
     'the ANONYMOUS ledger in permission-census.test.ts carries the full reasoning. Its ' +
     'bytes share `computeReport` and `toCsv` with the .csv route, which reports.test.ts ' +
-    'pins; the capability semantics are owed a spec.',
+    'pins. The capability semantics are driven in report-download-capability.test.ts, and ' +
+    'since ab81e81 the same route redeems the Overview export too — overview-export.test.ts.',
   'GET /v1/platform/salons':
     'the owner console\'s salon directory with per-salon branch and member counts, behind ' +
     'requirePlatform(analytics). No schema in packages/types, and not SalonSchema-shaped: ' +
@@ -2621,6 +2717,24 @@ beforeAll(async () => {
     const res = await treq<any>('GET', path, { token });
     captured.set(label, res);
   }
+
+  /**
+   * THE OVERVIEW EXPORT'S MINT. A real token at salon A, sixty seconds, single use —
+   * nothing redeems it, so it expires unused inside this run, as the tenancy control's
+   * Reports mint does. 200, not 201: the Reports mint's observed status, and this one
+   * shares its reply.
+   */
+  const overviewMint = await treq<any>(
+    'POST',
+    `/v1/salons/${SALON_A}/overview/analytics/download-url`,
+    { token: dashboard, body: { period: '30d' } },
+  );
+  if (overviewMint.status !== 200) {
+    throw new Error(
+      `POST /v1/salons/${SALON_A}/overview/analytics/download-url: ${overviewMint.status} ${overviewMint.raw}`,
+    );
+  }
+  captured.set(`POST /v1/salons/${SALON_A}/overview/analytics/download-url`, overviewMint);
 }, 180_000);
 
 afterAll(async () => {
@@ -3024,12 +3138,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 64 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 66 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(65);
+    ).toBe(66);
   });
 
   it('no GET route is left unclassified', () => {
