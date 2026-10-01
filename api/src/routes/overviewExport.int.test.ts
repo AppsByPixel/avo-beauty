@@ -8,7 +8,12 @@
  *
  *   ONE ANSWER. The CSV reconciles with the JSON for the same query — money to the
  *       fil, shares to the basis point — and is byte-for-byte the renderer applied
- *       to that JSON.
+ *       to that JSON. The three widget sections reconcile with THEIR endpoints:
+ *       kpis with `/metrics`, salesTrend with `reports/sales` over the chart's own
+ *       fourteen days at all branches, revenueByBranch with
+ *       `reports/earnings-by-branch` for the same branch and period.
+ *   FIFTEEN SECTIONS IN OVERVIEW ORDER: kpis, salesTrend, revenueByBranch, then the
+ *       twelve analytics blocks.
  *   THE GATES ARE THE JSON'S. `dashboard` off is 403 on all three routes (#7,
  *       called directly); `appointments` off removes the customer names; another
  *       salon is 403; a scanner PIN session is refused.
@@ -22,8 +27,13 @@
  * per-run staff in SAL-AMARA with one permission each switched off; one per-run
  * staff in SAL-LUMIERE (shop module off, a different tenant); one per-run artist
  * and a guest booking two days out, so `upcoming.next` carries a name this file
- * can look for. Staff, booking and artist are deleted in `afterAll`; the audit rows
- * stay (audit_log is append-only), so every audit assertion is a delta.
+ * can look for. One per-run member with three settled charges inside the Gross by
+ * day window (two on one day at two branches, one branch-assumed) and one KNET
+ * top-up today, so the widget reconciliation runs over money that is not zero.
+ * The charges and the top-up carry no ledger legs, which keeps them deletable.
+ * Nothing the reconciled endpoints read depends on a leg.
+ * Staff, booking, artist, transactions and member are deleted in `afterAll`. The
+ * audit rows stay (audit_log is append-only), so every audit assertion is a delta.
  *
  * `OX-` namespace, per-run suffix.
  */
@@ -50,6 +60,9 @@ const ST = {
 };
 const ARTIST = `${P}-AR`;
 const BOOKING = `${P}-BK`;
+const MEMBER = `${P}-M`;
+const TX = { a: `${P}-TXA`, b: `${P}-TXB`, c: `${P}-TXC`, topup: `${P}-TXT` };
+const OTHER_BRANCH = 'BR-KWC';
 const GUEST = `Zzyzx Guestname ${RUN}`;
 
 const ALL = {
@@ -86,6 +99,8 @@ suite('the Overview export', () => {
   let db: (typeof import('../db/client'))['db'];
   let sql: (typeof import('drizzle-orm'))['sql'];
   let render: (typeof import('../services/overviewExport'));
+  let zone: (typeof import('../time/zone'));
+  let tz = 'Asia/Kuwait';
   const bearer: Record<'noura' | 'pin' | keyof typeof ST, string> = {
     noura: '', pin: '', noDash: '', noAppt: '', limited: '', lumiere: '',
   };
@@ -122,11 +137,49 @@ suite('the Overview export', () => {
 
   const csvUrl = (q: string, salonId = SALON) => `/v1/salons/${salonId}/overview/analytics.csv?${q}`;
   const jsonUrl = (q: string, salonId = SALON) => `/v1/salons/${salonId}/overview/analytics?${q}`;
+  const ok = async (url: string, who: keyof typeof bearer = 'noura') => {
+    const res = await get(url, who);
+    expect(res.statusCode, `${url}: ${res.body}`).toBe(200);
+    return JSON.parse(res.body);
+  };
+  /** The Gross by day card's own request: all branches, its fourteen-day range. */
+  const trendUrl = () =>
+    `/salons/${SALON}/reports/sales?branch=all&period=${
+      (() => {
+        const p = render.salesTrendPeriod(tz, new Date());
+        const ymd = (d: { year: number; month: number; day: number }) =>
+          `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
+        return `${ymd(p.from)}_${ymd(p.to)}`;
+      })()
+    }`;
+  /**
+   * The four JSON endpoints the Overview reads, asked what the cards ask, as an
+   * `OverviewExportInput`. `q` carries period and branch, as the file's query does.
+   */
+  const jsonParts = async (q: string, branch: string | null) => {
+    const analytics = await ok(jsonUrl(q));
+    const metrics = await ok(`/salons/${SALON}/metrics?${q}`);
+    const sales = await ok(trendUrl());
+    const earnings = await ok(`/salons/${SALON}/reports/earnings-by-branch?${q}`);
+    return {
+      analytics,
+      kpis: {
+        metrics,
+        today: zone.salonWallClock(new Date(), tz).date,
+        // The analytics' window is the period's window: same parser, same zone.
+        window: analytics.window,
+        timezone: tz,
+      },
+      salesTrend: { block: { status: 'ok', report: sales }, branchApplied: branch !== null, chartDefault: true },
+      revenueByBranch: { status: 'ok', report: earnings },
+    } as never;
+  };
 
   beforeAll(async () => {
     db = (await import('../db/client')).db;
     sql = (await import('drizzle-orm')).sql;
     render = await import('../services/overviewExport');
+    zone = await import('../time/zone');
     const issue = (await import('../auth/sessions')).issueSession;
     app = await (await import('../app')).buildApp();
 
@@ -173,11 +226,39 @@ suite('the Overview export', () => {
       VALUES (${BOOKING}, ${SALON}, ${BRANCH}, false, NULL, ${GUEST}, ${ARTIST}, ${svc!.id as string},
               ${starts.toISOString()}::timestamptz, ${ends.toISOString()}::timestamptz, 60, 0,
               'deposit_held', 'merchant', ${ends.toISOString()}::timestamptz)`);
+
+    // Money for the widgets: inside the Gross by day window, and today.
+    tz = ((await exec(sql`SELECT timezone FROM salon WHERE id = ${SALON}`))[0]?.timezone ?? tz) as string;
+    const trend = render.salesTrendPeriod(tz, new Date());
+    const noonOf = (d: { year: number; month: number; day: number }) => zone.wallClockInstant(d, 12 * 60, tz);
+    const yesterdayNoon = noonOf(trend.to);
+    const fiveBack = zone.wallClockInstant(trend.from, 13 * 60 + 5 * 24 * 60, tz);
+    await exec(sql`
+      INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, visits, policy_version)
+      VALUES (${MEMBER}, ${SALON}, ${`OX Member ${RUN}`}, ${`+9656${String(Date.now() % 10_000_000).padStart(7, '0')}`},
+              'x', 90000, 'bronze', 0, 3)`);
+    const charge = async (txId: string, branchId: string, assumed: boolean, amount: number, at: Date) =>
+      exec(sql`
+        INSERT INTO "transaction"
+          (id, member_id, salon_id, branch_id, branch_assumed, kind, amount_fils, method, status, reference, created_at, settled_at)
+        VALUES (${txId}, ${MEMBER}, ${SALON}, ${branchId}, ${assumed}, 'charge', ${amount}, 'wallet', 'settled', '',
+                ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz)`);
+    await charge(TX.a, BRANCH, false, -12_345, yesterdayNoon);
+    await charge(TX.b, OTHER_BRANCH, true, -678, new Date(yesterdayNoon.getTime() + 3_600_000));
+    await charge(TX.c, BRANCH, false, -1_001, fiveBack);
+    const loadedAt = new Date(Date.now() - 60_000);
+    await exec(sql`
+      INSERT INTO "transaction"
+        (id, member_id, salon_id, branch_id, branch_assumed, kind, amount_fils, method, status, reference, created_at, settled_at)
+      VALUES (${TX.topup}, ${MEMBER}, ${SALON}, ${BRANCH}, true, 'topup', ${25_005}, 'knet', 'settled', '',
+              ${loadedAt.toISOString()}::timestamptz, ${loadedAt.toISOString()}::timestamptz)`);
   });
 
   afterAll(async () => {
     if (db) {
       await db.execute(sql`DELETE FROM booking WHERE id = ${BOOKING}`);
+      for (const t of Object.values(TX)) await db.execute(sql`DELETE FROM "transaction" WHERE id = ${t}`);
+      await db.execute(sql`DELETE FROM member WHERE id = ${MEMBER}`);
       await db.execute(sql`DELETE FROM artist WHERE id = ${ARTIST}`);
       for (const sid of Object.values(ST)) await db.execute(sql`DELETE FROM staff_user WHERE id = ${sid}`);
     }
@@ -186,14 +267,20 @@ suite('the Overview export', () => {
 
   // ====================================================== one answer ==
   describe('the CSV is the JSON', () => {
-    it('byte-for-byte the renderer over the JSON answer, for the same query', async () => {
+    it('byte-for-byte the renderer over the four JSON answers, for the same query', async () => {
       const q = 'period=90d';
-      const json = await get(jsonUrl(q), 'noura');
+      const parts = await jsonParts(q, null);
       const csv = await get(csvUrl(q), 'noura');
-      expect(json.statusCode, json.body).toBe(200);
       expect(csv.statusCode, csv.body).toBe(200);
-      const expected = render.overviewCsv(render.overviewRows(JSON.parse(json.body), null));
-      expect(csv.body).toBe(expected);
+      expect(csv.body).toBe(render.overviewCsv(render.overviewRows(parts, null)));
+    });
+
+    it('byte-for-byte with a branch applied, too', async () => {
+      const q = `period=90d&branch=${BRANCH}`;
+      const parts = await jsonParts(q, BRANCH);
+      const csv = await get(csvUrl(q), 'noura');
+      expect(csv.statusCode, csv.body).toBe(200);
+      expect(csv.body).toBe(render.overviewCsv(render.overviewRows(parts, null)));
     });
 
     it('money reconciles to the fil and shares to the basis point', async () => {
@@ -264,6 +351,176 @@ suite('the Overview export', () => {
     });
   });
 
+  // ================================================ the three widgets ==
+  describe('each widget section is its own endpoint’s answer', () => {
+    const cellsOf = (rows: string[][], title: string) => {
+      const mine = rows.filter((r) => r[0] === title);
+      return (item: string, metric: string) => {
+        const r = mine.find((x) => x[1] === item && x[2] === metric);
+        expect(r, `${title} / ${item} / ${metric}`).toBeDefined();
+        return r!;
+      };
+    };
+
+    it('kpis reconcile with GET /salons/{id}/metrics for the same query — money to the fil', async () => {
+      for (const q of ['period=90d', 'period=7d', 'period=2026-09-01_2026-09-14']) {
+        const m = await ok(`/salons/${SALON}/metrics?${q}`);
+        const cell = cellsOf(parseCsv((await get(csvUrl(`${q}&section=kpis`), 'noura')).body), 'KPIs');
+        expect(cell('Active members', 'active in period')[3]).toBe(String(m.activeMembers));
+        expect(cell('Active members', 'change vs same period a week earlier')[3]).toBe(String(m.activeMembersDelta));
+        expect(m.loadedTodayFils, q).not.toBeNull();
+        const loaded = cell('Loaded today', 'loaded today');
+        expect(loaded[4]).toBe('KD');
+        expect(kdToFils(loaded[3]!), q).toBe(m.loadedTodayFils);
+        expect(cell('Loaded today', 'KNET share of loaded today')[3]).toBe(String(m.knetSharePercent));
+        expect(cell('Repeat rate', 'repeat rate in period')[3]).toBe(String(m.repeatRatePercent));
+        expect(cell('Upcoming today', 'still to start today')[3]).toBe(String(m.upcomingAppointments));
+        // The today tiles name the salon-local date, not the period.
+        expect(cell('', 'today (salon clock)')[3]).toBe(zone.salonWallClock(new Date(), tz).date);
+      }
+      // Not vacuous: today's top-up from the fixture is in the figure.
+      const m = await ok(`/salons/${SALON}/metrics?period=30d`);
+      expect(m.loadedTodayFils).toBeGreaterThanOrEqual(25_005);
+    });
+
+    it('with a branch applied, Loaded today is one withheld row (not_per_branch) and the caveat is counted', async () => {
+      const q = `period=90d&branch=${BRANCH}`;
+      const m = await ok(`/salons/${SALON}/metrics?${q}`);
+      expect(m.loadedTodayFils).toBeNull();
+      const rows = parseCsv((await get(csvUrl(`${q}&section=kpis`), 'noura')).body).slice(1);
+      expect(rows.filter((r) => r[1] === 'Loaded today')).toEqual([['KPIs', 'Loaded today', 'withheld', 'not_per_branch', '']]);
+      const cell = cellsOf(rows, 'KPIs');
+      expect(cell('Active members', 'active in period')[3]).toBe(String(m.activeMembers));
+      expect(cell('Repeat rate', 'visits considered')[3]).toBe(String(m.branchAssumed.visitsTotal));
+      expect(cell('Repeat rate', 'visits with branch inferred')[3]).toBe(String(m.branchAssumed.visits));
+      expect(cell('Upcoming today', 'appointments with branch inferred')[3]).toBe(String(m.branchAssumed.upcomingAppointments));
+    });
+
+    it('salesTrend reconciles with reports/sales over the chart’s fourteen days at all branches — to the fil', async () => {
+      const sales = await ok(trendUrl());
+      expect(sales.window.basis).toBe('calendar');
+      expect(sales.window.days).toBe(14);
+      // The branch the rest of the file is narrowed to does not narrow this chart.
+      for (const q of ['period=90d', `period=7d&branch=${BRANCH}`]) {
+        const rows = parseCsv((await get(csvUrl(`${q}&section=salesTrend`), 'noura')).body).slice(1);
+        const cell = cellsOf(rows, 'Gross by day');
+        expect(cell('', 'window')[3]).toBe(`${sales.window.fromDate} to ${sales.window.toDate} (14 complete days, salon clock)`);
+        expect(cell('', 'branches')[3]).toBe('All branches');
+        expect(rows.some((r) => r[2] === 'note')).toBe(q.includes('branch='));
+
+        const want = new Map<string, { gross: number; txns: number }>();
+        for (const r of sales.rows as Array<{ date: string; grossFils: number; transactions: number }>) {
+          const w = want.get(r.date) ?? { gross: 0, txns: 0 };
+          want.set(r.date, { gross: w.gross + r.grossFils, txns: w.txns + r.transactions });
+        }
+        const days = rows.filter((r) => r[2] === 'gross');
+        expect(days).toHaveLength(14);
+        expect(days.map((r) => r[1])).toEqual([...days.map((r) => r[1]!)].sort());
+        let total = 0;
+        for (const d of days) {
+          const w = want.get(d[1]!) ?? { gross: 0, txns: 0 };
+          expect(kdToFils(d[3]!), d[1]).toBe(w.gross);
+          expect(cell(d[1]!, 'transactions')[3]).toBe(String(w.txns));
+          total += kdToFils(d[3]!);
+        }
+        // Every fil of the report is in the file, and the report's own headline agrees.
+        expect(total).toBe(sales.stat.value);
+      }
+      // Not vacuous: yesterday carries both fixture charges, across two branches.
+      const y = parseCsv((await get(csvUrl('section=salesTrend'), 'noura')).body).slice(1);
+      expect(kdToFils(y.find((r) => r[1] === sales.window.toDate && r[2] === 'gross')![3]!)).toBeGreaterThanOrEqual(13_023);
+    });
+
+    it('salesTrend with a RANGE period exports exactly that range, as the chart’s own Export mints it', async () => {
+      // The chart's window as Lane C sends it, a longer range, and a range that
+      // includes today. Each is valid, so none is a 400.
+      const chart = trendUrl().split('period=')[1]!;
+      const today = zone.salonWallClock(new Date(), tz).date;
+      for (const range of [chart, '2026-09-01_2026-09-30', `${chart.split('_')[0]}_${today}`]) {
+        const res = await get(csvUrl(`section=salesTrend&period=${range}`), 'noura');
+        expect(res.statusCode, `${range}: ${res.body}`).toBe(200);
+        expect(res.headers['content-disposition']).toBe(`attachment; filename="overview_all-branches_${range}_salesTrend.csv"`);
+        const sales = await ok(`/salons/${SALON}/reports/sales?branch=all&period=${range}`);
+        const rows = parseCsv(res.body).slice(1);
+        const [from, to] = range.split('_');
+        expect(rows.find((r) => r[2] === 'window')![3]).toBe(`${from} to ${to} (${sales.window.days} days, salon clock)`);
+        const days = rows.filter((r) => r[2] === 'gross');
+        expect(days).toHaveLength(sales.window.days);
+        expect(days[0]![1]).toBe(from);
+        expect(days[days.length - 1]![1]).toBe(to);
+        const total = days.reduce((t, d) => t + kdToFils(d[3]!), 0);
+        expect(total, range).toBe(sales.stat.value);
+
+        // The link path: the mint takes the range in the body and serves the same bytes.
+        const m = await mint(SALON, 'noura', { section: 'salesTrend', period: range });
+        expect(m.statusCode, m.body).toBe(200);
+        const link = await app.inject({ method: 'GET', url: JSON.parse(m.body).url });
+        expect(link.statusCode).toBe(200);
+        expect(link.body).toBe(res.body);
+      }
+    });
+
+    it('salesTrend with no period, or a rolling one (the Overview’s own 30d), falls back to the chart’s fourteen days', async () => {
+      const chart = trendUrl().split('period=')[1]!;
+      const [from, to] = chart.split('_');
+      for (const q of ['section=salesTrend', 'section=salesTrend&period=30d', 'section=salesTrend&period=7d']) {
+        const res = await get(csvUrl(q), 'noura');
+        expect(res.statusCode, res.body).toBe(200);
+        const rows = parseCsv(res.body).slice(1);
+        expect(rows.find((r) => r[2] === 'window')![3]).toBe(`${from} to ${to} (14 complete days, salon clock)`);
+        expect(rows.filter((r) => r[2] === 'gross')).toHaveLength(14);
+      }
+    });
+
+    it('revenueByBranch reconciles with reports/earnings-by-branch for the same branch and period — to the fil', async () => {
+      for (const q of ['period=90d', 'period=90d&branch=all', `period=90d&branch=${BRANCH}`, `period=90d&branch=${OTHER_BRANCH}`, 'period=2026-09-01_2026-09-14']) {
+        const e = await ok(`/salons/${SALON}/reports/earnings-by-branch?${q}`);
+        const rows = parseCsv((await get(csvUrl(`${q}&section=revenueByBranch`), 'noura')).body).slice(1);
+        const cell = cellsOf(rows, 'Revenue by branch');
+        expect(cell('', 'branches')[3]).toBe(String(e.rows.length));
+        type R = { branch: string; transactions: number; grossFils: number; assumedGrossFils: number; assumedTransactions: number };
+        // The card's order: the report's order.
+        expect(rows.filter((r) => r[2] === 'gross').map((r) => r[1])).toEqual((e.rows as R[]).map((r) => r.branch));
+        let total = 0;
+        for (const r of e.rows as R[]) {
+          expect(kdToFils(cell(r.branch, 'gross')[3]!), `${q} ${r.branch}`).toBe(r.grossFils);
+          expect(kdToFils(cell(r.branch, 'gross with branch assumed')[3]!)).toBe(r.assumedGrossFils);
+          expect(cell(r.branch, 'transactions')[3]).toBe(String(r.transactions));
+          expect(cell(r.branch, 'transactions with branch assumed')[3]).toBe(String(r.assumedTransactions));
+          total += kdToFils(cell(r.branch, 'gross')[3]!);
+        }
+        expect(total).toBe(e.stat.value);
+        const assumed = (e.rows as R[]).filter((r) => r.assumedGrossFils > 0).map((r) => r.branch);
+        expect(rows.some((r) => r[2] === 'note')).toBe(assumed.length > 0);
+      }
+      // Not vacuous: the fixture's branch-assumed charge puts assumed money on Kuwait City.
+      const e = await ok(`/salons/${SALON}/reports/earnings-by-branch?period=90d`);
+      expect((e.rows as Array<{ branch: string; assumedGrossFils: number }>).some((r) => r.assumedGrossFils >= 678)).toBe(true);
+    });
+
+    it('a caller without dashboard is refused the widget sections as she is refused their endpoints', async () => {
+      for (const key of ['kpis', 'salesTrend', 'revenueByBranch']) {
+        expect((await get(csvUrl(`section=${key}`), 'noDash')).statusCode).toBe(403);
+        expect((await mint(SALON, 'noDash', { section: key })).statusCode).toBe(403);
+      }
+      expect((await get(`/salons/${SALON}/metrics`, 'noDash')).statusCode).toBe(403);
+      expect((await get(`/salons/${SALON}/reports/earnings-by-branch`, 'noDash')).statusCode).toBe(403);
+      expect((await get(trendUrl(), 'noDash')).statusCode).toBe(403);
+      // And another salon's staff cannot read this salon's widgets through the file.
+      expect((await get(csvUrl('section=revenueByBranch'), 'lumiere')).statusCode).toBe(403);
+      expect((await get(csvUrl('section=kpis'), 'pin')).statusCode).toBe(403);
+    });
+
+    it('dashboard alone is enough for all three — the cards need nothing more', async () => {
+      const rows = parseCsv((await get(csvUrl('period=90d'), 'limited')).body).slice(1);
+      for (const title of ['KPIs', 'Gross by day', 'Revenue by branch']) {
+        const mine = rows.filter((r) => r[0] === title);
+        expect(mine.length, title).toBeGreaterThan(0);
+        expect(mine.some((r) => r[2] === 'withheld' && r[3]!.startsWith('permission')), title).toBe(false);
+      }
+    });
+  });
+
   // ========================================================= sections ==
   describe('section=', () => {
     it('one key exports one block', async () => {
@@ -274,9 +531,39 @@ suite('the Overview export', () => {
       expect(new Set(rows.map((r) => r[0]))).toEqual(new Set(['Busiest times']));
     });
 
-    it('absent exports all twelve', async () => {
+    it('absent exports all fifteen, in the Overview order: kpis, salesTrend, revenueByBranch, then the twelve', async () => {
       const rows = parseCsv((await get(csvUrl('period=90d'), 'noura')).body).slice(1);
-      expect(new Set(rows.map((r) => r[0])).size).toBe(12);
+      const order: string[] = [];
+      for (const r of rows) if (order[order.length - 1] !== r[0]) order.push(r[0]!);
+      // Contiguous: each section appears once, as one block.
+      expect(order).toEqual([...new Set(order)]);
+      expect(order).toEqual([
+        'KPIs', 'Gross by day', 'Revenue by branch',
+        'Top services', 'Artist performance', 'Busiest times', 'Upcoming', 'No-shows and deposits',
+        'New members', 'First visit vs returning', expect.stringMatching(/^(Members by tier|Stamp progress)$/),
+        'Wallet loaded vs spent', 'Payment mix', 'Shop orders', 'Campaigns',
+      ]);
+    });
+
+    it('section=kpis|salesTrend|revenueByBranch each export that one widget, and mint a link that serves it', async () => {
+      const titles = { kpis: 'KPIs', salesTrend: 'Gross by day', revenueByBranch: 'Revenue by branch' } as const;
+      for (const [key, title] of Object.entries(titles)) {
+        const res = await get(csvUrl(`period=90d&section=${key}`), 'noura');
+        expect(res.statusCode, res.body).toBe(200);
+        expect(res.headers['content-disposition']).toBe(`attachment; filename="overview_all-branches_90d_${key}.csv"`);
+        const rows = parseCsv(res.body).slice(1);
+        expect(rows.length, key).toBeGreaterThan(0);
+        expect(new Set(rows.map((r) => r[0]))).toEqual(new Set([title]));
+
+        const m = await mint(SALON, 'noura', { period: '90d', section: key });
+        expect(m.statusCode, m.body).toBe(200);
+        const [row] = await exec(sql`
+          SELECT kind FROM report_download WHERE staff_id = ${NOURA} ORDER BY created_at DESC LIMIT 1`);
+        expect(row!.kind).toBe(`overview:${key}`);
+        const link = await app.inject({ method: 'GET', url: JSON.parse(m.body).url });
+        expect(link.statusCode, link.body).toBe(200);
+        expect(link.body).toBe(res.body);
+      }
     });
 
     it('an unknown key is 400 invalid_section, on the file and on the mint', async () => {
@@ -308,8 +595,8 @@ suite('the Overview export', () => {
     it('not_per_branch — a branch withholds the five salon-wide blocks', async () => {
       const rows = parseCsv((await get(csvUrl(`period=90d&branch=${BRANCH}`), 'noura')).body).slice(1);
       const nb = rows.filter((r) => r[2] === 'withheld' && r[3] === 'not_per_branch').map((r) => r[0]);
-      expect(nb).toEqual(['New members', expect.any(String), 'Wallet loaded vs spent', 'Payment mix', 'Campaigns']);
-      expect(nb[1]).toMatch(/^(Members by tier|Stamp progress)$/);
+      expect(nb).toEqual(['KPIs', 'New members', expect.any(String), 'Wallet loaded vs spent', 'Payment mix', 'Campaigns']);
+      expect(nb[2]).toMatch(/^(Members by tier|Stamp progress)$/);
     });
 
     it('module_off — emitted, not omitted', async () => {

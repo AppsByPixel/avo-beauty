@@ -66,27 +66,67 @@
  * of `appointments`, and the export obeys that same gate because it is the same
  * object. That is why every export is audited (`overviewExportAudit` below).
  *
- * "Revenue by branch" is not here, because it is not in the JSON either: that
- * widget is served by `GET /salons/{id}/reports/earnings-by-branch` and already
- * exports as `earnings-by-branch_{branch}_{period}.csv`.
+ * ==========================================================================
+ * FIFTEEN SECTIONS, NOT TWELVE — EVERY WIDGET THE OVERVIEW DRAWS
+ * ==========================================================================
+ * Aftab asked for "the valuable widget info they are giving on the dashboard",
+ * and the Overview draws three widgets the analytics JSON does not carry. Each
+ * is in the file, BUILT FROM THE SAME SERVICE CALL ITS OWN ENDPOINT MAKES, so
+ * the file cannot disagree with the card about any of them:
+ *
+ *   kpis              the four tiles      `computeMetrics` — `GET /salons/{id}/metrics`
+ *   salesTrend        Gross by day        `computeReport('sales')` — `GET …/reports/sales`
+ *   revenueByBranch   Revenue by branch   `computeReport('earnings-by-branch')`
+ *
+ * The file reads in the Overview's order, top to bottom: the KPI row, the Gross
+ * by day chart, then the analytics grid, whose first card is Revenue by branch,
+ * then the grid's twelve blocks.
+ *
+ * EACH KEEPS ITS OWN CARD'S TIME BASIS, AND THE ROWS SAY WHICH ONE.
+ *   - Two KPI tiles are TODAY in the salon's clock ("Loaded today", "Upcoming
+ *     today"), and `?period=` does not move them (`metrics.ts § the day`). Their
+ *     metrics say "today", and a widget-level row names the salon-local date.
+ *     The other two tiles run over the export's period. Their metrics say "in
+ *     period", and a widget-level row names the period.
+ *   - Gross by day covers the last FOURTEEN COMPLETE salon-local days, ending
+ *     yesterday, at ALL BRANCHES. That is the chart's own fixed window and scope
+ *     (`apps/dashboard/src/routes/salesTrendRules.ts § TREND_DAYS`, `trendScope`).
+ *     Neither `?period=` nor `?branch=` narrows it, so the section states its
+ *     window and its scope in rows of its own.
+ *   - Revenue by branch takes the export's branch and period, as the card does:
+ *     the card reads the analytics period and the shell's branch selection.
+ *
+ * With a branch applied, the Loaded today tile is withheld as `not_per_branch`.
+ * That is the analytics blocks' reason, and it applies because the JSON's
+ * `loadedTodayFils` is null there for the same cause. The branch-assumed caveat
+ * becomes count rows. Where the card prints its sentence, a `note` row carries
+ * that sentence verbatim.
  */
 
-import type { Fils } from '@avo/types';
+import { add, fils, type Fils } from '@avo/types';
 import type { PermissionName } from '../auth/principal';
 import { badRequest } from '../http/errors';
-import { minutesToHhmm, salonWallClock } from '../time/zone';
+import { minutesToHhmm, salonWallClock, type CalendarDate } from '../time/zone';
+import type { SalonMetrics } from './metrics';
 import type { OverviewAnalytics, Withheld } from './overviewAnalytics';
-import { periodToken, type Period } from './period';
-import { branchTag, csvMoneyCell, neutralise, quote } from './reports';
+import { periodToken, type CalendarPeriod, type Period, type PeriodWindow } from './period';
+import { branchTag, csvMoneyCell, neutralise, quote, type ReportResult } from './reports';
 
 // ---------------------------------------------------------------- sections --
 
 /**
- * The `?section=` vocabulary: the twelve block keys of the JSON, verbatim, in the
- * order the Overview draws them. A client already holds these names — they are
- * the keys it reads the JSON by.
+ * The three widgets above the analytics grid, keyed as the brief names them, in
+ * the order the Overview draws them.
  */
-export const OVERVIEW_SECTIONS = [
+export const WIDGET_SECTIONS = ['kpis', 'salesTrend', 'revenueByBranch'] as const;
+export type WidgetSection = (typeof WIDGET_SECTIONS)[number];
+
+/**
+ * The twelve block keys of the analytics JSON, verbatim, in the order the grid
+ * draws them. A client already holds these names, because they are the keys it
+ * reads the JSON by.
+ */
+export const ANALYTICS_SECTIONS = [
   'topServices',
   'artists',
   'busiestTimes',
@@ -100,10 +140,27 @@ export const OVERVIEW_SECTIONS = [
   'shop',
   'campaigns',
 ] as const;
+export type AnalyticsSection = (typeof ANALYTICS_SECTIONS)[number];
+
+/**
+ * The `?section=` vocabulary, and the order of the whole file: the Overview read
+ * top to bottom. A missing `section` means all fifteen, in this order.
+ */
+export const OVERVIEW_SECTIONS = [...WIDGET_SECTIONS, ...ANALYTICS_SECTIONS] as const;
 
 export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
 
 const SECTION_SET: ReadonlySet<string> = new Set(OVERVIEW_SECTIONS);
+const ANALYTICS_SET: ReadonlySet<string> = new Set(ANALYTICS_SECTIONS);
+
+export function isAnalyticsSection(s: OverviewSection): s is AnalyticsSection {
+  return ANALYTICS_SET.has(s);
+}
+
+/** The sections a request names, in file order. */
+export function sectionsOf(section: OverviewSection | null): readonly OverviewSection[] {
+  return section === null ? OVERVIEW_SECTIONS : [section];
+}
 
 /**
  * Absent (or empty) is every section; one known key is that one; anything else —
@@ -172,7 +229,7 @@ const ORDER_STATUS_LABEL = { preparing: 'Preparing', ready: 'Ready', closed: 'Cl
 const METHOD_LABEL = { knet: 'KNET', card: 'Card', applepay: 'Apple Pay' } as const;
 
 /** The widget titles, verbatim from `apps/dashboard/src/routes/OverviewAnalytics.tsx`. */
-function sectionTitle(section: OverviewSection, a: OverviewAnalytics): string {
+function sectionTitle(section: AnalyticsSection, a: OverviewAnalytics): string {
   switch (section) {
     case 'topServices':
       return 'Top services';
@@ -251,7 +308,7 @@ function branchAssumedRows(
  * The rows of ONE section. Pure — the input is the JSON object, the output is
  * strings, and `overviewExport.test.ts` drives every block in both states.
  */
-export function sectionRows(a: OverviewAnalytics, section: OverviewSection): OverviewCsvRow[] {
+export function sectionRows(a: OverviewAnalytics, section: AnalyticsSection): OverviewCsvRow[] {
   const title = sectionTitle(section, a);
   const out: OverviewCsvRow[] = [];
   const push = (item: string, metric: string, value: string, unit: Unit) =>
@@ -438,28 +495,355 @@ export function sectionRows(a: OverviewAnalytics, section: OverviewSection): Ove
   }
 }
 
+// ------------------------------------------------- the three widgets above --
+
+/** The section column for the three widgets: the Overview's own titles. */
+export const WIDGET_TITLE: Record<WidgetSection, string> = {
+  /** The KPI row has no card title. Each tile's label is its `item`. */
+  kpis: 'KPIs',
+  /** `apps/dashboard/src/routes/SalesTrend.tsx § TrendCard`, verbatim. */
+  salesTrend: 'Gross by day',
+  /** `apps/dashboard/src/routes/OverviewAnalytics.tsx § RevenueByBranchCard`, verbatim. */
+  revenueByBranch: 'Revenue by branch',
+};
+
+/**
+ * "a", "a and b", "a, b and c". The dashboard's `joinClauses`
+ * (`apps/dashboard/src/routes/overviewAnalyticsRules.ts`), so the note rows carry
+ * the card's sentence word for word.
+ */
+function joinClauses(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/** Integer fils off a report row cell. A float or a missing cell throws in `fils()`. */
+const rowFils = (v: string | number | null | undefined): Fils => fils(v as number);
+function rowCount(v: string | number | null | undefined): number {
+  if (typeof v !== 'number') throw new TypeError(`A count cell must be a number, got ${String(v)}.`);
+  return v;
+}
+
+/**
+ * A signed integer, which only the active-members delta is. `-3` is printed as
+ * `-3`. `overviewCsv` leaves a value that is a plain number untouched, so the
+ * formula guard does not turn it into the text `'-3`.
+ */
+function signedCount(n: number): string {
+  if (!Number.isSafeInteger(n)) throw new TypeError(`A count must be an integer, got ${n}.`);
+  return String(n);
+}
+
+/** An integer percent, as `/metrics` serves it: `62` → `62`. */
+function wholePercent(n: number): string {
+  if (!Number.isSafeInteger(n) || n < 0) throw new TypeError(`A percent must be a non-negative integer, got ${n}.`);
+  return String(n);
+}
+
+/** `30d` → `last 30 days (rolling)`; a range → `2026-09-01 to 2026-09-14 (salon clock)`. */
+function windowText(w: PeriodWindow): string {
+  if (w.basis === 'rolling') return `last ${w.days} days (rolling)`;
+  return `${w.fromDate} to ${w.toDate} (salon clock)`;
+}
+
+export interface KpisInput {
+  /** `computeMetrics`'s answer, exactly as `GET /salons/{id}/metrics` serves it. */
+  metrics: SalonMetrics;
+  /** The salon-local date the two TODAY tiles mean, from the same `now`. */
+  today: string;
+  /** The window the two WINDOW tiles ran over. */
+  window: PeriodWindow;
+  timezone: string;
+}
+
+/**
+ * THE KPI ROW. One `item` per tile, labelled as the tile is.
+ *
+ * TWO TIME BASES, BOTH NAMED. Active members and Repeat rate run over the
+ * period. Loaded today and Upcoming today are the salon's today and ignore it.
+ *
+ * LOADED TODAY WITH A BRANCH APPLIED is one withheld row, `not_per_branch`. Both
+ * of its figures (the KD and the KNET share) are null there, for one cause, so
+ * one row says so.
+ *
+ * THE DELTA IS SIGNED. The tile hides a non-positive delta. The file prints it,
+ * because a falling member count is a figure and the file has no styling to hide
+ * it with.
+ */
+export function kpiRows(k: KpisInput): OverviewCsvRow[] {
+  const title = WIDGET_TITLE.kpis;
+  const out: OverviewCsvRow[] = [];
+  const push = (item: string, metric: string, value: string, unit: Unit) =>
+    out.push({ section: title, item, metric, value, unit });
+  const m = k.metrics;
+
+  push('', 'period', windowText(k.window), '');
+  push('', 'today (salon clock)', k.today, '');
+
+  push('Active members', 'active in period', count(m.activeMembers), 'count');
+  push('Active members', 'change vs same period a week earlier', signedCount(m.activeMembersDelta), 'count');
+
+  if (m.loadedTodayFils === null) {
+    push('Loaded today', 'withheld', 'not_per_branch', '');
+  } else {
+    push('Loaded today', 'loaded today', kd(fils(m.loadedTodayFils)), 'KD');
+    if (m.knetSharePercent !== null) {
+      push('Loaded today', 'KNET share of loaded today', wholePercent(m.knetSharePercent), '%');
+    }
+  }
+
+  push('Repeat rate', 'repeat rate in period', wholePercent(m.repeatRatePercent), '%');
+
+  push('Upcoming today', 'still to start today', count(m.upcomingAppointments), 'count');
+  if (m.nextAppointmentAt !== null) {
+    push('Upcoming today', 'next at (salon clock)', salonTime(m.nextAppointmentAt, k.timezone), '');
+  }
+
+  /**
+   * THE BRANCH-ASSUMED CAVEAT. Count rows always appear with a branch applied,
+   * in the analytics blocks' manner. The `note` row is the card's own sentence
+   * (`Overview.tsx § AssumedNote`), printed only when the card prints it.
+   */
+  const ba = m.branchAssumed;
+  if (ba !== null) {
+    push('Active members', 'members counted only on rows with branch inferred', count(ba.activeMembers), 'count');
+    push('Repeat rate', 'visits with branch inferred', count(ba.visits), 'count');
+    push('Repeat rate', 'visits considered', count(ba.visitsTotal), 'count');
+    push('Upcoming today', 'appointments with branch inferred', count(ba.upcomingAppointments), 'count');
+    const clause = (assumed: number, total: number, noun: string) =>
+      assumed <= 0 || total <= 0 ? null : `${assumed} of ${total} ${noun}`;
+    const parts = [
+      clause(ba.activeMembers, m.activeMembers, 'members'),
+      clause(ba.visits, ba.visitsTotal, 'visits'),
+      clause(ba.upcomingAppointments, m.upcomingAppointments, 'appointments'),
+    ].filter((p): p is string => p !== null);
+    if (parts.length > 0) {
+      push('', 'note', `Branch assumed on ${joinClauses(parts)} — treat these branch figures as approximate.`, '');
+    }
+  }
+  return out;
+}
+
+/** A Reports aggregate, or the reason it is withheld. */
+export type ReportBlock = ({ status: 'ok' } & { report: ReportResult }) | Withheld;
+
+/** How many days Gross by day draws. `salesTrendRules.ts § TREND_DAYS`. */
+export const TREND_DAYS = 14;
+
+/** `CalendarDate` + n days. Arithmetic on UTC midnight, which has no DST, so it is exact. */
+function shiftDate(d: CalendarDate, days: number): CalendarDate {
+  const t = new Date(Date.UTC(d.year, d.month - 1, d.day) + days * 86_400_000);
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate() };
+}
+
+/**
+ * THE CHART'S WINDOW, COMPUTED AS THE CHART COMPUTES IT (`salesTrendRules.ts §
+ * trendWindow`): the last fourteen COMPLETE salon-local days, ending yesterday.
+ * As a calendar period, because a rolling window grouped by day has part-days at
+ * both ends. That is the reason the chart sends a range too.
+ */
+export function salesTrendPeriod(timezone: string, now: Date): CalendarPeriod {
+  const [y, mo, d] = salonWallClock(now, timezone).date.split('-').map(Number) as [number, number, number];
+  const to = shiftDate({ year: y, month: mo, day: d }, -1);
+  return { basis: 'calendar', from: shiftDate(to, -(TREND_DAYS - 1)), to };
+}
+
+/**
+ * WHICH DAYS GROSS BY DAY EXPORTS (trunk, 2026-10-02).
+ *
+ *   A CALENDAR RANGE   exactly that range. The chart's own Export mints
+ *                      `section=salesTrend` with the window it drew, as a range
+ *                      (`2026-09-17_2026-09-30`), so the file is the bars on
+ *                      screen even if a salon-local midnight passes between the
+ *                      draw and the click. `parsePeriod` has already validated it,
+ *                      so a valid range is never refused here.
+ *   ROLLING, OR NONE   the chart's own fourteen complete days. No period is
+ *                      the full-file export. The Overview's `30d` is its period
+ *                      for the analytics grid. A rolling window cannot be drawn
+ *                      as whole days at all: the chart refuses one with its
+ *                      `rolling-window` state. So each of these falls back to
+ *                      the window the chart computes, `salesTrendRules.ts §
+ *                      trendWindow`.
+ *
+ * The rule is the same whatever `section` is, so a full-file export asked for a
+ * range carries that range here too. The Overview never sends one, so on screen
+ * the two always agree.
+ */
+export function salesTrendWindow(
+  period: Period,
+  timezone: string,
+  now: Date,
+): { period: CalendarPeriod; chartDefault: boolean } {
+  if (period.basis === 'calendar') return { period, chartDefault: false };
+  return { period: salesTrendPeriod(timezone, now), chartDefault: true };
+}
+
+export interface SalesTrendInput {
+  block: ReportBlock;
+  /** A branch was applied to the rest of the file, so this chart is wider than it. */
+  branchApplied: boolean;
+  /**
+   * True when the window is the chart's fallback of fourteen COMPLETE days. False
+   * for a range the caller named, which can include today and so is not called
+   * complete.
+   */
+  chartDefault: boolean;
+}
+
+/**
+ * GROSS BY DAY. One `item` per salon-local day, oldest first, with a zero for a
+ * day that took nothing. The fold is the chart's own (`salesTrendRules.ts §
+ * seriesFrom`): the `sales` rows are per (day, branch) and newest first, so the
+ * branch rows for a day are summed with `add` semantics, in integer fils. Gross
+ * is `grossFils`, as the bars are. Kept deposits are not drawn on the chart, so
+ * they are not in this section either.
+ *
+ * NO TOTAL ROW. The card shows none (`salesTrendRules.ts`: "No total is
+ * displayed"), and `reports/sales` is the export that carries one.
+ */
+export function salesTrendRows(t: SalesTrendInput): OverviewCsvRow[] {
+  const title = WIDGET_TITLE.salesTrend;
+  const b = t.block;
+  if (b.status === 'withheld') return [{ section: title, item: '', metric: 'withheld', value: withheldValue(b), unit: '' }];
+  const w = b.report.window;
+  if (w.basis !== 'calendar' || w.fromDate === null || w.toDate === null) {
+    throw new Error('Gross by day is a calendar window; a rolling one has no whole days to name.');
+  }
+  const out: OverviewCsvRow[] = [];
+  const push = (item: string, metric: string, value: string, unit: Unit) =>
+    out.push({ section: title, item, metric, value, unit });
+
+  push(
+    '',
+    'window',
+    `${w.fromDate} to ${w.toDate} (${w.days} ${t.chartDefault ? 'complete ' : ''}days, salon clock)`,
+    '',
+  );
+  push('', 'branches', 'All branches', '');
+  if (t.branchApplied) {
+    push('', 'note', 'This chart covers all branches. The branch filter does not narrow it.', '');
+  }
+
+  const gross = new Map<string, Fils>();
+  const txns = new Map<string, number>();
+  for (const row of b.report.rows) {
+    const date = String(row['date'] ?? '');
+    // `add` over `Fils`, and `fils()` on every cell: a float cannot enter the fold.
+    gross.set(date, add(gross.get(date) ?? fils(0), rowFils(row['grossFils'])));
+    txns.set(date, (txns.get(date) ?? 0) + rowCount(row['transactions']));
+  }
+  const days: string[] = [];
+  const [fy, fm, fd] = w.fromDate.split('-').map(Number) as [number, number, number];
+  for (let i = 0; i < w.days; i++) {
+    const c = shiftDate({ year: fy, month: fm, day: fd }, i);
+    days.push(`${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`);
+  }
+  // A row outside the window is kept, not dropped, as the chart keeps it.
+  const all = [...new Set([...days, ...gross.keys()])].sort();
+  for (const date of all) {
+    push(date, 'gross', kd(gross.get(date) ?? fils(0)), 'KD');
+    push(date, 'transactions', count(txns.get(date) ?? 0), 'count');
+  }
+  return out;
+}
+
+/**
+ * REVENUE BY BRANCH. One `item` per branch, in the card's order (the report's:
+ * gross descending, then name). Every branch has a row, a closed one included.
+ * The two assumed columns sit beside the figures they qualify, and the card's
+ * caveat sentence (`OverviewAnalytics.tsx § BranchDoubt`) is a `note` row when
+ * any branch carries assumed money.
+ */
+export function revenueByBranchRows(b: ReportBlock): OverviewCsvRow[] {
+  const title = WIDGET_TITLE.revenueByBranch;
+  if (b.status === 'withheld') return [{ section: title, item: '', metric: 'withheld', value: withheldValue(b), unit: '' }];
+  const out: OverviewCsvRow[] = [];
+  const push = (item: string, metric: string, value: string, unit: Unit) =>
+    out.push({ section: title, item, metric, value, unit });
+
+  push('', 'branches', count(b.report.rows.length), 'count');
+  const doubtful: string[] = [];
+  for (const row of b.report.rows) {
+    const name = String(row['branch'] ?? '');
+    push(name, 'gross', kd(rowFils(row['grossFils'])), 'KD');
+    push(name, 'transactions', count(rowCount(row['transactions'])), 'count');
+    const assumed = rowFils(row['assumedGrossFils']);
+    push(name, 'gross with branch assumed', kd(assumed), 'KD');
+    push(name, 'transactions with branch assumed', count(rowCount(row['assumedTransactions'])), 'count');
+    if (assumed > 0 && name !== '') doubtful.push(name);
+  }
+  if (doubtful.length > 0) {
+    push('', 'note', `Branch assumed on ${joinClauses(doubtful)} — treat these branch figures as approximate.`, '');
+  }
+  return out;
+}
+
+/**
+ * EVERYTHING ONE EXPORT NEEDS. Each part is required only when a requested
+ * section reads it, so a `section=kpis` file runs `computeMetrics` and nothing
+ * else. The loader (`routes/overview.ts § loadOverviewExport`) fills exactly the
+ * parts `sectionsOf(section)` names. A part that is missing when a section needs
+ * it is a programming error and throws.
+ */
+export interface OverviewExportInput {
+  analytics?: OverviewAnalytics;
+  kpis?: KpisInput;
+  salesTrend?: SalesTrendInput;
+  revenueByBranch?: ReportBlock;
+}
+
+function need<T>(v: T | undefined, what: string): T {
+  if (v === undefined) throw new Error(`The overview export was not loaded with ${what}.`);
+  return v;
+}
+
 /**
  * Every requested section's rows, in the Overview's order. EVERY SECTION YIELDS AT
  * LEAST ONE ROW — a withheld row, or a widget-level figure that is present even when
  * it is 0 — so "the section is missing" never has to be read as "the section was
  * empty". `overviewExport.test.ts` drives an all-empty answer to hold that.
  */
-export function overviewRows(a: OverviewAnalytics, section: OverviewSection | null): OverviewCsvRow[] {
-  const sections = section === null ? OVERVIEW_SECTIONS : [section];
-  return sections.flatMap((s) => sectionRows(a, s));
+export function overviewRows(input: OverviewExportInput, section: OverviewSection | null): OverviewCsvRow[] {
+  return sectionsOf(section).flatMap((s) => {
+    if (isAnalyticsSection(s)) return sectionRows(need(input.analytics, 'the analytics'), s);
+    switch (s) {
+      case 'kpis':
+        return kpiRows(need(input.kpis, 'the metrics'));
+      case 'salesTrend':
+        return salesTrendRows(need(input.salesTrend, 'the sales trend'));
+      case 'revenueByBranch':
+        return revenueByBranchRows(need(input.revenueByBranch, 'the branch earnings'));
+    }
+  });
 }
 
 /**
  * RFC 4180 the Reports way: every field quoted, `"` doubled, CRLF records, a UTF-8
  * BOM so Excel reads an Arabic service or customer name, no trailing newline. TEXT
  * cells go through `neutralise` — a salon can name a service `=HYPERLINK(...)`, and
- * so can a customer name herself. Money, counts and percents are produced above
- * and are never negative, so `neutralise` cannot touch a figure.
+ * so can a customer name herself.
+ *
+ * A FIGURE IS NOT A FORMULA. One figure here can be negative: the KPI row's
+ * active-members delta. `neutralise` would turn `-3` into the text `'-3`, which
+ * Excel cannot sum. So a `value` cell in a row that carries a unit, and that
+ * is wholly a plain number (`-?digits`, optionally `.digits`), is left as it is.
+ * Nothing else is exempt. A number cannot hold a formula, and every other cell
+ * still goes through `neutralise`.
  */
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+
 export function overviewCsv(rows: OverviewCsvRow[]): string {
   const header = OVERVIEW_CSV_COLUMNS.map((c) => quote(c)).join(',');
   const body = rows.map((r) =>
-    [r.section, r.item, r.metric, r.value, r.unit].map((v) => quote(neutralise(v))).join(','),
+    [
+      r.section,
+      r.item,
+      r.metric,
+      r.unit !== '' && PLAIN_NUMBER.test(r.value) ? r.value : neutralise(r.value),
+      r.unit,
+    ]
+      .map((v, i) => quote(i === 3 ? v : neutralise(v)))
+      .join(','),
   );
   return `﻿${[header, ...body].join('\r\n')}`;
 }

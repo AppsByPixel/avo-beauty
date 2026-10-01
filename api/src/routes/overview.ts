@@ -23,10 +23,20 @@
  *      row, then `resolveBranchFilter` — parsing needs no zone, resolving does. A
  *      branch of another salon is 404 `unknown_branch`.
  *
- * ONE ANSWER, TWO RENDERINGS. The JSON and the CSV both come out of `loadOverview`
+ * ONE ANSWER, TWO RENDERINGS. The JSON and the CSV both come out of `analyticsFor`
  * below, which is the only caller of `computeOverviewAnalytics` in this file. A
  * second copy of the salon lookup in the CSV handler is how the card and the file
  * would start disagreeing about which salon fields feed the loyalty block.
+ *
+ * THE FILE ALSO CARRIES THE OVERVIEW'S OTHER THREE WIDGETS (`loadOverviewExport`),
+ * each from the service call its own endpoint makes: `computeMetrics` (the KPI
+ * row, `GET /salons/{id}/metrics`), and `computeReport` for `sales` (Gross by day)
+ * and `earnings-by-branch` (Revenue by branch). THE GATES ARE ALREADY THE SAME.
+ * `/metrics` is `requireDashboardPerm('dashboard')` + `requireSameSalon`, and so
+ * are both reports (`REPORT_PERMISSION.sales` and `['earnings-by-branch']` are
+ * both `dashboard`). The two report sections still read `REPORT_PERMISSION` at
+ * export time, so a change to either report's gate moves the file with it. A
+ * caller without it gets a `permission: <perm>` withheld row, never the figures.
  *
  * `?compare=` is not accepted, for `/metrics`' reason: nothing here is a
  * two-window statistic. Unknown parameters are dropped by Fastify.
@@ -49,19 +59,33 @@ import {
 } from '../auth/principal';
 import { hashWalletToken, mintWalletTokenValue } from '../auth/tokens';
 import { notFound } from '../http/errors';
+import { salonWallClock } from '../time/zone';
 import { writeAudit } from '../services/audit';
 import { resolveBranchFilter, type BranchFilter } from '../services/branchFilter';
-import { parsePeriod, periodToken, type Period } from '../services/period';
+import { computeMetrics } from '../services/metrics';
+import {
+  parsePeriod,
+  periodToken,
+  resolveWindow,
+  type Period,
+  type PeriodWindow,
+} from '../services/period';
 import { computeOverviewAnalytics, type OverviewAnalytics } from '../services/overviewAnalytics';
 import {
+  isAnalyticsSection,
   overviewCsv,
   overviewDownloadKind,
   overviewExportAudit,
   overviewFilename,
   overviewRows,
   parseOverviewSection,
+  salesTrendWindow,
+  sectionsOf,
+  type OverviewExportInput,
   type OverviewSection,
+  type ReportBlock,
 } from '../services/overviewExport';
+import { computeReport, REPORT_PERMISSION, type ReportKind } from '../services/reports';
 
 interface OverviewQuery {
   period?: unknown;
@@ -69,28 +93,18 @@ interface OverviewQuery {
   section?: unknown;
 }
 
-interface Loaded {
-  analytics: OverviewAnalytics;
-  period: Period;
-  branch: BranchFilter | null;
-}
+type SalonRow = {
+  id: string;
+  timezone: string;
+  loyaltyMode: (typeof salon.$inferSelect)['loyaltyMode'];
+  stampTarget: (typeof salon.$inferSelect)['stampTarget'];
+  tiers: (typeof salon.$inferSelect)['tiers'];
+  moduleBooking: boolean;
+  moduleShop: boolean;
+};
 
-/**
- * THE ONE PLACE THE OVERVIEW IS COMPUTED — for the card, the file, and the
- * one-time link's redemption. Callers have already gated; this does the salon
- * lookup, the branch resolution and the aggregate, in the order the header names.
- *
- * `perms` is passed in rather than read here, because the redemption has no
- * request principal: it passes the staff row's permissions AS THEY ARE NOW, which
- * is how the section gates keep answering to the permission table for the sixty
- * seconds a link lives.
- */
-async function loadOverview(input: {
-  salonId: string;
-  period: Period;
-  branch: unknown;
-  perms: StaffPerms;
-}): Promise<Loaded> {
+/** The salon row every Overview read starts from. Callers have already gated. */
+async function salonRow(salonId: string): Promise<SalonRow> {
   const rows = await db
     .select({
       id: salon.id,
@@ -102,14 +116,30 @@ async function loadOverview(input: {
       moduleShop: salon.moduleShop,
     })
     .from(salon)
-    .where(eq(salon.id, input.salonId))
+    .where(eq(salon.id, salonId))
     .limit(1);
   const s = rows[0];
   if (!s) throw notFound('unknown_salon', 'No such salon.');
+  return s;
+}
 
-  const branch = await resolveBranchFilter(db, s.id, input.branch);
-
-  const analytics = await computeOverviewAnalytics(db, {
+/**
+ * THE ONE PLACE THE ANALYTICS ARE COMPUTED — for the card, the file, and the
+ * one-time link's redemption.
+ *
+ * `perms` is passed in rather than read here, because the redemption has no
+ * request principal: it passes the staff row's permissions AS THEY ARE NOW, which
+ * is how the section gates keep answering to the permission table for the sixty
+ * seconds a link lives.
+ */
+function analyticsFor(
+  s: SalonRow,
+  period: Period,
+  branch: BranchFilter | null,
+  perms: StaffPerms,
+  now: Date,
+): Promise<OverviewAnalytics> {
+  return computeOverviewAnalytics(db, {
     salon: {
       id: s.id,
       timezone: s.timezone,
@@ -119,17 +149,118 @@ async function loadOverview(input: {
       moduleBooking: s.moduleBooking,
       moduleShop: s.moduleShop,
     },
-    period: input.period,
+    period,
     branch,
     /**
      * READ OFF THE PRINCIPAL (or, for a link, the live staff row) — never from a
      * claim or the query. The five section-gated blocks are decided from exactly
      * the flags `requirePerm` reads.
      */
-    perms: input.perms,
-    now: new Date(),
+    perms,
+    now,
   });
-  return { analytics, period: input.period, branch };
+}
+
+/** The JSON card's read: the salon lookup, the branch resolution, the aggregate. */
+async function loadOverview(input: {
+  salonId: string;
+  period: Period;
+  branch: unknown;
+  perms: StaffPerms;
+}): Promise<{ analytics: OverviewAnalytics }> {
+  const s = await salonRow(input.salonId);
+  const branch = await resolveBranchFilter(db, s.id, input.branch);
+  return { analytics: await analyticsFor(s, input.period, branch, input.perms, new Date()) };
+}
+
+/**
+ * A Reports aggregate for one of the file's widget sections, behind that
+ * report's OWN permission, read from `REPORT_PERMISSION` as `routes/reports.ts`
+ * reads it. Today both kinds are `dashboard`, which every caller here already
+ * holds, so the withheld branch is a guard against the gates drifting apart. It
+ * is not a state the Overview reaches.
+ */
+async function reportBlock(
+  kind: Extract<ReportKind, 'sales' | 'earnings-by-branch'>,
+  s: SalonRow,
+  scope: { branchId: string | null; period: Period },
+  perms: StaffPerms,
+  now: Date,
+): Promise<ReportBlock> {
+  const perm = REPORT_PERMISSION[kind];
+  if (!perms[perm]) return { status: 'withheld', reason: 'permission', permission: perm };
+  return {
+    status: 'ok',
+    report: await computeReport(db, {
+      kind,
+      salonId: s.id,
+      branchId: scope.branchId,
+      period: scope.period,
+      timezone: s.timezone,
+      now,
+    }),
+  };
+}
+
+/**
+ * THE FILE'S READ. One salon lookup and one branch resolution, then ONLY the
+ * aggregates the requested sections need, all against ONE `now`. Each comes from
+ * the service call its own endpoint makes, with the same arguments that endpoint
+ * passes:
+ *
+ *   analytics         `computeOverviewAnalytics(period, branch)`  — as the JSON above
+ *   kpis              `computeMetrics(period, branch)`            — as `/metrics`
+ *   salesTrend        `computeReport('sales', ALL branches, the chart's window)`
+ *                     — as the Gross by day card asks `reports/sales`. A range
+ *                     period is that range; otherwise the chart's 14 days.
+ *                     See `salesTrendWindow`.
+ *   revenueByBranch   `computeReport('earnings-by-branch', branch, period)`
+ *                     — as the Revenue by branch card asks it
+ */
+async function loadOverviewExport(input: {
+  salonId: string;
+  period: Period;
+  branch: unknown;
+  perms: StaffPerms;
+  section: OverviewSection | null;
+}): Promise<{ data: OverviewExportInput; branch: BranchFilter | null; window: PeriodWindow }> {
+  const now = new Date();
+  const s = await salonRow(input.salonId);
+  const branch = await resolveBranchFilter(db, s.id, input.branch);
+  const wanted = sectionsOf(input.section);
+  const data: OverviewExportInput = {};
+
+  if (wanted.some(isAnalyticsSection)) {
+    data.analytics = await analyticsFor(s, input.period, branch, input.perms, now);
+  }
+  if (wanted.includes('kpis')) {
+    data.kpis = {
+      metrics: await computeMetrics(db, { id: s.id, timezone: s.timezone }, input.period, now, branch),
+      today: salonWallClock(now, s.timezone).date,
+      window: resolveWindow(input.period, s.timezone, now),
+      timezone: s.timezone,
+    };
+  }
+  if (wanted.includes('salesTrend')) {
+    // A range is that range; anything else is the chart's own fourteen days.
+    const trend = salesTrendWindow(input.period, s.timezone, now);
+    data.salesTrend = {
+      block: await reportBlock('sales', s, { branchId: null, period: trend.period }, input.perms, now),
+      branchApplied: branch !== null,
+      chartDefault: trend.chartDefault,
+    };
+  }
+  if (wanted.includes('revenueByBranch')) {
+    data.revenueByBranch = await reportBlock(
+      'earnings-by-branch',
+      s,
+      { branchId: branch?.id ?? null, period: input.period },
+      input.perms,
+      now,
+    );
+  }
+  // The export's own window, for the audit row: the period it was asked for.
+  return { data, branch, window: resolveWindow(input.period, s.timezone, now) };
 }
 
 /**
@@ -147,14 +278,16 @@ export async function redeemOverviewDownload(
 ): Promise<{ filename: string; csv: string; rowCount: number; window: string } | null> {
   if (!staff.permDashboard) return null;
 
-  const { analytics, period, branch } = await loadOverview({
+  // Parsed back out of the stored token, as Reports does — not cast to a Period.
+  const period = parsePeriod(row.period);
+  const { data, branch, window } = await loadOverviewExport({
     salonId: row.salonId,
-    // Parsed back out of the stored token, as Reports does — not cast to a Period.
-    period: parsePeriod(row.period),
+    period,
     branch: row.branchId,
     perms: permsOf(staff),
+    section,
   });
-  const rows = overviewRows(analytics, section);
+  const rows = overviewRows(data, section);
 
   // Awaited before the bytes leave: an untraced export must not be reachable.
   await writeAudit(
@@ -164,7 +297,7 @@ export async function redeemOverviewDownload(
       salonId: row.salonId,
       section,
       branchId: branch?.id ?? null,
-      window: analytics.window,
+      window,
       rowCount: rows.length,
       via: 'download-link',
     }),
@@ -174,7 +307,7 @@ export async function redeemOverviewDownload(
     filename: overviewFilename(branch?.name ?? null, period, section),
     csv: overviewCsv(rows),
     rowCount: rows.length,
-    window: analytics.window.token,
+    window: window.token,
   };
 }
 
@@ -193,13 +326,14 @@ export async function registerOverviewRoutes(app: FastifyInstance): Promise<void
       const period = parsePeriod(query.period);
       const section = parseOverviewSection(query.section);
 
-      const { analytics, branch } = await loadOverview({
+      const { data, branch, window } = await loadOverviewExport({
         salonId: req.params.id,
         period,
         branch: query.branch,
         perms: p.perms,
+        section,
       });
-      const rows = overviewRows(analytics, section);
+      const rows = overviewRows(data, section);
 
       /**
        * AUDITED BEFORE THE BYTES LEAVE, and awaited — Reports' `.csv` argument. If
@@ -213,7 +347,7 @@ export async function registerOverviewRoutes(app: FastifyInstance): Promise<void
           salonId: req.params.id,
           section,
           branchId: branch?.id ?? null,
-          window: analytics.window,
+          window,
           rowCount: rows.length,
           via: 'csv',
         }),
