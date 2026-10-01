@@ -18,6 +18,14 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
    * this is text.
    */
   tone?: IconButtonTone;
+  /**
+   * NO HAIRLINE UNTIL IT IS POINTED AT. For a control that repeats on every card
+   * of a grid — the Overview's per-card Export — where thirteen bordered pills
+   * would be the loudest thing on the screen. Same icon, same 12px label, same
+   * colour; the border and background arrive on hover and focus. Shorter, too
+   * (24px), so it sits inside a card title's line box without growing the head.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -28,10 +36,12 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
  * trigger focus cannot be returned to.
  */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
-  { icon, label, tone = 'neutral', className, type = 'button', ...rest },
+  { icon, label, tone = 'neutral', quiet = false, className, type = 'button', ...rest },
   ref,
 ) {
-  const classes = ['avo-iconbtn', `avo-iconbtn--${tone}`, className ?? ''].filter(Boolean).join(' ');
+  const classes = ['avo-iconbtn', `avo-iconbtn--${tone}`, quiet ? 'avo-iconbtn--quiet' : '', className ?? '']
+    .filter(Boolean)
+    .join(' ');
   return (
     <button ref={ref} type={type} className={classes} {...rest}>
       <span className="avo-iconbtn__icon">{icon}</span>
