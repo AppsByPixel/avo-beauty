@@ -22,6 +22,7 @@ import {
   type DayPoint,
   type TrendScope,
 } from './salesTrendRules.js';
+import { useCardExport, type ExportScope } from './overviewExport.js';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -67,28 +68,43 @@ import {
 export function TrendCard({
   scope,
   caption,
+  exportScope = null,
+  offline = false,
   children,
 }: {
   scope: TrendScope | null;
   caption: string | null;
+  /**
+   * The branch and window the drawn days cover — the report's echo — or null
+   * while nothing is drawn, which draws no Export (`overviewExport.tsx`). The
+   * control shares the title's line, so the head does not move when it appears.
+   */
+  exportScope?: ExportScope | null;
+  /** The last read failed for want of a connection; the figures are stale. */
+  offline?: boolean;
   children: React.ReactNode;
 }) {
+  const exp = useCardExport('salesTrend', exportScope, 'Gross by day', offline);
   return (
     <Card className="trend-card" flush>
-      <h2 className="overview__card-title">
-        Gross by day
-        {/*
-          THE QUALIFIER IS THE FEED'S, VERBATIM AND IN THE SAME SLOT. "Recent
-          activity  All branches" is twenty lines above this in `Overview.tsx`
-          and means exactly what it means here: a branch is applied to the tiles
-          and this panel is wider than they are. A second wording for one fact
-          is how a merchant concludes there are two facts.
-        */}
-        {scope?.kind === 'wider-than-tiles' ? (
-          <span className="overview__card-scope">All branches</span>
-        ) : null}
-      </h2>
+      <div className="ovw__head">
+        <h2 className="overview__card-title">
+          Gross by day
+          {/*
+            THE QUALIFIER IS THE FEED'S, VERBATIM AND IN THE SAME SLOT. "Recent
+            activity  All branches" is twenty lines above this in `Overview.tsx`
+            and means exactly what it means here: a branch is applied to the tiles
+            and this panel is wider than they are. A second wording for one fact
+            is how a merchant concludes there are two facts.
+          */}
+          {scope?.kind === 'wider-than-tiles' ? (
+            <span className="overview__card-scope">All branches</span>
+          ) : null}
+        </h2>
+        {exp.control}
+      </div>
       {caption !== null ? <p className="trend-card__caption">{caption}</p> : null}
+      {exp.error}
       {children}
     </Card>
   );
@@ -198,7 +214,9 @@ export function SalesTrendBody({ from, to }: { from: string; to: string }) {
   }
 
   if (report.data === undefined) return null;
-  return <LoadedTrend report={report.data} selected={selected} />;
+  return (
+    <LoadedTrend report={report.data} selected={selected} offline={apiError?.isConnectivity ?? false} />
+  );
 }
 
 /**
@@ -207,8 +225,19 @@ export function SalesTrendBody({ from, to }: { from: string; to: string }) {
  * client, no session. `earningsByBranchRender.test.tsx` records what goes wrong
  * when the only way to assert a rendering is to read the source.
  */
-export function LoadedTrend({ report, selected }: { report: Report; selected: string }) {
+export function LoadedTrend({
+  report,
+  selected,
+  offline = false,
+}: {
+  report: Report;
+  selected: string;
+  /** A stale chart whose refresh failed for want of a connection. */
+  offline?: boolean;
+}) {
   const scope = trendScope(selected, report);
+  /* The file covers what is drawn: the report's own branch and window echo. */
+  const exportScope: ExportScope = { branch: report.branchId, period: report.period };
   /*
    * THE CAPTION IS THE SERVER'S MEASURED WINDOW, NOT THE REQUEST. `windowPhrase`
    * is keyed on `basis` and renders "13 Sep 2026 – 26 Sep 2026" for a calendar
@@ -265,7 +294,7 @@ export function LoadedTrend({ report, selected }: { report: Report; selected: st
      */
     const txns = totalTransactions(days);
     return (
-      <TrendCard scope={scope} caption={caption}>
+      <TrendCard scope={scope} caption={caption} exportScope={exportScope} offline={offline}>
         <div className="trend-card__state">
           <EmptyState
             title="No gross in these days"
@@ -281,7 +310,7 @@ export function LoadedTrend({ report, selected }: { report: Report; selected: st
   }
 
   return (
-    <TrendCard scope={scope} caption={caption}>
+    <TrendCard scope={scope} caption={caption} exportScope={exportScope} offline={offline}>
       <TrendChart days={days} peak={peak} caption={caption} />
       <TrendFoot scope={scope} />
     </TrendCard>

@@ -16,9 +16,13 @@
  * `reportsWindow.test.tsx` reason). Cleanup is manual — no `globals` here.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OverviewAnalyticsSchema, type OverviewAnalytics } from '@avo/types';
+import { ANALYTICS_BLOCK_SECTIONS, OVERVIEW_PANEL_SECTIONS } from '../api/analytics.js';
 import { ApiError } from '../api/client.js';
 import type { Report } from '../api/reports.js';
 import { API_BASE_URL } from '../config.js';
@@ -29,7 +33,9 @@ vi.mock('../auth/session.js', async (importOriginal) => ({
   readSession: () => ({ accessToken: 'tok_test_export' }) as never,
 }));
 
-const { AnalyticsGrid, analyticsExporter, EXPORT_LABEL } = await import('./OverviewAnalytics.js');
+const { AnalyticsGrid } = await import('./OverviewAnalytics.js');
+const { LoadedTrend } = await import('./SalesTrend.js');
+const { analyticsExporter, EXPORT_LABEL, OverviewExporterContext } = await import('./overviewExport.js');
 type GridProps = Parameters<typeof AnalyticsGrid>[0];
 
 /* ------------------------------------------------------------- fixtures -- */
@@ -244,17 +250,30 @@ describe('a card’s Export takes its own section', () => {
     expect((calls[0]!.body as { section: string }).section).toBe(section);
   });
 
-  it('revenue by branch is the earnings report, through that report’s own mint', async () => {
-    answer = minted('/report-downloads/tok_report');
-    mount();
+  it('revenue by branch mints `revenueByBranch`, scoped by the earnings report it draws', async () => {
+    mount({ data: parse({ ...RAW, branchId: null, branchName: null }) });
     fireEvent.click(cardExport('revenue-by-branch')!);
     await waitFor(() => expect(followed).toHaveLength(1));
-    const url = new URL(calls[0]!.url);
-    expect(url.pathname).toBe('/salons/SAL-AMARA/reports/earnings-by-branch/download-url');
-    expect(url.searchParams.get('branch')).toBe('BR-SALMIYA');
-    expect(url.searchParams.get('period')).toBe('30d');
-    expect(url.searchParams.get('compare')).toBeNull();
-    expect(followed[0]).toBe(`${API_BASE_URL}/report-downloads/tok_report`);
+    expect(calls[0]!.url).toBe(`${API_BASE_URL}/v1/salons/SAL-AMARA/overview/analytics/download-url`);
+    /* The REPORT's echo (Salmiya), not the analytics one (all) — the card is drawn from the report. */
+    expect(calls[0]!.body).toEqual({ branch: 'BR-SALMIYA', period: '30d', section: 'revenueByBranch' });
+  });
+
+  it('a section lane A has not shipped yet is refused in the server’s words', async () => {
+    /* Trunk, 2026-10-02: until `revenueByBranch` is on dev the mint answers this. */
+    answer = async () =>
+      new Response(
+        JSON.stringify({
+          error: 'invalid_section',
+          message: 'section must be one of topServices, artists, busiestTimes, upcoming, noShows, newMembers, visitors, loyalty, wallet, paymentMix, shop, campaigns.',
+        }),
+        { status: 400, headers: { 'content-type': 'application/json' } },
+      );
+    mount();
+    fireEvent.click(cardExport('revenue-by-branch')!);
+    const alert = await within(card('revenue-by-branch')).findByRole('alert');
+    expect(alert.textContent).toMatch(/^section must be one of topServices, /);
+    expect(followed).toHaveLength(0);
   });
 
   it('names its card for a screen reader, beside the visible "Export"', () => {
@@ -377,5 +396,113 @@ describe('offline: disabled, in the house’s offline words', () => {
     mount({ analytics: { error: new ApiError('No connection to the workspace.', { status: 0, code: 'network_error', offline: true }) } });
     expect(headExport().disabled).toBe(true);
     expect(headExport().textContent).toBe('No connection');
+  });
+});
+
+/* ------------------------------------------------ outside the analytics grid -- */
+
+describe('Gross by day exports `salesTrend` for the days it draws', () => {
+  const FORTNIGHT = {
+    token: '2026-09-17_2026-09-30',
+    basis: 'calendar' as const,
+    from: '2026-09-16T21:00:00.000Z',
+    to: '2026-09-30T21:00:00.000Z',
+    days: 14,
+    fromDate: '2026-09-17',
+    toDate: '2026-09-30',
+    timezone: 'Asia/Kuwait',
+  };
+  const SALES: Report = {
+    kind: 'sales',
+    title: 'Sales summary',
+    period: FORTNIGHT.token,
+    window: FORTNIGHT,
+    comparison: null,
+    branchId: 'all',
+    columns: [
+      { header: 'Date', key: 'date', type: 'text' },
+      { header: 'Transactions', key: 'transactions', type: 'int' },
+      { header: 'Gross KD', key: 'grossFils', type: 'money' },
+      { header: 'Branch', key: 'branch', type: 'text' },
+    ],
+    rows: [{ date: '2026-09-20', transactions: 2, grossFils: 8000, branch: 'Salmiya' }],
+    stat: { key: 'grossFils', label: 'KD gross', value: 8000, type: 'money' },
+    rowCount: 1,
+  };
+
+  function mountTrend(offline = false, readOffline = false) {
+    return render(
+      <OverviewExporterContext.Provider value={analyticsExporter('SAL-AMARA', offline)}>
+        <LoadedTrend report={SALES} selected="all" offline={readOffline} />
+      </OverviewExporterContext.Provider>,
+    );
+  }
+
+  it('mints with the report’s branch and its range, section salesTrend', async () => {
+    mountTrend();
+    fireEvent.click(screen.getByRole('button', { name: 'Export Gross by day' }));
+    await waitFor(() => expect(followed).toHaveLength(1));
+    expect(calls[0]!.url).toBe(`${API_BASE_URL}/v1/salons/SAL-AMARA/overview/analytics/download-url`);
+    expect(calls[0]!.body).toEqual({ branch: 'all', period: '2026-09-17_2026-09-30', section: 'salesTrend' });
+    expect(followed[0]).toBe(`${API_BASE_URL}/overview-downloads/tok_once`);
+  });
+
+  it('shows a refusal inside the card and disables while pending', async () => {
+    let release!: (r: Response) => void;
+    answer = () => new Promise<Response>((resolve) => (release = resolve));
+    mountTrend();
+    const button = screen.getByRole('button', { name: 'Export Gross by day' }) as HTMLButtonElement;
+    fireEvent.click(button);
+    await waitFor(() => expect(button.disabled).toBe(true));
+    expect(button.textContent).toBe('Preparing…');
+    release(
+      new Response(JSON.stringify({ error: 'invalid_section', message: 'No such section: salesTrend.' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    expect((await screen.findByRole('alert')).textContent).toBe('No such section: salesTrend.');
+  });
+
+  it('is disabled with the offline words, from either signal', () => {
+    mountTrend(true);
+    expect(screen.getByRole('button', { name: 'No connection Gross by day' })).toHaveProperty('disabled', true);
+    cleanup();
+    mountTrend(false, true);
+    expect(screen.getByRole('button', { name: 'No connection Gross by day' })).toHaveProperty('disabled', true);
+  });
+
+  it('draws nothing without the Overview’s exporter — the card as the render tests know it', () => {
+    render(<LoadedTrend report={SALES} selected="all" />);
+    expect(document.querySelector('.ovw__export')).toBeNull();
+  });
+});
+
+/* ------------------------------------------------ the vocabulary is lane A's -- */
+
+describe('every section this client mints is one the server names', () => {
+  /*
+   * Read from lane A's source rather than restated: `OVERVIEW_SECTIONS` is the
+   * list `parseOverviewSection` accepts, and anything outside it is a 400.
+   */
+  const SERVER = (() => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(resolve(here, '../../../../api/src/services/overviewExport.ts'), 'utf8');
+    const list = /export const OVERVIEW_SECTIONS = \[([\s\S]*?)\]/.exec(src)?.[1] ?? '';
+    return [...list.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]!);
+  })();
+
+  it('the parser found the server’s list', () => {
+    expect(SERVER.length).toBeGreaterThanOrEqual(12);
+  });
+
+  it('the twelve block sections are all accepted today', () => {
+    for (const key of ANALYTICS_BLOCK_SECTIONS) expect(SERVER).toContain(key);
+  });
+
+  it('the three panel sections are the only ones that may still be pending on the server', () => {
+    const pending = OVERVIEW_PANEL_SECTIONS.filter((k) => !SERVER.includes(k));
+    /* When lane A's next slice lands this shrinks to [] and nothing else changes. */
+    for (const key of pending) expect(['kpis', 'salesTrend', 'revenueByBranch']).toContain(key);
   });
 });

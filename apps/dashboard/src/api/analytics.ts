@@ -81,15 +81,21 @@ export type { OverviewAnalytics };
 /* -------------------------------------------------------------- the export -- */
 
 /**
- * THE TWELVE BLOCK KEYS, AS `?section=` SPELLS THEM. Checked against the payload
- * type, so a block renamed in `packages/types` fails to compile here rather than
- * minting a link for a section the server no longer has.
+ * THE `?section=` VOCABULARY — lane A's `OVERVIEW_SECTIONS`
+ * (`api/src/services/overviewExport.ts`), in two halves.
  *
- * Revenue by branch is NOT one of them: it is the `earnings-by-branch` report,
- * read separately (`OverviewAnalytics.tsx § TWO READS`), and its card exports
- * through the report's own mint.
+ * THE TWELVE BLOCK KEYS are checked against the payload type, so a block renamed
+ * in `packages/types` fails to compile here rather than minting a section the
+ * server no longer has.
+ *
+ * THE THREE PANELS THAT ARE NOT BLOCKS — the KPI row, Gross by day and Revenue
+ * by branch — each read an endpoint of their own, so they have no key on the
+ * analytics payload to check against. Trunk, 2026-10-02: lane A's next slice
+ * adds `kpis`, `salesTrend` and `revenueByBranch` to the export. Until those
+ * keys are on `dev` a mint for one answers `400 invalid_section`, and the
+ * control prints that sentence verbatim like any other refusal.
  */
-export const ANALYTICS_SECTIONS = [
+export const ANALYTICS_BLOCK_SECTIONS = [
   'topServices',
   'artists',
   'busiestTimes',
@@ -103,20 +109,29 @@ export const ANALYTICS_SECTIONS = [
   'shop',
   'campaigns',
 ] as const satisfies ReadonlyArray<keyof OverviewAnalytics>;
-export type AnalyticsSectionKey = (typeof ANALYTICS_SECTIONS)[number];
+export type AnalyticsBlockKey = (typeof ANALYTICS_BLOCK_SECTIONS)[number];
+
+export const OVERVIEW_PANEL_SECTIONS = ['kpis', 'salesTrend', 'revenueByBranch'] as const;
+export type OverviewPanelKey = (typeof OVERVIEW_PANEL_SECTIONS)[number];
+
+export const ANALYTICS_SECTIONS = [...OVERVIEW_PANEL_SECTIONS, ...ANALYTICS_BLOCK_SECTIONS] as const;
+export type AnalyticsSectionKey = AnalyticsBlockKey | OverviewPanelKey;
 
 export interface AnalyticsExportRequest {
   /** A branch id, or 'all' — the server's `resolveBranchFilter` reads both. */
   branch: string;
   /** The window token the grid is showing, e.g. `30d`. */
   period: string;
-  /** One block, or absent for every block this staff member may see. */
+  /** One section, or absent for every section this staff member may see. */
   section?: AnalyticsSectionKey;
 }
 
 /**
- * `POST /v1/salons/{id}/overview/analytics/download-url` → `{ url }`, then
- * follow it — the Reports mint's shape (`api/download.ts § mintAndFollow`).
+ * `POST /v1/salons/{id}/overview/analytics/download-url` → `{ url, expiresAt }`,
+ * then follow it — the Reports mint's shape (`api/download.ts § mintAndFollow`).
+ * The url is `/report-downloads/{token}`: lane A's mint writes the same
+ * `report_download` row Reports' does, and the one redemption route dispatches
+ * on its kind. Single-use, sixty seconds.
  *
  * `perms.dashboard` on the mint, the Overview's own gate; the per-block gates
  * are the SERVER'S, applied inside the file (a withheld block is a row naming

@@ -445,6 +445,10 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  * `depositCopy.tsx` is copy: the no-show sentence and the settlement note, from props.
  * `walletCardChoice.tsx` is the wallet card setting's words and preview, from
  * props — no fetch; its two hosts (Settings, the onboarding wizard) own the write.
+ * `overviewExport.tsx` is the Overview's Export control and its provider — no
+ * read, no screen; its pending, refused and offline states are pinned in
+ * `overviewExport.test.tsx`, and its hosts (the analytics grid, Gross by day)
+ * own the loading/empty/error/offline of the figures it exports.
  */
 const NON_SCREENS = [
   'NotBuiltYet.tsx',
@@ -452,6 +456,7 @@ const NON_SCREENS = [
   'AppointmentLink.tsx',
   'depositCopy.tsx',
   'walletCardChoice.tsx',
+  'overviewExport.tsx',
 ] as const;
 
 /**

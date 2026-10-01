@@ -4,12 +4,10 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
   type RefObject,
 } from 'react';
-import { onlineManager } from '@tanstack/react-query';
 import { fils, formatMoney, subtract, type OverviewAnalytics } from '@avo/types';
 import {
   Button,
@@ -25,15 +23,19 @@ import {
   StaleBanner,
 } from '@avo/ui';
 import { ApiError } from '../api/client.js';
-import {
-  ANALYTICS_PERIOD,
-  downloadAnalyticsCsv,
-  useOverviewAnalytics,
-  type AnalyticsSectionKey,
-} from '../api/analytics.js';
-import { downloadReportViaLink, useReport, windowLabel, windowPhrase, type Report } from '../api/reports.js';
+import { ANALYTICS_PERIOD, useOverviewAnalytics, type AnalyticsBlockKey } from '../api/analytics.js';
+import { useReport, windowLabel, windowPhrase, type Report } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
-import { useSalonId } from '../auth/AuthProvider.js';
+import {
+  OverviewExporterContext,
+  exportErrorMessage,
+  exportLabel,
+  useExportAction,
+  useExportUi,
+  type AnalyticsExporter,
+  type ExportScope,
+  type ExportTarget,
+} from './overviewExport.js';
 import { useBranchScope } from '../shell/BranchScope.js';
 import { AppointmentLink } from './AppointmentLink.js';
 import { appointmentHref } from './appointmentHref.js';
@@ -116,27 +118,17 @@ export interface ReadState<T> {
 export function AnalyticsSection() {
   const { selected } = useBranchScope();
   const salon = useSalon();
-  const salonId = useSalonId();
+  /* Null outside `OverviewExportProvider` (a test mounting this alone): no controls. */
+  const exporter = useContext(OverviewExporterContext);
   const analytics = useOverviewAnalytics(selected);
   const earnings = useReport('earnings-by-branch', {
     branch: selected,
     period: ANALYTICS_PERIOD,
     compare: null,
   });
-  /*
-   * THE BROWSER'S OWN ONLINE SIGNAL, the one TanStack already listens to. A
-   * failed read is the other half (`AnalyticsGrid` § offline): the browser can
-   * be "online" on a network that does not reach the workspace.
-   */
-  const online = useSyncExternalStore(
-    (notify) => onlineManager.subscribe(notify),
-    () => onlineManager.isOnline(),
-    () => true,
-  );
-
   return (
     <AnalyticsGrid
-      exporter={analyticsExporter(salonId, !online)}
+      {...(exporter ? { exporter } : {})}
       analytics={{
         data: analytics.data,
         pending: analytics.isPending,
@@ -165,64 +157,15 @@ function forbiddenError(error: unknown): boolean {
 
 /* ------------------------------------------------------------- the export -- */
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * EXPORT: THE WIDGETS AS A FILE. Aftab, 2026-10-02: "want export option to get
- * the valuable widget info they are giving on the dashboard".
- * ═══════════════════════════════════════════════════════════════════════════
- * Two controls, one mechanism — the Reports mint (`api/download.ts`):
- *
- *   THE HEAD'S "Export"  every block, `section` absent. The server writes the
- *       blocks she may see and a row naming the reason for each she may not.
- *   EACH CARD'S "Export" that card's `section` only. Quiet (`IconButton quiet`)
- *       because it repeats thirteen times, and NOT DRAWN on a withheld card: a
- *       file whose one row says "permission" is not worth a control.
- *
- * THE SCOPE IS THE SERVER'S ECHO, NOT THE REQUEST — the branch and window the
- * grid is DRAWN against (`shown.branchId`, `shown.window.token`), for
- * `Overview.tsx § appliedBranchOf`'s reason: if the workspace answered for a
- * different branch than was asked, the file must match the cards, not the
- * selector.
- *
- * Revenue by branch is not an analytics block; its card exports the
- * `earnings-by-branch` report through that report's own mint, with the
- * report's own echo.
- *
- * PERMISSION: the mint is `perms.dashboard`, the Overview's gate. The client
- * hides nothing on a guess — a refusal is the server's sentence, inline.
+/*
+ * The mechanism, the states and the copy are `overviewExport.tsx`'s, shared with
+ * Gross by day. What is here is the grid's half: the head's "Export", and which
+ * card may draw one (`exportOf`).
  */
-export type ExportTarget = AnalyticsSectionKey | 'all' | 'earnings-by-branch';
-
-export interface ExportScope {
-  /** A branch id or 'all'. */
-  branch: string;
-  period: string;
-}
-
-export interface AnalyticsExporter {
-  run: (target: ExportTarget, scope: ExportScope) => Promise<void>;
-  /** The browser says it is offline. A connectivity failure on the read is added by the grid. */
-  offline: boolean;
-}
-
 /**
- * THE WIRING, as a function so the export tests drive exactly what the host
- * mounts: an analytics target mints the analytics link, Revenue by branch mints
- * the report's.
+ * THE GRID'S EXPORT CONTEXT: one start per card target, with the scope already
+ * chosen, and offline including this grid's own failed read.
  */
-export function analyticsExporter(salonId: string, offline: boolean): AnalyticsExporter {
-  return {
-    offline,
-    run: (target, scope) =>
-      target === 'earnings-by-branch'
-        ? downloadReportViaLink(salonId, 'earnings-by-branch', { ...scope, compare: null })
-        : downloadAnalyticsCsv(salonId, {
-            ...scope,
-            ...(target === 'all' ? {} : { section: target }),
-          }),
-  };
-}
-
 interface CardExportContext {
   start: (target: ExportTarget) => Promise<void>;
   offline: boolean;
@@ -230,53 +173,6 @@ interface CardExportContext {
 
 /** Null in a render test that passes no exporter: no controls, the grid as it was. */
 const ExportContext = createContext<CardExportContext | null>(null);
-
-/** The on-control copy. "No connection" is the house's offline title, reused. */
-export const EXPORT_LABEL = { idle: 'Export', pending: 'Preparing…', offline: 'No connection' } as const;
-
-/**
- * ONE EXPORT'S STATE: pending, and the last refusal. Per control, so two cards
- * do not share a spinner or an error. A second press while pending is dropped
- * here as well as by `disabled`, because the link is single-use and a double
- * click would mint two.
- */
-function useExportAction(run: (() => Promise<void>) | null) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const inFlight = useRef(false);
-  async function start() {
-    if (run === null || inFlight.current) return;
-    inFlight.current = true;
-    setPending(true);
-    setError(null);
-    try {
-      await run();
-    } catch (err) {
-      setError(err);
-    } finally {
-      inFlight.current = false;
-      setPending(false);
-    }
-  }
-  return { pending, error, start };
-}
-
-/**
- * THE SERVER'S SENTENCE, VERBATIM — or nothing for a 401, which the shell is
- * already turning into the sign-in screen.
- */
-function exportErrorMessage(error: unknown): string | null {
-  if (error === null || error === undefined) return null;
-  if (error instanceof ApiError && error.isUnauthenticated) return null;
-  if (error instanceof Error && error.message) return error.message;
-  return "Couldn't export the file. Try again.";
-}
-
-function exportLabel(pending: boolean, offline: boolean): string {
-  if (pending) return EXPORT_LABEL.pending;
-  if (offline) return EXPORT_LABEL.offline;
-  return EXPORT_LABEL.idle;
-}
 
 /** The head's "Export": every block the grid shows, for the scope it shows. */
 function HeadExport({ run, offline }: { run: (() => Promise<void>) | null; offline: boolean }) {
@@ -308,8 +204,8 @@ function HeadExport({ run, offline }: { run: (() => Promise<void>) | null; offli
 function exportOf(
   view: CardView,
   data: OverviewAnalytics | undefined,
-  key: AnalyticsSectionKey,
-): AnalyticsSectionKey | null {
+  key: AnalyticsBlockKey,
+): AnalyticsBlockKey | null {
   if (view.pending || view.failure !== null || data === undefined) return null;
   return isWithheld(data[key] as { status: string }) ? null : key;
 }
@@ -377,7 +273,11 @@ export function AnalyticsGrid({
     ? {
         offline,
         start: (target) => {
-          const s = target === 'earnings-by-branch' ? reportScope : scope;
+          /*
+           * Revenue by branch is drawn from the earnings report, so its file is
+           * scoped by THAT read's echo; every other card by the analytics echo.
+           */
+          const s = target === 'revenueByBranch' ? reportScope : scope;
           return s === null ? Promise.resolve() : exporter.run(target, s);
         },
       }
@@ -530,10 +430,11 @@ export function Widget({
 }) {
   const exp = useContext(ExportContext);
   const target = exp !== null ? exportTarget : null;
-  const action = useExportAction(target === null || exp === null ? null : () => exp.start(target));
-  const message = target === null ? null : exportErrorMessage(action.error);
-  const offline = exp?.offline ?? false;
-  const shownLabel = exportLabel(action.pending, offline);
+  const { control, error } = useExportUi(
+    target === null || exp === null ? null : () => exp.start(target),
+    exp?.offline ?? false,
+    title,
+  );
   return (
     <Card className="ovw" flush data-widget={label}>
       {/*
@@ -543,24 +444,10 @@ export function Widget({
       */}
       <div className="ovw__head">
         <h3 className="overview__card-title">{title}</h3>
-        {target !== null ? (
-          <IconButton
-            quiet
-            className="ovw__export"
-            icon={<IconDownload />}
-            label={shownLabel}
-            aria-label={`${shownLabel} ${title}`}
-            disabled={action.pending || offline}
-            onClick={() => void action.start()}
-          />
-        ) : null}
+        {control}
       </div>
       {caption ? <p className="ovw__caption">{caption}</p> : null}
-      {message !== null ? (
-        <div className="ovw__export-error">
-          <InlineError message={message} />
-        </div>
-      ) : null}
+      {error}
       <div className="ovw__body">{children}</div>
     </Card>
   );
@@ -735,7 +622,7 @@ export function RevenueByBranchCard({ state }: { state: ReadState<Report> }) {
       title="Revenue by branch"
       label="revenue-by-branch"
       caption={report && !failed ? windowLabel(report.window) : null}
-      exportTarget={report && !failed && !state.pending ? 'earnings-by-branch' : null}
+      exportTarget={report && !failed && !state.pending ? 'revenueByBranch' : null}
     >
       {state.pending ? (
         <WidgetSkeleton rows={2} />

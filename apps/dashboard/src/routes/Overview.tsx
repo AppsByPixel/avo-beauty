@@ -22,6 +22,7 @@ import { useBranchScope } from '../shell/BranchScope.js';
 import { clock12, clockFrame, feedStamp } from './salonTime.js';
 import { SalesTrendCard } from './SalesTrend.js';
 import { AnalyticsSection } from './OverviewAnalytics.js';
+import { OverviewExportProvider } from './overviewExport.js';
 import { joinClauses } from './overviewAnalyticsRules.js';
 
 /**
@@ -102,7 +103,17 @@ export function Overview() {
   const scopeIgnored = scopeWasIgnored(selected, metrics.data);
 
   return (
-    <>
+    /*
+     * ONE EXPORTER FOR THE SCREEN — the salon and the browser's online signal —
+     * read by the analytics grid and by Gross by day (`overviewExport.tsx`).
+     *
+     * THE KPI ROW HAS NO EXPORT CONTROL OF ITS OWN YET. Its figures are in the
+     * Analytics head's "Export" once lane A's `kpis` section lands; a control of
+     * its own needs a place to sit, and the row has no head — every spot either
+     * adds a heading the design does not have, moves the row, or reads as
+     * belonging to one tile. Escalated in the lane report rather than guessed.
+     */
+    <OverviewExportProvider>
       {showStale ? (
         <StaleBanner
           updatedAt={metrics.dataUpdatedAt}
@@ -182,7 +193,7 @@ export function Overview() {
         the tiles, and owns every state it draws — see `OverviewAnalytics.tsx`.
       */}
       <AnalyticsSection />
-    </>
+    </OverviewExportProvider>
   );
 }
 
