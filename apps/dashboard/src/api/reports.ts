@@ -4,6 +4,7 @@ import { useSalonId } from '../auth/AuthProvider.js';
 import { readSession } from '../auth/session.js';
 import { API_BASE_URL } from '../config.js';
 import { ApiError } from './client.js';
+import { clickDownload, exportErrorFrom, mintAndFollow, offlineExportError } from './download.js';
 
 /**
  * `GET /salons/{id}/reports/{kind}` (JSON, the cards) and `{kind}.csv` (the
@@ -709,13 +710,15 @@ export function useReport(kind: ReportKind, filters: ReportFilters): UseQueryRes
  *       and writes both a `report_download` row and the `report.download` audit
  *       event with `via: 'download-link'`.
  *
- * NEITHER CLIENT CALLS THE MINT. Checked by grep across `apps/dashboard` and
- * `apps/wallet`: zero references to `download-url` or `report-downloads`. So the
- * fetch below is no longer a workaround for a missing endpoint — it is a second
- * way in that nobody chose to keep, and switching to the mint is a slice of its
- * own (a click handler that mints and then navigates, plus the states for a
- * refused or expired mint). REPORTED, NOT TAKEN HERE, and written in the past
- * tense so the next reader does not go looking for an endpoint that exists.
+ * THIS SCREEN STILL DOES NOT CALL THE MINT. The Overview does, since lane C's
+ * analytics-export slice: `api/download.ts § mintAndFollow` is the click
+ * handler's network half, and `downloadReportViaLink` below uses it for the
+ * Revenue by branch card. So the fetch below is no longer a workaround for a
+ * missing endpoint — it is a second way in that nobody chose to keep, and moving
+ * Reports onto the mint is a slice of its own (the per-card states already exist
+ * on the Overview to copy). REPORTED, NOT TAKEN HERE. The parts the two paths
+ * share — the offline sentence, the refusal reader, the anchor — are
+ * `api/download.ts`'s, not copied.
  *
  * WHAT IS *NOT* LOST BY NOT HAVING SWITCHED YET: the audit row. `:542` writes
  * `report.download` with `via: 'csv'` on the direct `.csv` route too, so an
@@ -757,25 +760,11 @@ export async function downloadReportCsv(
       headers: { Authorization: `Bearer ${session.accessToken}` },
     });
   } catch {
-    throw new ApiError("We can't reach the workspace.", {
-      status: 0,
-      code: 'offline',
-      offline: true,
-    });
+    throw offlineExportError();
   }
 
-  if (!response.ok) {
-    let code = 'export_failed';
-    let message = "Couldn't export the file. Try again.";
-    try {
-      const body = (await response.json()) as { error?: string; message?: string };
-      if (typeof body.error === 'string') code = body.error;
-      if (typeof body.message === 'string') message = body.message;
-    } catch {
-      // A non-JSON error body keeps the generic sentence.
-    }
-    throw new ApiError(message, { status: response.status, code });
-  }
+  /* `api/download.ts` — the refusal reader the mint path shares. */
+  if (!response.ok) throw await exportErrorFrom(response);
 
   const disposition = response.headers.get('content-disposition');
   const fromServer = disposition ? /filename="([^"]+)"/.exec(disposition)?.[1] : undefined;
@@ -784,13 +773,29 @@ export async function downloadReportCsv(
   const blob = await response.blob();
   const objectUrl = URL.createObjectURL(blob);
   try {
-    const anchor = document.createElement('a');
-    anchor.href = objectUrl;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    clickDownload(objectUrl, filename);
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+/**
+ * `POST /salons/{id}/reports/{kind}/download-url`, then follow the link —
+ * `api/download.ts § mintAndFollow`.
+ *
+ * ONE CALLER TODAY: the Overview's Revenue by branch card, whose figures ARE
+ * `earnings-by-branch` (`OverviewAnalytics.tsx § RevenueByBranchCard`) and which
+ * therefore has no `section` on the analytics export to ask for. The mint is the
+ * gate — same per-kind permission as the report — and refuses `compare` exactly
+ * as the `.csv` does, so `exportQuery` and not `reportQuery` builds the query.
+ *
+ * `Reports.tsx` still exports through `downloadReportCsv` above. Moving it here
+ * is the slice that docblock names; nothing in this function forces it.
+ */
+export async function downloadReportViaLink(
+  salonId: string,
+  kind: ReportKind,
+  filters: ReportFilters,
+): Promise<void> {
+  await mintAndFollow(`/salons/${salonId}/reports/${kind}/download-url?${exportQuery(filters)}`);
 }
