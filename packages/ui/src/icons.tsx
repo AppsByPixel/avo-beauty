@@ -82,3 +82,16 @@ export function IconNoShow(props: IconProps) {
     </Svg>
   );
 }
+
+/**
+ * Export / download. An arrow down onto a tray — the Reports screen's "Export
+ * CSV" glyph, redrawn in this set's stroke so it sits beside the others.
+ */
+export function IconDownload(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M10 3.5v9m0 0 3.5-3.5M10 12.5 6.5 9" {...stroke} />
+      <path d="M4 15.5h12" {...stroke} />
+    </Svg>
+  );
+}

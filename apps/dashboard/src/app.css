@@ -1424,6 +1424,51 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/*
+ * THE SECTION'S "Export", pushed to the end of the head. Baseline-aligned with
+ * the title, a 28px control overhangs the title's 21px line by 5.5px above and
+ * 1.5px below; the negative block margins take both back, so the head stays
+ * 21px — measured — and every card under it sits where it did before.
+ */
+.ovw-head__export {
+  margin: -6px 0 -4px auto;
+}
+
+.ovw-head__error {
+  flex-basis: 100%;
+}
+
+/*
+ * A CARD'S HEAD: the title, and (once its block has arrived) the quiet Export.
+ * The padding moves from the title to the row so the two share one line box;
+ * the 24px control's -2px block margin keeps it inside the title's 21px line,
+ * so the head is 39px with or without it and nothing moves when it appears.
+ * The -8px end margin is its padding plus border: the LABEL ends on the card's
+ * 21px inset, the edge every body row ends on, and only the hover hairline
+ * reaches into the padding.
+ */
+.ovw__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0 4px;
+}
+
+.ovw__head .overview__card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+
+.ovw__export {
+  flex: none;
+  margin: -2px -8px -2px 0;
+}
+
+.ovw__export-error {
+  margin: 0 0 10px;
+}
+
 .ovw-section > .avo-stale {
   margin-bottom: 12px;
 }

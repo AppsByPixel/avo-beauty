@@ -21,7 +21,7 @@ export {
   type FilterSelectProps,
 } from './FilterBar.js';
 export { IconButton, type IconButtonProps, type IconButtonTone } from './IconButton.js';
-export { IconCancel, IconCheck, IconClock, IconNoShow, IconSwap } from './icons.js';
+export { IconCancel, IconCheck, IconClock, IconDownload, IconNoShow, IconSwap } from './icons.js';
 export { ImageSlot, type ImageSlotProps, type ImageSlotState } from './ImageSlot.js';
 export { InfoBanner, type InfoBannerProps } from './InfoBanner.js';
 export { InlineError, type InlineErrorProps } from './InlineError.js';

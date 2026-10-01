@@ -893,6 +893,23 @@
   opacity: 0.55;
 }
 
+/*
+ * Quiet: the per-card control on a grid of cards. Transparent until hovered or
+ * focused, so the cards read as figures first; 24px tall so it fits a 17px
+ * title's line box. The focus ring is the token `:focus-visible` one, untouched.
+ */
+.avo-iconbtn--quiet {
+  min-height: 24px;
+  padding: 2px 7px 2px 5px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.avo-iconbtn--quiet:hover:not(:disabled),
+.avo-iconbtn--quiet:focus-visible {
+  border-color: var(--avo-border-control);
+}
+
 /* --------------------------------------------------------------- filterbar -- */
 
 /*
