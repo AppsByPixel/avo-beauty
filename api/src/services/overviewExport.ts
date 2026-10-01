@@ -71,6 +71,7 @@
  * exports as `earnings-by-branch_{branch}_{period}.csv`.
  */
 
+import type { Fils } from '@avo/types';
 import type { PermissionName } from '../auth/principal';
 import { badRequest } from '../http/errors';
 import { minutesToHhmm, salonWallClock } from '../time/zone';
@@ -203,7 +204,7 @@ function sectionTitle(section: OverviewSection, a: OverviewAnalytics): string {
 }
 
 /** Integer fils → `59.250`. The only money path in this file. */
-const kd = (f: number): string => csvMoneyCell(f);
+const kd = (f: Fils): string => csvMoneyCell(f);
 
 /** Integer count → `4`. Refuses a fraction rather than printing one. */
 function count(n: number): string {
@@ -263,7 +264,7 @@ export function sectionRows(a: OverviewAnalytics, section: OverviewSection): Ove
       if (b.status === 'withheld') return [{ section: title, item: '', metric: 'withheld', value: withheldValue(b), unit: '' }];
       // The two rankings are of the same rows, so a service in both is one item.
       // Ranked by bookings first, then whatever only the revenue ranking holds.
-      const seen = new Map<string, { name: string; bookings: number; revenueFils: number; rb: number | null; rr: number | null }>();
+      const seen = new Map<string, { name: string; bookings: number; revenueFils: Fils; rb: number | null; rr: number | null }>();
       b.byBookings.forEach((s, i) =>
         seen.set(s.serviceId, { name: s.name, bookings: s.bookings, revenueFils: s.revenueFils, rb: i + 1, rr: null }),
       );
