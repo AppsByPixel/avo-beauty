@@ -832,7 +832,13 @@ export function overviewRows(input: OverviewExportInput, section: OverviewSectio
  */
 const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
 
-export function overviewCsv(rows: OverviewCsvRow[]): string {
+export function overviewCsv(
+  // Structural, not `OverviewCsvRow[]`: the owner console's export
+  // (`platformAnalyticsExport.ts`) writes the same five columns with one more
+  // unit, and renders through this function so the two files cannot differ in
+  // quoting, BOM, line endings or the formula guard.
+  rows: ReadonlyArray<{ section: string; item: string; metric: string; value: string; unit: string }>,
+): string {
   const header = OVERVIEW_CSV_COLUMNS.map((c) => quote(c)).join(',');
   const body = rows.map((r) =>
     [

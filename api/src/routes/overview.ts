@@ -272,7 +272,8 @@ async function loadOverviewExport(input: {
  * for a refusal so the caller answers with its one uniform `invalid_download`.
  */
 export async function redeemOverviewDownload(
-  row: typeof reportDownload.$inferSelect,
+  /** A STAFF row — both 0036 columns set. The redemption narrows before calling. */
+  row: typeof reportDownload.$inferSelect & { staffId: string; salonId: string },
   section: OverviewSection | null,
   staff: typeof staffUser.$inferSelect,
 ): Promise<{ filename: string; csv: string; rowCount: number; window: string } | null> {
