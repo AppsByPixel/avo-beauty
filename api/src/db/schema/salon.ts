@@ -327,10 +327,24 @@ export const reportDownload = pgTable(
   'report_download',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    staffId: text('staff_id').notNull(),
-    salonId: text('salon_id')
-      .notNull()
-      .references(() => salon.id, { onDelete: 'restrict' }),
+    /**
+     * The minting staff member, or NULL on an owner-console row (migration
+     * 0071), which `platformAdminId` names instead. Exactly one of the two is
+     * set; `report_download_one_principal` holds it.
+     */
+    staffId: text('staff_id'),
+    /**
+     * The salon a staff row belongs to. On a console row, the `?salon=` scope of
+     * the file, or NULL for every salon (0071).
+     */
+    salonId: text('salon_id').references(() => salon.id, { onDelete: 'restrict' }),
+    /**
+     * Migration 0071. The platform admin who minted a console export link, whose
+     * sections are re-read at redemption. The FK to `platform_admin` is in the
+     * migration; it is not repeated here so this file need not import the console
+     * schema, the same choice `staffId` makes.
+     */
+    platformAdminId: text('platform_admin_id'),
     kind: text('kind').notNull(),
     branchId: text('branch_id').references(() => branch.id, { onDelete: 'restrict' }),
     period: text('period').notNull(),
@@ -342,5 +356,15 @@ export const reportDownload = pgTable(
   (t) => [
     uniqueIndex('report_download_token_uq').on(t.tokenHash),
     check('report_download_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
+    /**
+     * 0071. A staff row or a console row, never both, never neither. The KIND
+     * says which, so `GET /report-downloads/:token`'s dispatch on `kind` cannot
+     * route one principal's row through the other's permission check.
+     */
+    check(
+      'report_download_one_principal',
+      sql`(${t.platformAdminId} IS NULL AND ${t.staffId} IS NOT NULL AND ${t.salonId} IS NOT NULL AND ${t.kind} NOT LIKE 'platform-%')
+          OR (${t.platformAdminId} IS NOT NULL AND ${t.staffId} IS NULL AND ${t.kind} LIKE 'platform-%')`,
+    ),
   ],
 );

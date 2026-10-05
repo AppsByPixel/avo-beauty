@@ -515,5 +515,21 @@ export const transaction = pgTable(
     index('transaction_custom_amount_idx')
       .on(t.salonId, t.createdAt.desc())
       .where(sql`custom_amount`),
+
+    /**
+     * Migration 0072. The owner console reads every salon's rows for a run of
+     * calendar months, and every index above leads with a salon, member or branch.
+     * These two give an all-salon time range something to range over: top-ups on
+     * `settled_at` (loaded, revenue, the payment mix), everything else on
+     * `created_at`. The INCLUDE columns are declared in the migration, which
+     * drizzle's index builder does not express; this entry names the index so the
+     * schema and the database list the same ones.
+     */
+    index('transaction_topup_settled_idx')
+      .on(t.settledAt)
+      .where(sql`kind = 'topup' AND status = 'settled'`),
+    index('transaction_settled_created_idx')
+      .on(t.createdAt)
+      .where(sql`status = 'settled'`),
   ],
 );

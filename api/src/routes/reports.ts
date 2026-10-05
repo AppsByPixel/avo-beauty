@@ -74,6 +74,8 @@ import {
 import { writeAudit } from '../services/audit';
 import { parseOverviewDownloadKind } from '../services/overviewExport';
 import { redeemOverviewDownload } from './overview';
+import { redeemPlatformAnalyticsDownload } from './platformAnalytics';
+import { parsePlatformDownloadKind } from '../services/platformAnalyticsExport';
 
 interface ReportQuery {
   branch?: unknown;
@@ -396,8 +398,59 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       .returning({ id: reportDownload.id });
     if (spent.length === 0) throw REFUSED();
 
-    const [staff] = await db.select().from(staffUser).where(eq(staffUser.id, row.staffId)).limit(1);
-    if (!staff || staff.deactivatedAt !== null || staff.salonId !== row.salonId) throw REFUSED();
+    /**
+     * AN OWNER-CONSOLE LINK, minted by `POST /v1/platform/analytics/download-url`
+     * (migration 0071: `kind` = `platform-analytics` or `platform-analytics:<section>`,
+     * `platform_admin_id` set, `staff_id` NULL). Dispatched BEFORE the staff lookup,
+     * because a console row has no staff member to look up — and refused, not
+     * redeemed, if the row's principal columns disagree with its kind. The
+     * `report_download_one_principal` CHECK already makes that row unwritable; this
+     * is the second line, so the door does not depend on the constraint existing.
+     * The admin's live sections, the audit row and the file are in
+     * `routes/platformAnalytics.ts § redeemPlatformAnalyticsDownload`.
+     */
+    let platformSection: ReturnType<typeof parsePlatformDownloadKind>;
+    try {
+      platformSection = parsePlatformDownloadKind(row.kind);
+    } catch {
+      throw REFUSED();
+    }
+    if (platformSection !== undefined) {
+      if (row.platformAdminId === null || row.staffId !== null) throw REFUSED();
+      const served = await redeemPlatformAnalyticsDownload(
+        { ...row, platformAdminId: row.platformAdminId },
+        platformSection,
+      );
+      if (served === null) throw REFUSED();
+      app.log.info(
+        {
+          event: 'report.download',
+          kind: row.kind,
+          salonId: row.salonId,
+          platformAdminId: row.platformAdminId,
+          rows: served.rowCount,
+          period: served.window,
+        },
+        'report download redeemed',
+      );
+      return reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="${served.filename}"`)
+        .header('cache-control', 'no-store')
+        .send(served.csv);
+    }
+
+    /**
+     * A STAFF LINK FROM HERE ON — both of 0036's columns set and no console admin.
+     * Since 0071 the columns are nullable for the console's sake, so this is
+     * stated as a narrowing rather than assumed; a row failing it is refused.
+     */
+    const { staffId: rowStaffId, salonId: rowSalonId } = row;
+    if (rowStaffId === null || rowSalonId === null || row.platformAdminId !== null) throw REFUSED();
+    const staffRow = { ...row, staffId: rowStaffId, salonId: rowSalonId };
+
+    const [staff] = await db.select().from(staffUser).where(eq(staffUser.id, staffRow.staffId)).limit(1);
+    if (!staff || staff.deactivatedAt !== null || staff.salonId !== staffRow.salonId) throw REFUSED();
 
     /**
      * AN OVERVIEW LINK, minted by `POST /v1/salons/:id/overview/analytics/download-url`
@@ -414,14 +467,14 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       throw REFUSED();
     }
     if (overviewSection !== undefined) {
-      const served = await redeemOverviewDownload(row, overviewSection, staff);
+      const served = await redeemOverviewDownload(staffRow, overviewSection, staff);
       if (served === null) throw REFUSED();
       app.log.info(
         {
           event: 'report.download',
           kind: row.kind,
-          salonId: row.salonId,
-          staffId: row.staffId,
+          salonId: staffRow.salonId,
+          staffId: staffRow.staffId,
           rows: served.rowCount,
           period: served.window,
         },
@@ -451,7 +504,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
     const [s] = await db
       .select({ id: salon.id, timezone: salon.timezone })
       .from(salon)
-      .where(eq(salon.id, row.salonId))
+      .where(eq(salon.id, staffRow.salonId))
       .limit(1);
     if (!s) throw REFUSED();
 
@@ -494,8 +547,8 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       {
         event: 'report.download',
         kind,
-        salonId: row.salonId,
-        staffId: row.staffId,
+        salonId: staffRow.salonId,
+        staffId: staffRow.staffId,
         rows: result.rows.length,
         period: result.window.token,
       },
@@ -522,7 +575,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
         db,
         { kind: 'staff', id: staff.id, name: staff.name, role: staff.role },
         reportExportAudit({
-          salonId: row.salonId,
+          salonId: staffRow.salonId,
           kind,
           branchId: row.branchId,
           window: result.window,
