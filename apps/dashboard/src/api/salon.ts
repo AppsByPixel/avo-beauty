@@ -380,7 +380,7 @@ export interface ActivityItem {
 
 /*
  * PARSE HELPERS, LOCAL TO THIS FILE — the same shape `platformConsole.ts` keeps
- * for `parsePlatformMetrics` and `platformSalons.ts` for `str`. Small enough
+ * for `parsePlatformSettings` and `platformSalons.ts` for `str`. Small enough
  * that a shared module would buy less than the import costs.
  */
 function str(v: unknown, where: string): string {

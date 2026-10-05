@@ -8,14 +8,17 @@ import {
 import { authedRequest } from '../auth/authedRequest.js';
 
 /**
- * The owner console's remaining three sections — Analytics, Controls, Audit.
+ * The owner console's Controls and Audit sections.
  *
  * ONE CLIENT FILE PER SERVER ROUTE FILE, the same reasoning `platformAdmins.ts`
- * carries: these three live together in `api/src/routes/platformConsole.ts` and
- * are gated on three DIFFERENT sections, which is the thing a consumer most needs
+ * carries: these live together in `api/src/routes/platformConsole.ts` and
+ * are gated on DIFFERENT sections, which is the thing a consumer most needs
  * to get right. Checked in the handlers rather than inferred from the names:
  *
- *   GET   /v1/platform/metrics    analytics   platformConsole.ts:108
+ * `GET /v1/platform/metrics` (analytics) is still served there, and no screen
+ * reads it any more: the Analytics page moved to `GET /v1/platform/analytics`
+ * (`api/platformAnalytics.ts`), so its hook and parser were retired from here.
+ *
  *   GET   /v1/platform/settings   controls    platformConsole.ts:121
  *   PATCH /v1/platform/settings   controls    platformConsole.ts:148
  *   GET   /v1/platform/audit      audit       platformConsole.ts:330
@@ -28,46 +31,21 @@ import { authedRequest } from '../auth/authedRequest.js';
  */
 
 export const consoleKeys = {
-  metrics: ['platform', 'metrics'] as const,
   settings: ['platform', 'settings'] as const,
 };
 
-/* ===================================================== ANALYTICS (metrics) == */
+/* ========================================================== parse helpers == */
 
-/**
- * `GET /v1/platform/metrics`. Every money field is INTEGER FILS on the wire and
- * stays that way until `<Money>` renders it — non-negotiable #1.
- *
- * TWO FIELDS THE DESIGN DRAWS ARE ABSENT, and the API omitted them on purpose
- * rather than guessing. `services/platformMetrics.ts` names both as schema gaps:
- *
- *   `salons.live`       the design's KPI is "Salons live" and `salon` has no
- *                       active/suspended column, so the endpoint returns `total`,
- *                       "rather than labelling a count of every salon 'live' — a
- *                       tile that says four salons are live when one is suspended
- *                       is worse than a tile that says there are four salons."
- *   `topSalons[].city`  no city column either; "omitted rather than guessed from
- *                       the name."
- *
- * The screen follows that decision instead of overriding it from the design —
- * see Analytics.tsx. Mirroring the API's honesty is the point: a console that
- * relabels `total` as "live" reintroduces exactly the claim the API refused.
+/*
+ * PARSED RATHER THAN CAST, and this is not ceremony. Every number the console
+ * reads here is money or a setting that goes straight onto a screen; a `null`
+ * arriving where a fils integer was promised would render "NaN" under a KD unit,
+ * and `<Money>` on a non-integer would silently produce a wrong figure.
+ * `PATCH /v1/salons/{id}` is the standing lesson in this repo about trusting a
+ * response shape — it answered something no consumer could read and took a whole
+ * section to its error boundary. (The rationale used to sit on
+ * `parsePlatformMetrics`, retired with the old Analytics page.)
  */
-export interface PlatformMetrics {
-  salons: { total: number; addedThisMonth: number };
-  members: { total: number; addedThisMonth: number };
-  /** `knetSharePercent` is an integer percent of VALUE, not of transaction count. */
-  loaded: { thisMonthFils: number; knetSharePercent: number };
-  /**
-   * `sum(fee_fils)` as recorded per transaction — never today's rate applied to a
-   * volume. The service is explicit that recomputing "would restate history every
-   * time the owner moves a stepper", which is the Controls screen next door.
-   */
-  revenue: { thisMonthFils: number; priorMonthFils: number };
-  /** Oldest first — the API guarantees the order so the chart never sorts. */
-  loadedByMonth: Array<{ month: string; loadedFils: number }>;
-  topSalons: Array<{ salonId: string; name: string; members: number; loadedFils: number }>;
-}
 
 function num(v: unknown, where: string): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) {
@@ -81,71 +59,6 @@ function obj(v: unknown, where: string): Record<string, unknown> {
     throw new Error(`${where} was not an object.`);
   }
   return v as Record<string, unknown>;
-}
-
-/**
- * PARSED RATHER THAN CAST, and this is not ceremony. Every number here is money or
- * a count that goes straight into a tile; a `null` arriving where a fils integer
- * was promised would render "NaN" under a KD unit, and `<Money>` on a non-integer
- * would silently produce a wrong figure. `PATCH /v1/salons/{id}` is the standing
- * lesson in this repo about trusting a response shape — it answered something no
- * consumer could read and took a whole section to its error boundary.
- */
-export function parsePlatformMetrics(raw: unknown): PlatformMetrics {
-  const r = obj(raw, 'GET /v1/platform/metrics');
-  const salons = obj(r.salons, 'metrics.salons');
-  const members = obj(r.members, 'metrics.members');
-  const loaded = obj(r.loaded, 'metrics.loaded');
-  const revenue = obj(r.revenue, 'metrics.revenue');
-
-  if (!Array.isArray(r.loadedByMonth)) throw new Error('metrics.loadedByMonth was not an array.');
-  if (!Array.isArray(r.topSalons)) throw new Error('metrics.topSalons was not an array.');
-
-  return {
-    salons: {
-      total: num(salons.total, 'metrics.salons.total'),
-      addedThisMonth: num(salons.addedThisMonth, 'metrics.salons.addedThisMonth'),
-    },
-    members: {
-      total: num(members.total, 'metrics.members.total'),
-      addedThisMonth: num(members.addedThisMonth, 'metrics.members.addedThisMonth'),
-    },
-    loaded: {
-      thisMonthFils: num(loaded.thisMonthFils, 'metrics.loaded.thisMonthFils'),
-      knetSharePercent: num(loaded.knetSharePercent, 'metrics.loaded.knetSharePercent'),
-    },
-    revenue: {
-      thisMonthFils: num(revenue.thisMonthFils, 'metrics.revenue.thisMonthFils'),
-      priorMonthFils: num(revenue.priorMonthFils, 'metrics.revenue.priorMonthFils'),
-    },
-    loadedByMonth: r.loadedByMonth.map((m, i) => {
-      const row = obj(m, `metrics.loadedByMonth[${i}]`);
-      if (typeof row.month !== 'string') {
-        throw new Error(`metrics.loadedByMonth[${i}].month was not a string.`);
-      }
-      return { month: row.month, loadedFils: num(row.loadedFils, `loadedByMonth[${i}].loadedFils`) };
-    }),
-    topSalons: r.topSalons.map((s, i) => {
-      const row = obj(s, `metrics.topSalons[${i}]`);
-      if (typeof row.salonId !== 'string' || typeof row.name !== 'string') {
-        throw new Error(`metrics.topSalons[${i}] had no salonId/name.`);
-      }
-      return {
-        salonId: row.salonId,
-        name: row.name,
-        members: num(row.members, `topSalons[${i}].members`),
-        loadedFils: num(row.loadedFils, `topSalons[${i}].loadedFils`),
-      };
-    }),
-  };
-}
-
-export function usePlatformMetrics(): UseQueryResult<PlatformMetrics> {
-  return useQuery({
-    queryKey: consoleKeys.metrics,
-    queryFn: async ({ signal }) =>
-      parsePlatformMetrics(await authedRequest<unknown>('owner', '/v1/platform/metrics', { signal })),
-  });
 }
 
 /* ====================================================== CONTROLS (settings) = */

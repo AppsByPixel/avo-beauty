@@ -133,7 +133,7 @@ export interface PlatformAccount {
 
 /*
  * PARSE HELPERS, LOCAL TO THIS FILE — the shape `platformConsole.ts` keeps for
- * `parsePlatformMetrics`, `platformSalons.ts` for `str` and `salon.ts` for the
+ * `parsePlatformSettings`, `platformSalons.ts` for `str` and `salon.ts` for the
  * activity feed. Small enough that a shared module would buy less than the import.
  */
 function str(v: unknown, where: string): string {

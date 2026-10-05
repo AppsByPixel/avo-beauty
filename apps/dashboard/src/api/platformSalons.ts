@@ -168,7 +168,7 @@ function count(v: unknown, where: string): number {
 }
 
 /**
- * PARSED RATHER THAN CAST, the same reasoning `parsePlatformMetrics` carries.
+ * PARSED RATHER THAN CAST, the same reasoning `parsePlatformSettings` carries.
  *
  * The two enums are validated against the vocabularies above rather than passed
  * through as strings, and that is the load-bearing part: `plan` chooses a badge

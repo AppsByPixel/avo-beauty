@@ -55,7 +55,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Analytics',
     to: '/console/analytics',
     built: true,
-    endpoint: 'GET /v1/platform/metrics',
+    endpoint: 'GET /v1/platform/analytics',
     section: 'analytics',
     title: 'Analytics',
     subtitle: 'How AVO is performing across every salon',

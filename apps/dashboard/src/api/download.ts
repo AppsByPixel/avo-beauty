@@ -1,4 +1,5 @@
 import { authedRequest } from '../auth/authedRequest.js';
+import type { AuthScope } from '../auth/scopes.js';
 import { API_BASE_URL } from '../config.js';
 import { ApiError } from './client.js';
 
@@ -120,8 +121,14 @@ export function resolveMintedUrl(url: unknown): string {
 export async function mintAndFollow(
   mintPath: string,
   body?: Record<string, unknown>,
+  /**
+   * Whose session mints. `merchant` for every salon export; `owner` for the
+   * console's analytics (`api/platformAnalytics.ts`), whose mint is a
+   * `requirePlatform` route and refuses a merchant bearer by name.
+   */
+  scope: AuthScope = 'merchant',
 ): Promise<void> {
-  const minted = await authedRequest<{ url?: unknown }>('merchant', mintPath, {
+  const minted = await authedRequest<{ url?: unknown }>(scope, mintPath, {
     method: 'POST',
     ...(body ? { body } : {}),
   });

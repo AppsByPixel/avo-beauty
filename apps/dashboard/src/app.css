@@ -6904,6 +6904,56 @@ a:hover {
   margin: 4px 0 12px;
 }
 
+/* ---- the console's analytics grid ---- */
+/*
+ * THE MERCHANT OVERVIEW'S GRID (§ OVERVIEW ANALYTICS above: `.ovw-section`,
+ * `.ovw-grid` and its masonry, `.ovw` cards) under the console's own KPI row and
+ * bar chart. Only the joins are here: the section sits on `.analytics`' 18px
+ * gap rather than the Overview's 28px top margin, and the KPI row keeps the
+ * grid's gap token under it.
+ */
+.analytics > .ovw-section {
+  margin-top: 0;
+}
+
+.pa > .analytics__kpis {
+  margin-bottom: var(--avo-space-grid-gap);
+}
+
+/* The page-level failure sits on the canvas, under the filter bar. */
+.pa__state {
+  padding: 8px 0;
+}
+
+/*
+ * THE DESIGN'S BARS INSIDE A HALF-WIDTH CARD. The design draws eight bars across
+ * a 1.35fr column; a card carries six to twenty-four. Past twelve the chart goes
+ * dense (`MonthBars`): a 4px gap instead of 12, and the hover figure is dropped
+ * because twenty-four of them cannot fit under their bars — each bar's figure is
+ * still read out (`.avo-sr-only` in the column) and is the CSV's.
+ */
+.pa-bars {
+  padding: 0;
+}
+
+.pa-bars[data-dense] {
+  gap: 4px;
+}
+
+.pa-bars[data-dense] .analytics__barvalue {
+  display: none;
+}
+
+/*
+ * A MONTH-TO-DATE BAR is paler and outlined, the merchant chart's part-week
+ * treatment (`.ovw-cols__bar[data-partial]`), and the card says so in words.
+ */
+.analytics__bar[data-partial] {
+  opacity: 1;
+  background: var(--avo-brand-tint);
+  box-shadow: inset 0 0 0 1px var(--avo-brand);
+}
+
 /* ------------------------------------------------------------------ controls -- */
 /*
  * `AVO Owner Console.dc.html:1010` § CONTROLS. Max 820px, a stack of a switches
