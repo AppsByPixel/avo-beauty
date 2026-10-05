@@ -6,9 +6,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { fils } from '@avo/types';
+import { PlatformAnalyticsSchema, fils } from '@avo/types';
 import type { PlatformAnalytics } from './platformAnalytics';
-import { PlatformAnalyticsSchema } from './platformAnalytics.schema';
 import {
   PLATFORM_ANALYTICS_SECTIONS,
   PLATFORM_SECTION_TITLE,

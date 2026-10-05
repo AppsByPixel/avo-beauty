@@ -112,7 +112,12 @@ suite('the owner console analytics', () => {
   let app: FastifyInstance;
   let db: (typeof import('../db/client'))['db'];
   let sql: (typeof import('drizzle-orm'))['sql'];
-  let schema: (typeof import('../services/platformAnalytics.schema'))['PlatformAnalyticsSchema'];
+  /**
+   * FROM `@avo/types`, where trunk landed this shape (cbd06c7). The API's own
+   * copy was deleted, so the analytics this serves and the contract the console
+   * parses are one declaration and cannot drift.
+   */
+  let schema: (typeof import('@avo/types'))['PlatformAnalyticsSchema'];
   let render: typeof import('../services/platformAnalyticsExport');
   const bearer = {
     owner: '', analyst: '', support: '', approvals: '', policies: '', full: '', staff: '', member: '',
@@ -134,7 +139,7 @@ suite('the owner console analytics', () => {
       headers: { authorization: `Bearer ${bearer[who]}`, 'content-type': 'application/json' },
       payload: JSON.stringify(body),
     });
-  /** The JSON, parsed through the proposed contract every time. */
+  /** The JSON, parsed through the contract every time. */
   const analytics = async (q: string, who: keyof typeof bearer = 'owner') => {
     const res = await get(`/v1/platform/analytics?${q}`, who);
     expect(res.statusCode, res.body).toBe(200);
@@ -172,7 +177,7 @@ suite('the owner console analytics', () => {
   beforeAll(async () => {
     db = (await import('../db/client')).db;
     sql = (await import('drizzle-orm')).sql;
-    schema = (await import('../services/platformAnalytics.schema')).PlatformAnalyticsSchema;
+    schema = (await import('@avo/types')).PlatformAnalyticsSchema;
     render = await import('../services/platformAnalyticsExport');
     const issue = (await import('../auth/sessions')).issueSession;
     app = await (await import('../app')).buildApp();
