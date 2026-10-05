@@ -505,6 +505,13 @@
       "when": 1791174800000,
       "tag": "0071_a_console_export_has_no_salon",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1791261200000,
+      "tag": "0072_a_platform_month_reads_its_window",
+      "breakpoints": true
     }
   ]
 }

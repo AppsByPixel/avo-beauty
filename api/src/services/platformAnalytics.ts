@@ -430,6 +430,14 @@ export async function computePlatformAnalytics(
    * The Overview's SPENT, grouped: `earned_fils` over settled, not-voided charges
    * and shop orders, by kind (so the shop half is also the shop GMV and the
    * leaderboard's shop column), plus kept deposits below.
+   *
+   * THE WINDOW IS STATED ON THE VIEW TOO. `rev.created_at` IS `t.created_at` (the
+   * view selects it from the same row), so the second pair of bounds changes no
+   * answer — but without it the planner scans every settled charge in the
+   * platform's history to build `transaction_revenue` before joining, because it
+   * does not carry a predicate through the view's join. Measured on 600,000
+   * synthetic rows: the view's side went from a full sequential scan to
+   * `transaction_settled_created_idx` (migration 0072) for a one-month window.
    */
   const sold = await rows(sql`
     SELECT ${monthOf(sql`t.created_at`)} AS month, t.salon_id, t.kind::text AS kind,
@@ -439,6 +447,7 @@ export async function computePlatformAnalytics(
       ${revenueJoin('t')}
      WHERE t.kind IN ('charge', 'shop') AND t.status = 'settled'
        AND t.created_at >= ${at(histFrom)} AND t.created_at < ${at(selTo)}
+       AND rev.created_at >= ${at(histFrom)} AND rev.created_at < ${at(selTo)}
        ${onSalon('t')}
        ${NOT_VOIDED}
      GROUP BY 1, 2, 3
