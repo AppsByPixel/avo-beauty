@@ -680,11 +680,16 @@ suite('the owner console analytics', () => {
       for (const res of await Promise.all(routes(null))) expect(res.statusCode).toBe(401);
     });
 
-    it('the support preset holds no analytics: 403 on all three routes, called directly', async () => {
+    it('the support preset holds no analytics: 403 on all three routes, called directly, and nothing written', async () => {
+      const audits = await auditCount();
+      const links = async () =>
+        Number((await exec(sql`SELECT count(*) AS n FROM report_download WHERE platform_admin_id = ${ADM.support}`))[0]?.n);
       for (const res of await Promise.all(routes('support'))) {
         expect(res.statusCode, res.body).toBe(403);
         expect(JSON.parse(res.body).message).toContain('cannot open Analytics');
       }
+      expect(await auditCount(), 'a refused export left an audit row').toBe(audits);
+      expect(await links(), 'a refused mint left a link').toBe(0);
     });
 
     it('a merchant staff session and a member session are refused', async () => {
