@@ -134,6 +134,17 @@ const GATED = [
   { method: 'POST', path: '/v1/platform/admins', section: 'admins', body: {} },
   { method: 'PATCH', path: `/v1/platform/admins/${MISSING_ADMIN}`, section: 'admins', body: {} },
   { method: 'DELETE', path: `/v1/platform/admins/${MISSING_ADMIN}`, section: 'admins' },
+  /**
+   * THE CONSOLE ANALYTICS, lane A's `22b32ad` — `routes/platformAnalytics.ts`, all three
+   * `requirePlatform(req, 'analytics')` first. Added here for the merchant-credential and
+   * forged-token sweeps below, which nothing generated reaches: the permission census
+   * drives the SECTION, not the surface. The granted halves answer 200 (the JSON, a CSV,
+   * and one sixty-second link nobody redeems). The two second-section blocks and the
+   * exact owner-console copy are `platform-analytics.test.ts`'s.
+   */
+  { method: 'GET', path: '/v1/platform/analytics', section: 'analytics' },
+  { method: 'GET', path: '/v1/platform/analytics.csv', section: 'analytics' },
+  { method: 'POST', path: '/v1/platform/analytics/download-url', section: 'analytics', body: {} },
 ] as const;
 
 beforeAll(async () => {
@@ -348,6 +359,17 @@ describe('the seeded analyst is refused the six sections she does not hold', () 
   it('reads metrics — the one console route her analytics bit opens', async () => {
     const res = await treq<any>('GET', '/v1/platform/metrics', { token: analyst });
     expect(res.status, `the analyst cannot read metrics: ${res.raw}`).toBe(200);
+  }, 60_000);
+
+  /**
+   * NO LONGER THE ONE — since `22b32ad` the same bit opens the console analytics. The
+   * title above is kept because the metrics claim is still true; this is the rest of it.
+   * What she sees INSIDE the 200 (campaigns and support withheld) is
+   * `platform-analytics.test.ts`'s.
+   */
+  it('and the console analytics, which the same bit opens since 22b32ad', async () => {
+    const res = await treq<any>('GET', '/v1/platform/analytics', { token: analyst });
+    expect(res.status, `the analyst cannot read the console analytics: ${res.raw}`).toBe(200);
   }, 60_000);
 
   for (const route of GATED.filter((r) => r.section !== 'analytics')) {
