@@ -604,11 +604,21 @@ export function MonthBars({
   points,
   partial,
   label,
+  empty,
 }: {
   points: readonly MonthPoint[];
   partial: boolean;
   label: string;
+  /**
+   * The sentence for a series that is zero in every month. A row of baselines
+   * says the same thing less clearly, and on a card with other figures it is
+   * the largest thing on it.
+   */
+  empty?: string;
 }) {
+  if (empty !== undefined && allZero(points.map((p) => p.value))) {
+    return <p className="ovw__quiet">{empty}</p>;
+  }
   const peak = peakOf(points.map((p) => p.value));
   const dense = points.length > 12;
   const last = points.length - 1;
@@ -860,7 +870,12 @@ export function MoneyCard({ data }: { data: PlatformAnalytics | undefined }) {
                 { value: 'spent', label: 'Spent' },
               ]}
             />
-            <MonthBars label={`Wallet ${series} by month`} partial={all.partial} points={moneyPoints(block.months, pick)} />
+            <MonthBars
+              label={`Wallet ${series} by month`}
+              partial={all.partial}
+              points={moneyPoints(block.months, pick)}
+              empty={`Nothing ${series === 'loaded' ? 'loaded' : series === 'bonus' ? 'credited as bonus' : 'spent'} in these months.`}
+            />
             <p className="ovw__note">{MONEY_NOTE[series]}</p>
             {owed.length > 1 ? (
               <>
@@ -937,6 +952,7 @@ export function SalonsCard({ data }: { data: PlatformAnalytics | undefined }) {
               label={`${many} by month`}
               partial={all.partial}
               points={countPoints(block.months, (m) => m[series], one, many)}
+              empty={`No ${many} in these months.`}
             />
             <p className="ovw__note">
               Active means at least one settled transaction in the month; dormant means the salon was on AVO
@@ -997,6 +1013,7 @@ export function MembersCard({ data }: { data: PlatformAnalytics | undefined }) {
               label={`${one}s by month`}
               partial={all.partial}
               points={countPoints(block.months, (m) => m[series], one, `${one}s`)}
+              empty={`No ${one}s in these months.`}
             />
             {series === 'activeMembers' ? (
               <p className="ovw__note">Active means at least one settled transaction in the month.</p>
@@ -1196,15 +1213,12 @@ export function BookingsCard({ data }: { data: PlatformAnalytics | undefined }) 
                 note={`On ${plural(block.depositsHeld.bookings, 'booking', 'bookings')}`}
               />
             </div>
-            {allZero(block.months.map((m) => m.bookings)) ? (
-              <p className="ovw__quiet">No bookings in these months.</p>
-            ) : (
-              <MonthBars
-                label="Bookings by month"
-                partial={all.partial}
-                points={countPoints(block.months, (m) => m.bookings, 'booking', 'bookings')}
-              />
-            )}
+            <MonthBars
+              label="Bookings by month"
+              partial={all.partial}
+              points={countPoints(block.months, (m) => m.bookings, 'booking', 'bookings')}
+              empty="No bookings in these months."
+            />
             <p className="ovw__note">
               Across {plural(block.salons, 'salon', 'salons')} with the booking module on.
             </p>
@@ -1285,6 +1299,7 @@ export function CampaignsCard({ data }: { data: PlatformAnalytics | undefined })
               label={`Campaigns ${series} by month`}
               partial={all.partial}
               points={countPoints(block.months, (m) => m[series], 'campaign', 'campaigns')}
+              empty={`No campaigns ${series} in these months.`}
             />
             <p className="ovw__note">Held means approved and currently held back from sending.</p>
           </>
@@ -1337,6 +1352,7 @@ export function SupportCard({ data }: { data: PlatformAnalytics | undefined }) {
               label={`Tickets ${series} by month`}
               partial={all.partial}
               points={countPoints(block.months, (m) => m[series], 'ticket', 'tickets')}
+              empty={`No tickets ${series} in these months.`}
             />
           </>
         );
@@ -1398,6 +1414,7 @@ export function ShopCard({ data }: { data: PlatformAnalytics | undefined }) {
             />
             <MonthBars
               label={series === 'gmv' ? 'Shop sales by month' : 'Shop orders by month'}
+              empty={series === 'gmv' ? 'No shop sales in these months.' : 'No shop orders in these months.'}
               partial={all.partial}
               points={
                 series === 'gmv'

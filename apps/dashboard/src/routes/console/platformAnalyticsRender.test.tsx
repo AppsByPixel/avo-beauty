@@ -397,6 +397,25 @@ describe('empty names the thing and what fills it', () => {
     expect(card('revenue').textContent).toContain('as customers top up their wallets');
   });
 
+  it('a series that is zero in every month is a sentence, not a row of baselines', () => {
+    mount({
+      data: parse(
+        raw({
+          support: {
+            status: 'ok',
+            openNow: { total: 2, avo: 2, salon: 0 },
+            months: MONTHS.map((month) => ({ month, opened: 0, resolved: 0 })),
+          },
+        }),
+      ),
+    });
+    const support = card('support');
+    expect(support.textContent).toContain('No tickets opened in these months.');
+    expect(support.querySelectorAll('.analytics__barcol')).toHaveLength(0);
+    /* The open-now figure still stands: the card is not empty, only the series is. */
+    expect(support.textContent).toContain('Open now');
+  });
+
   it('no visits in the month', () => {
     mount({ data: parse(raw({ busiestTimes: { status: 'ok', clock: 'salon_local', cells: [], totalVisits: 0 } })) });
     expect(card('busiest-times').textContent).toContain('No visits in October 2026');
