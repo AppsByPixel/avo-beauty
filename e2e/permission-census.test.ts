@@ -258,7 +258,12 @@ const ANONYMOUS: Record<string, string> = {
     'Since ab81e81 it also redeems the Overview export (kind `overview` / `overview:<section>`), ' +
     'dispatched before the Reports permission map and re-checking perm_dashboard plus every ' +
     'section gate live. Driven: report-download-capability.test.ts (Reports kinds) and ' +
-    'overview-export.test.ts (overview kinds).',
+    'overview-export.test.ts (overview kinds). Since 22b32ad (migration 0071) it also ' +
+    'redeems the OWNER CONSOLE export (kind `platform-analytics` / ' +
+    '`platform-analytics:<section>`): a row with platform_admin_id set and staff_id NULL, ' +
+    'dispatched BEFORE the staff lookup, the admin row re-read live for active + analytics, ' +
+    'and approvals / policies re-read for their two blocks. Driven: ' +
+    'platform-analytics.test.ts (platform kinds).',
   'GET /_gateway/:ref': 'the sandbox gateway, not a product route',
   'POST /_gateway/:ref': 'the sandbox gateway, not a product route',
 };
@@ -984,6 +989,28 @@ const PINNED_COVERAGE: string[] = [
   'GET /v1/platform/accounts → accounts',
   'GET /v1/platform/activity → activity',
   'GET /v1/platform/admins → admins',
+  /**
+   * THE CONSOLE ANALYTICS — lane A's `22b32ad` (types `cbd06c7`), all three doors pasted
+   * from the census's own output on the first run after the merge, not from the brief.
+   *
+   * `analytics` ON ALL THREE, and the census drives each with the section off (403, the
+   * Analytics copy) and restored. The mint's mirror is NOT in `MIRROR_WOULD_WRITE`, and
+   * that was decided rather than missed: granting mints one sixty-second
+   * `report_download` row that nobody redeems — the Overview mint's mirror does the same —
+   * and nothing counts console rows without scoping them to its own admin and window.
+   *
+   * WHAT THIS FORMAT CANNOT PRINT, and where it is driven instead
+   * (`platform-analytics.test.ts`):
+   *   - the two blocks gated on a SECOND section — `campaigns` withheld without
+   *     `approvals`, `support` without `policies` — decided INSIDE the 200, as the
+   *     Overview's five are. Driven on the JSON, the `.csv` door and a link redeemed after
+   *     the revoke, by Salem with one bit off and by the seeded analyst untouched.
+   *   - the SURFACE half: a merchant manager's dashboard session and a scanner PIN session
+   *     are refused by `requirePlatformScope` with the owner-console copy, before any
+   *     section is consulted. `console.test.ts`'s GATED sweep carries the three as well.
+   */
+  'GET /v1/platform/analytics → analytics',
+  'GET /v1/platform/analytics.csv → analytics',
   'GET /v1/platform/audit → audit',
   'GET /v1/platform/campaigns → approvals',
   'GET /v1/platform/messaging-policy → approvals',
@@ -1244,6 +1271,8 @@ const PINNED_COVERAGE: string[] = [
   'POST /topups [requireMember]',
   'POST /v1/platform/admins → admins',
   'POST /v1/platform/admins/:id/password-reset → admins',
+  // The console export's one-time link. See `GET /v1/platform/analytics`'s note above.
+  'POST /v1/platform/analytics/download-url → analytics',
   'POST /v1/platform/campaigns/:cid/decision → approvals',
   'POST /v1/platform/policies/discard → policies',
   'POST /v1/platform/policies/draft → policies',

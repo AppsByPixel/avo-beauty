@@ -115,6 +115,7 @@ import {
   CampaignRewardSchema,
   OrderBoardSchema,
   OverviewAnalyticsSchema,
+  PlatformAnalyticsSchema,
   CampaignSchema,
   PlatformMessagingPolicySchema,
   ProductSchema,
@@ -164,6 +165,7 @@ import {
   startTenancyApi,
   stopTenancyApi,
   treq,
+  PLATFORM_ANALYST_HANDLE,
   PLATFORM_OWNER_HANDLE,
   signInPlatform,
 } from './support/tenancy-harness.js';
@@ -277,6 +279,8 @@ let pinMember = '';
  * spec went red holding its own instructions. Two of the four are now ordinary probes.
  */
 let platform = '';
+/** Mariam, PLT-002 — `analytics` without `approvals` or `policies`. The withheld arm. */
+let analyst = '';
 
 /**
  * A MEMBER OF THIS FILE'S OWN, FOR THE DELETION PIN ONLY.
@@ -1218,6 +1222,57 @@ function probes(): Probe[] {
       schema: OVERVIEW_DOWNLOAD_URL_SHAPE,
     },
     /**
+     * THE CONSOLE ANALYTICS — `GET /v1/platform/analytics`, lane A's `22b32ad`, schema
+     * landed by trunk as `PlatformAnalyticsSchema` (`cbd06c7`). Caught by the
+     * unclassified check on the first run after the merge, with its `.csv` sibling.
+     *
+     * THREE SAMPLES, BECAUSE EVERY BLOCK IS A UNION AND ONE SAMPLE EXERCISES ONE ARM:
+     *
+     *   owner, every salon     every block `ok` — the eleven `ok` shapes
+     *   analyst, every salon   `campaigns` and `support` withheld for `approvals` and
+     *                          `policies` — the `reason: 'permission'` arm
+     *   owner, ?salon=Lumiere  `shop` withheld `module_off` (Lumiere's shop is off in the
+     *                          seed) — the other reason, with `permission: null`, and the
+     *                          non-null `salonId`/`salonName` half of the nullable pair
+     *
+     * NON-EMPTY WHERE ROWS ARE CERTAIN: the leaderboard lists every salon in scope by
+     * definition, `liabilityBySalon` likewise, and `busiestTimes.cells` carries this
+     * file's own settled charge, which is in the current month. Captured LAST, after
+     * every write in `beforeAll`. The money-is-integers walk is its own describe below.
+     */
+    {
+      route: 'GET /v1/platform/analytics',
+      label: 'GET /v1/platform/analytics',
+      schemaName: 'PlatformAnalyticsSchema',
+      schema: PlatformAnalyticsSchema,
+      requireNonEmpty: ['leaderboard.rows', 'money.liabilityBySalon', 'busiestTimes.cells'],
+    },
+    {
+      route: 'GET /v1/platform/analytics',
+      label: 'GET /v1/platform/analytics (analyst)',
+      schemaName: 'PlatformAnalyticsSchema',
+      schema: PlatformAnalyticsSchema,
+      requireNonEmpty: ['leaderboard.rows'],
+    },
+    {
+      route: 'GET /v1/platform/analytics',
+      label: `GET /v1/platform/analytics?salon=${SALON_B}`,
+      schemaName: 'PlatformAnalyticsSchema',
+      schema: PlatformAnalyticsSchema,
+      requireNonEmpty: ['leaderboard.rows'],
+    },
+    /**
+     * THE CONSOLE EXPORT'S ONE-TIME LINK — `POST /v1/platform/analytics/download-url`.
+     * The same `{url, expiresAt}` both salon-side mints answer, so the same hand-written
+     * shape; a console mint that grew a key would be reported stripped here.
+     */
+    {
+      route: 'POST /v1/platform/analytics/download-url',
+      label: 'POST /v1/platform/analytics/download-url',
+      schemaName: 'OVERVIEW_DOWNLOAD_URL_SHAPE',
+      schema: OVERVIEW_DOWNLOAD_URL_SHAPE,
+    },
+    /**
      * =====================================================================
      * ITEM 10 — AVO ISSUES, AVO LISTS, AVO VOIDS, SHE REDEEMS.
      * =====================================================================
@@ -1457,6 +1512,24 @@ const UNMODELLED: Record<string, string> = {
     'rendered FROM, not the file: rows not keys, ids dropped, money as KD to three ' +
     'decimals. Behind requireDashboardPerm(dashboard) + requireSameSalon, audited on every ' +
     'export. Its money rows are reconciled against the JSON route in overview-export.test.ts.',
+  /**
+   * THE CONSOLE EXPORT — `GET /v1/platform/analytics.csv`, lane A's `22b32ad`, named by the
+   * unclassified check beside its JSON sibling. UNMODELLED for the Overview file's reason,
+   * checked rather than assumed: `platformCsv` is `overviewCsv` unchanged (the same BOM and
+   * five columns), and `PlatformAnalyticsSchema`, which the JSON route is probed against
+   * above, is the object the file is rendered FROM, not the file.
+   *
+   * NOT UNASSERTED. `platform-analytics.test.ts` reconciles every KD row against the JSON
+   * for the same query, drives the two second-section blocks as `withheld` rows, and drives
+   * the one-time link's single use and audit row in SQL.
+   */
+  'GET /v1/platform/analytics.csv':
+    'the owner console analytics as one long CSV table — text/csv with a BOM, columns ' +
+    'section,item,metric,value,unit (platformCsv is overviewCsv), not JSON, so no Zod schema ' +
+    'applies. PlatformAnalyticsSchema is the object the file is rendered FROM: rows not ' +
+    'keys, money as KD to three decimals, withheld blocks as one row naming the reason. ' +
+    'Behind requirePlatform(analytics), audited in the platform log on every export. Its ' +
+    'money rows are reconciled against the JSON route in platform-analytics.test.ts.',
   /**
    * THE CONSOLE'S SALON LIST, arriving with dev `0a2a6ca` and caught here by name on the
    * first run after the rebase — the fourth new surface this census has named on arrival.
@@ -1997,6 +2070,7 @@ beforeAll(async () => {
   scanner = await signInScanner(SALON_A, A_STAFF_HANDLE, A_SCANNER_DEVICE);
   member = await signInMember(SALON_A, QA_MEMBER_PHONE);
   platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
+  analyst = await signInPlatform(PLATFORM_ANALYST_HANDLE);
 
   const hessa = await attemptScannerSignIn({
     salonId: SALON_A,
@@ -2711,6 +2785,10 @@ beforeAll(async () => {
       `/v1/salons/${SALON_A}/overview/analytics?branch=${A_BRANCH}`,
       dashboard,
     ],
+    // The console analytics' three arms — see the probes. Last for the same reason.
+    ['GET /v1/platform/analytics', '/v1/platform/analytics', platform],
+    ['GET /v1/platform/analytics (analyst)', '/v1/platform/analytics', analyst],
+    [`GET /v1/platform/analytics?salon=${SALON_B}`, `/v1/platform/analytics?salon=${SALON_B}`, platform],
   ];
 
   for (const [label, path, token] of gets) {
@@ -2735,6 +2813,19 @@ beforeAll(async () => {
     );
   }
   captured.set(`POST /v1/salons/${SALON_A}/overview/analytics/download-url`, overviewMint);
+
+  /**
+   * THE CONSOLE EXPORT'S MINT, every salon, every section. A real sixty-second console
+   * row (`platform_admin_id` PLT-001, `staff_id` NULL) that nothing redeems.
+   */
+  const consoleMint = await treq<any>('POST', '/v1/platform/analytics/download-url', {
+    token: platform,
+    body: {},
+  });
+  if (consoleMint.status !== 200) {
+    throw new Error(`POST /v1/platform/analytics/download-url: ${consoleMint.status} ${consoleMint.raw}`);
+  }
+  captured.set('POST /v1/platform/analytics/download-url', consoleMint);
 }, 180_000);
 
 afterAll(async () => {
@@ -3138,12 +3229,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 66 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 68 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(66);
+    ).toBe(68);
   });
 
   it('no GET route is left unclassified', () => {
@@ -4447,4 +4538,93 @@ describe('the order board and the overview analytics — the samples reach the v
       expect(res.body[k].branchAssumed, `${k}.branchAssumed is null with a branch applied`).not.toBeNull();
     }
   });
+});
+
+/**
+ * THE CONSOLE ANALYTICS' THREE ARMS, AND ITS MONEY AS INTEGERS.
+ *
+ * The generic probes prove each sample parses through `PlatformAnalyticsSchema` and loses
+ * nothing. They cannot prove the samples contain the arms they were taken for: an analyst
+ * sample that came back all `ok` would parse and witness nothing about
+ * `PlatformWithheldSchema`. So each arm is named here, by value.
+ *
+ * AND NON-NEGOTIABLE #1 ON THE WIRE, NOT ONLY IN THE SCHEMA. `FilsSchema` is
+ * `z.number().int()`, so a parse already refuses `12.5`. What it does not see is a money
+ * key the schema does not model (it would be reported stripped, but as drift, not as a
+ * float), and a money value that arrived as a string a lenient client would coerce. The
+ * walk below asks every key ending `Fils` on all three samples — modelled or not — for a
+ * non-negative safe integer.
+ */
+describe('the console analytics — the samples reach every arm, and every Fils is an integer', () => {
+  const SAMPLES = [
+    'GET /v1/platform/analytics',
+    'GET /v1/platform/analytics (analyst)',
+    `GET /v1/platform/analytics?salon=${SALON_B}`,
+  ];
+  const BLOCKS = [
+    'revenue', 'money', 'salons', 'members', 'leaderboard', 'paymentMix',
+    'bookings', 'campaigns', 'support', 'shop', 'busiestTimes',
+  ] as const;
+
+  it('the owner at every salon: all eleven blocks ok, scope null, and the leaderboard is every salon', () => {
+    const res = response('GET /v1/platform/analytics');
+    expect(res.status, res.raw.slice(0, 400)).toBe(200);
+    for (const k of BLOCKS) expect(res.body[k]?.status, `${k}: ${JSON.stringify(res.body[k]).slice(0, 200)}`).toBe('ok');
+    expect(res.body.salonId).toBeNull();
+    expect(res.body.salonName).toBeNull();
+    const salons = scalar(`select string_agg(id, ',' order by id collate "C") from salon`).trim();
+    expect(
+      (res.body.leaderboard.rows as Array<{ salonId: string }>).map((r) => r.salonId).sort().join(','),
+      'the unscoped leaderboard is not every salon in the table',
+    ).toBe(salons);
+  });
+
+  it('the analyst: campaigns withheld for approvals, support for policies — the permission arm', () => {
+    const res = response('GET /v1/platform/analytics (analyst)');
+    expect(res.status, res.raw.slice(0, 400)).toBe(200);
+    expect(res.body.campaigns).toEqual({ status: 'withheld', reason: 'permission', permission: 'approvals' });
+    expect(res.body.support).toEqual({ status: 'withheld', reason: 'permission', permission: 'policies' });
+    for (const k of BLOCKS.filter((b) => b !== 'campaigns' && b !== 'support')) {
+      expect(res.body[k]?.status, `${k} withheld from the analyst, who holds analytics`).toBe('ok');
+    }
+  });
+
+  it(`?salon=${SALON_B}: shop withheld module_off with permission null, and the scope is named`, () => {
+    const res = response(`GET /v1/platform/analytics?salon=${SALON_B}`);
+    expect(res.status, res.raw.slice(0, 400)).toBe(200);
+    precondition(
+      scalar(`select module_shop from salon where id = '${SALON_B}'`).trim() === 'f',
+      `${SALON_B}'s shop module is on, so this sample cannot witness module_off`,
+    );
+    expect(res.body.shop).toEqual({ status: 'withheld', reason: 'module_off', permission: null });
+    expect(res.body.salonId).toBe(SALON_B);
+    expect(res.body.salonName).toBe(scalar(`select name from salon where id = '${SALON_B}'`).trim());
+  });
+
+  for (const label of SAMPLES) {
+    it(`${label}: every *Fils on the wire is a non-negative safe integer`, () => {
+      const res = response(label);
+      expect(res.status, res.raw.slice(0, 400)).toBe(200);
+      const found: string[] = [];
+      const bad: string[] = [];
+      const walk = (v: unknown, path: string): void => {
+        if (Array.isArray(v)) return v.forEach((x, i) => walk(x, `${path}[${i}]`));
+        if (v === null || typeof v !== 'object') return;
+        for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+          const here = path ? `${path}.${k}` : k;
+          if (/Fils$/.test(k)) {
+            found.push(here);
+            // `null` is legal only where the schema says so (shopRevenueFils with the shop off).
+            if (x !== null && !(typeof x === 'number' && Number.isSafeInteger(x) && x >= 0)) {
+              bad.push(`${here} = ${JSON.stringify(x)}`);
+            }
+          }
+          walk(x, here);
+        }
+      };
+      walk(res.body, '');
+      expect(found.length, `${label} carries no *Fils key at all, so this walk proved nothing`).toBeGreaterThan(0);
+      expect(bad, `money that is not integer fils — non-negotiable #1`).toEqual([]);
+    });
+  }
 });

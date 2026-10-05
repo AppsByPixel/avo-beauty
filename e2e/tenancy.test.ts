@@ -4815,3 +4815,115 @@ describe('the console door — cross-salon by design, and 404 where a merchant d
     ).toBe(403);
   });
 });
+
+// ------------------------------------- the console analytics' ?salon=, asserted --
+/**
+ * `GET /v1/platform/analytics`, `GET /v1/platform/analytics.csv` and
+ * `POST /v1/platform/analytics/download-url` — lane A's `22b32ad`.
+ *
+ * NOT IN THE GAP LEDGER AND NOT IN `SALON_ROUTES`, BECAUSE THE SALON IS NOT IN THE PATH:
+ * `discoverSalonScopedRoutes()` matches `/salons/:` and these are `/v1/platform/analytics`.
+ * They are console doors for the reason `GET|PATCH /v1/platform/salons/:id` are — the
+ * permission census reads `requirePlatform` on every gate path of all three — so a
+ * platform admin reading ACROSS salons is the feature, and the merchant credential that
+ * must not reach them is refused by `requirePlatformScope` (`console.test.ts`'s GATED
+ * sweep; the copy, and a PIN session, in `platform-analytics.test.ts`).
+ *
+ * WHAT A `?salon=` CONSOLE DOOR OWES INSTEAD OF A TENANCY WALL is that the filter is a
+ * SCOPE, faithfully applied, and refuses rather than widens:
+ *
+ *   1. an unknown salon is 404 `unknown_salon` — the console's own rule (the door above:
+ *      a platform admin is entitled to know which salons exist), on all three routes;
+ *   2. a REPEATED `salon` is 400 `invalid_salon`, not a quiet "every salon" — Fastify
+ *      hands a repeated key over as an array, and `resolveSalon` treating a non-string as
+ *      "absent" would turn a filtered export into the whole platform's;
+ *   3. a filtered answer is THAT salon's figures and no other's, anchored in SQL rather
+ *      than in the API's own unfiltered reply.
+ */
+describe("the console analytics' ?salon= — a scope that refuses rather than widens", () => {
+  let platform = '';
+  const platformLinks = (): number =>
+    Number(scalar(`select count(*) from report_download where kind like 'platform-%'`).trim());
+
+  beforeAll(async () => {
+    platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
+  }, 60_000);
+
+  it(`an unknown salon is 404 unknown_salon on all three routes, and the mint writes no row`, async () => {
+    const before = platformLinks();
+    const answers = [
+      await treq<any>('GET', `/v1/platform/analytics?salon=${SALON_NOWHERE}`, { token: platform }),
+      await treq<any>('GET', `/v1/platform/analytics.csv?salon=${SALON_NOWHERE}`, { token: platform }),
+      await treq<any>('POST', '/v1/platform/analytics/download-url', {
+        token: platform,
+        body: { salon: SALON_NOWHERE },
+      }),
+    ];
+    for (const [i, res] of answers.entries()) {
+      expect(res.status, `route ${i}: ${res.raw}`).toBe(404);
+      expect(res.body?.error, `route ${i}: ${res.raw}`).toBe('unknown_salon');
+    }
+    expect(platformLinks(), 'a mint refused for an unknown salon wrote a link').toBe(before);
+  });
+
+  it('a repeated salon is 400 invalid_salon, never a silent "every salon"', async () => {
+    const two = `salon=${SALON_A}&salon=${SALON_B}`;
+    const before = platformLinks();
+    const answers = [
+      await treq<any>('GET', `/v1/platform/analytics?${two}`, { token: platform }),
+      await treq<any>('GET', `/v1/platform/analytics.csv?${two}`, { token: platform }),
+      // The mint reads the query string when there is no object body…
+      await treq<any>('POST', `/v1/platform/analytics/download-url?${two}`, { token: platform }),
+      // …and the body when there is one; an array there is the same refusal.
+      await treq<any>('POST', '/v1/platform/analytics/download-url', {
+        token: platform,
+        body: { salon: [SALON_A, SALON_B] },
+      }),
+    ];
+    for (const [i, res] of answers.entries()) {
+      expect(res.status, `case ${i}: ${res.raw.slice(0, 300)}`).toBe(400);
+      expect(res.body?.error, `case ${i}: ${res.raw.slice(0, 300)}`).toBe('invalid_salon');
+    }
+    expect(platformLinks(), 'a refused mint wrote a link').toBe(before);
+  });
+
+  it(`?salon=${SALON_A} is salon A's figures alone — the leaderboard, the liability and the members, against SQL`, async () => {
+    const all = await treq<any>('GET', '/v1/platform/analytics', { token: platform });
+    const one = await treq<any>('GET', `/v1/platform/analytics?salon=${SALON_A}`, { token: platform });
+    expect(all.status, all.raw.slice(0, 300)).toBe(200);
+    expect(one.status, one.raw.slice(0, 300)).toBe(200);
+
+    expect(one.body.salonId).toBe(SALON_A);
+    expect(
+      (one.body.leaderboard.rows as Array<{ salonId: string }>).map((r) => r.salonId),
+      'the filtered leaderboard carries a salon other than the filter',
+    ).toEqual([SALON_A]);
+    expect(
+      (one.body.money.liabilityBySalon as Array<{ salonId: string }>).map((r) => r.salonId),
+      'the filtered liability breakdown carries a salon other than the filter',
+    ).toEqual([SALON_A]);
+    expect(one.body.salons.total, 'a one-salon scope counts more than one salon').toBe(1);
+
+    // SQL, not the API's own unfiltered reply, is what decides "salon A's figures".
+    const balance = Number(scalar(`select coalesce(sum(balance_fils), 0) from member where salon_id = '${SALON_A}'`).trim());
+    const members = Number(scalar(`select count(*) from member where salon_id = '${SALON_A}'`).trim());
+    const elsewhere = Number(scalar(`select coalesce(sum(balance_fils), 0) from member where salon_id <> '${SALON_A}'`).trim());
+    precondition(elsewhere > 0, 'no other salon holds a balance, so a leak would not move the figure');
+    expect(one.body.money.liabilityFils, 'the filtered liability is not salon A\'s members\' balances').toBe(balance);
+    expect(one.body.members.total, 'the filtered member count is not salon A\'s').toBe(members);
+    expect(all.body.money.liabilityFils, 'the unfiltered liability is not every salon\'s').toBe(balance + elsewhere);
+
+    // And the filtered row is the same row the unfiltered leaderboard holds for A.
+    const fromAll = (all.body.leaderboard.rows as Array<{ salonId: string }>).find((r) => r.salonId === SALON_A);
+    expect(one.body.leaderboard.rows[0], 'salon A\'s row differs between the filtered and unfiltered reads').toEqual(fromAll);
+
+    // No other salon's id or name appears anywhere in the filtered body.
+    const others = scalar(`select string_agg(id || '|' || name, ',') from salon where id <> '${SALON_A}'`)
+      .trim()
+      .split(',')
+      .flatMap((x) => x.split('|'));
+    for (const o of others) {
+      expect(one.raw.includes(`"${o}"`), `the salon A scope serves ${o}`).toBe(false);
+    }
+  });
+});
