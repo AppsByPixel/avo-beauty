@@ -370,7 +370,7 @@ export function AnalyticsGrid({
  * be drawn into a one-pixel row it has not been measured for. A browser with
  * native `grid-template-rows: masonry` gets that instead, and this does nothing.
  */
-function useMasonry(ref: RefObject<HTMLDivElement | null>) {
+export function useMasonry(ref: RefObject<HTMLDivElement | null>) {
   useLayoutEffect(() => {
     const grid = ref.current;
     if (!grid || typeof ResizeObserver === 'undefined') return;
@@ -568,7 +568,7 @@ function body<K extends keyof OverviewAnalytics>(
  * screen reader, because the bar is `aria-hidden` and the visible figure alone
  * does not say what it is a figure of.
  */
-function BarList({
+export function BarList({
   rows,
 }: {
   rows: ReadonlyArray<{ key: string; name: string; value: number; figure: ReactNode; spoken: string; tone?: string }>;
@@ -1003,7 +1003,7 @@ function UpcomingList({
   );
 }
 
-function Figure({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
+export function Figure({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
   return (
     <div className="ovw-figure">
       <span className="ovw-figure__label">{label}</span>
