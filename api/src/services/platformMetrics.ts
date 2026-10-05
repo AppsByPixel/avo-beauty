@@ -149,8 +149,13 @@ function percent(a: number, b: number): number {
  * on wallet top-ups only, never on the salon's own service prices."
  *
  * Subtracting both bonus columns is exact: all three are integer fils.
+ *
+ * EXPORTED for `services/platformAnalytics.ts`, whose loaded and revenue figures
+ * must agree with this screen's to the fil — importing the expression is how
+ * they cannot drift. It is unqualified, so it belongs in a query over
+ * `transaction` alone.
  */
-const PAID_FILS = sql`(amount_fils - bonus_fils - promo_bonus_fils)`;
+export const PAID_FILS = sql`(amount_fils - bonus_fils - promo_bonus_fils)`;
 
 /**
  * The first instant of a calendar month in the platform zone, `monthsAgo` months
