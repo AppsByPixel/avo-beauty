@@ -85,19 +85,24 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | **Vercel** — project `avo-dashboard` → `avo-dashboard-coral.vercel.app` | static Vite build |
 | API | **Vercel** — project `avo-api` → `avo-api.vercel.app` | serverless function, `api/index.ts` |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0070 on 2026-09-30** |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0072 on 2026-10-05** |
 
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
-exists and is not what serves anything. **Deployed state as of 2026-10-02: both projects on `main` @ `66b79d4`, database
-migrated to `0070`**. Live: API `avo-6f94ttyl2` (adds the Overview export:
-`overview/analytics.csv` and its one-time link), dashboard `avo-dashboard-j3457oza2` (bundle
-`index-BjvrZZ3F.js`, the Export buttons). Rollback targets: API `avo-5w1sho82e` (8624879),
-dashboard `avo-dashboard-8h26vgumu` — a production deploy made on 2026-09-30 13:28 from this
-account but **not by the trunk session**, built from code matching main at the time.
+exists and is not what serves anything. **Deployed state as of 2026-10-05: both projects on `main` @ `ab4aa75`, database
+migrated to `0072`**. Live: API `avo-btc9id63o` (adds the console analytics:
+`GET /v1/platform/analytics`, its `.csv` and a console one-time link), dashboard
+`avo-dashboard-ep7n18pfg` (bundle `index-BpuWO2kD.js`, the console Analytics page).
+Rollback targets: API `avo-6f94ttyl2` (66b79d4), dashboard `avo-dashboard-j3457oza2`
+(66b79d4). 0071/0072 are additive (nullable `report_download` principals, a CHECK, two
+indexes), so rolling the API back does not need the database rolled back.
+**A production dashboard deploy appears minutes after `main` moves** (`avo-dashboard-cc69p5s80`,
+13:43 on 2026-10-05, and `8h26vgumu` on 2026-09-30) without the trunk session running it —
+most likely the Git integration. The staged-and-promoted one is what the alias names;
+`vercel inspect avo-dashboard-coral.vercel.app` is the authority.
 Hosted data: `SAL-FOREST` via `db:demo-forest` (operator passwords), and every workspace's
-two-branch roster via `db:demo-roster` — Hessa (AR-003) left unassigned because of a live
-booking at BR-KWC on 2026-09-30; re-run `db:demo-roster` after it to move her to Salmiya.
+two-branch roster via `db:demo-roster` — Hessa (AR-003) assigned to BR-SAL Salmiya on the
+2026-10-05 re-run.
 Deployed by hand from the CLI — **neither
 project auto-deploys from git**, so a push to `main` changes nothing live.
 
@@ -128,7 +133,7 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated (through `0070`, applied 2026-09-30), is seeded, and passed all
+is migrated (through `0072`, applied 2026-10-05), is seeded, and passed all
 **103** invariants on 2026-09-14.
 
 **THE OWNER PASSWORD IS IN AFTAB'S PASSWORD MANAGER, AND NOWHERE ELSE.** This
