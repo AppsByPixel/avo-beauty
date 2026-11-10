@@ -77,9 +77,16 @@ export const salon = pgTable(
      * ON THE SALON RATHER THAN ON THE INVITE ROW. `staff_password_reset` is an
      * outbox and its rows are consumed; the owner contact is the durable answer to
      * "who does AVO call about this account", and re-issuing an invite must not
-     * require re-typing the number. It is also NOT on `staff_user`: putting a
-     * phone there would add a contact field to every scanner account across four
-     * surfaces, which is a different decision than this one.
+     * require re-typing the number. It was also deliberately NOT on `staff_user`:
+     * "putting a phone there would add a contact field to every scanner account
+     * across four surfaces, which is a different decision than this one."
+     *
+     * THAT DIFFERENT DECISION HAS SINCE BEEN TAKEN, by Aftab, 2026-11-10
+     * (DECISIONS.md § Staff phone pairing): `staff_user.phone` exists from
+     * migration 0073 as a SIGN-IN NAME — the scanner's pairing and PIN sign-in and
+     * the dashboard's username accept it. This column is unchanged by that and
+     * still answers a different question ("who does AVO call about this salon");
+     * the two are not kept in sync, and nothing copies one into the other.
      *
      * IT IS NOT SERVED BY `GET /salons/{id}`. That endpoint is readable by any
      * authenticated principal of the salon — the customer wallet reads it for the

@@ -44,6 +44,18 @@ export const staffUser = pgTable(
       .references(() => salon.id, { onDelete: 'restrict' }),
     name: text('name').notNull(),
     handle: text('handle').notNull(),
+    /**
+     * Her own mobile, E.164 — a SIGN-IN NAME beside `handle`, on the scanner
+     * (`POST /staff/session` with `phone`) and the dashboard
+     * (`POST /auth/web/session` with the number as `username`), and the
+     * identifier `POST /staff/pair` takes with the six digits. Aftab, 2026-11-10
+     * (DECISIONS.md § Staff phone pairing); migration 0073.
+     *
+     * Unique per salon AMONG ACTIVE STAFF (`staff_user_salon_active_phone_uq`),
+     * not across leavers the way the handle is: a number is a SIM, and the next
+     * hire may hold a leaver's. Null until a manager enters it.
+     */
+    phone: text('phone'),
     role: staffRole('role').notNull(),
 
     /**
@@ -100,6 +112,20 @@ export const staffUser = pgTable(
     uniqueIndex('staff_user_salon_handle_uq').on(t.salonId, t.handle),
     index('staff_user_salon_idx').on(t.salonId),
     index('staff_user_pin_device_idx').on(t.salonId, t.pinDeviceId),
+    // Migration 0073. The phone is a sign-in name, so two ACTIVE accounts at one
+    // salon cannot share it; a leaver's number is free for the next hire.
+    uniqueIndex('staff_user_salon_active_phone_uq')
+      .on(t.salonId, t.phone)
+      .where(sql`deactivated_at IS NULL`),
+    // `POST /staff/pair` by mobile number carries no salon, so it looks the
+    // number up across salons; the unique index above leads with `salon_id`.
+    index('staff_user_active_phone_idx')
+      .on(t.phone)
+      .where(sql`deactivated_at IS NULL AND phone IS NOT NULL`),
+    // The target of `staff_pairing_code`'s composite foreign keys (0073).
+    uniqueIndex('staff_user_id_salon_uq').on(t.id, t.salonId),
+    // Byte-identical to `member_phone_is_e164` and `http/fields.ts § E164`.
+    check('staff_user_phone_is_e164', sql`${t.phone} ~ '^\\+[1-9][0-9]{6,14}$'`),
 
     // "void implies charges" — api-contract.md § StaffUser. A dashboard toggle
     // that grants void without charges is a UI bug the database refuses to store.
@@ -159,5 +185,61 @@ export const staffPasswordReset = pgTable(
     uniqueIndex('staff_password_reset_token_uq').on(t.tokenHash),
     index('staff_password_reset_live_idx').on(t.staffId).where(sql`used_at IS NULL`),
     check('staff_password_reset_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
+  ],
+);
+
+/**
+ * A PAIRING CODE — the single-use door between a manager's Accounts screen and
+ * a staff member's own phone. Aftab, 2026-11-10 (DECISIONS.md § Staff phone
+ * pairing); migration 0073 carries the full argument.
+ *
+ * A manager with `perms.team` issues one (`POST /staff/{id}/pairing-code`); the
+ * phone redeems it once (`POST /staff/pair`) by scanning the QR — the token — or
+ * by typing the staff member's mobile number and the six digits; the staff
+ * member chooses her own PIN ON THE PHONE; the server issues the device id.
+ * Non-negotiable #6: the PIN never passes through the dashboard and never sits
+ * in a QR.
+ *
+ * HASHES ONLY. `tokenHash` is sha256 (256 bits of CSPRNG need no stretching);
+ * `codeHash` is argon2id through `hashSecret`, because six digits are a million
+ * preimages and a fast digest of one is a laptop-second from the code.
+ *
+ * ENDS ONCE: `usedAt` (redeemed) or `voidedAt` (superseded by a newer code, or
+ * burned by five wrong digits — `failedAttempts`). The tenancy is composite
+ * foreign keys in the migration — `(staff_id, salon_id)`, `(created_by,
+ * salon_id)` and `(branch_id, salon_id)` — which Drizzle cannot express, so they
+ * are not restated as `.references()` here, `device_enrolment`'s convention.
+ */
+export const staffPairingCode = pgTable(
+  'staff_pairing_code',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    salonId: text('salon_id')
+      .notNull()
+      .references(() => salon.id, { onDelete: 'restrict' }),
+    staffId: text('staff_id').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    codeHash: text('code_hash').notNull(),
+    /** The till's branch, if the code also enrols the phone. NULL: pair only. */
+    branchId: text('branch_id'),
+    expiresAt: timestamptz('expires_at').notNull(),
+    usedAt: timestamptz('used_at'),
+    voidedAt: timestamptz('voided_at'),
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    /** The staff member whose `perms.team` issued it. */
+    createdBy: text('created_by').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('staff_pairing_code_token_uq').on(t.tokenHash),
+    uniqueIndex('staff_pairing_code_live_uq')
+      .on(t.staffId)
+      .where(sql`used_at IS NULL AND voided_at IS NULL`),
+    index('staff_pairing_code_salon_created_idx').on(t.salonId, t.createdAt.desc()),
+    check('staff_pairing_code_token_hash_is_sha256', sql`${t.tokenHash} ~ '^[0-9a-f]{64}$'`),
+    check('staff_pairing_code_code_hash_is_argon2id', sql`${t.codeHash} LIKE '$argon2id$%'`),
+    check('staff_pairing_code_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
+    check('staff_pairing_code_attempts_non_negative', sql`${t.failedAttempts} >= 0`),
+    check('staff_pairing_code_spent_once', sql`${t.usedAt} IS NULL OR ${t.voidedAt} IS NULL`),
   ],
 );

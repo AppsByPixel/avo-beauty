@@ -512,6 +512,13 @@
       "when": 1791261200000,
       "tag": "0072_a_platform_month_reads_its_window",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1791347600000,
+      "tag": "0073_a_phone_is_paired_not_typed",
+      "breakpoints": true
     }
   ]
 }

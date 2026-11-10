@@ -340,7 +340,12 @@ export const signInAttempt = pgTable(
   'sign_in_attempt',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    /** 'member' | 'web' | 'platform'. A CHECK, not an enum — migration 0039 says why. */
+    /**
+     * 'member' | 'web' | 'platform' | 'pair'. A CHECK, not an enum — migration
+     * 0039 says why. `'pair'` is `POST /staff/pair` (migration 0073,
+     * services/pairLimit.ts): unauthenticated and guessing a secret, so it is
+     * rationed on the same counter.
+     */
     surface: text('surface').notNull(),
     /**
      * HMAC-SHA256 over `surface | salon | identifier`, keyed with the deployment's
@@ -364,6 +369,9 @@ export const signInAttempt = pgTable(
   (t) => [
     index('sign_in_attempt_identity_idx').on(t.identityKey, t.createdAt.desc()),
     index('sign_in_attempt_salon_idx').on(t.salonId, t.createdAt.desc()),
-    check('sign_in_attempt_surface_known', sql`${t.surface} IN ('member', 'web', 'platform')`),
+    check(
+      'sign_in_attempt_surface_known',
+      sql`${t.surface} IN ('member', 'web', 'platform', 'pair')`,
+    ),
   ],
 );
