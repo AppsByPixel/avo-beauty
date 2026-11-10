@@ -15,7 +15,7 @@
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSCameraUsageDescription": "The scanner reads a customer's wallet code to take payment."
+        "NSCameraUsageDescription": "The scanner reads a customer's wallet code to take payment, and a pairing code to set up this phone."
       },
       "privacyManifests": {
         "NSPrivacyTracking": false,
@@ -54,7 +54,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "The scanner reads a customer's wallet code to take payment.",
+          "cameraPermission": "The scanner reads a customer's wallet code to take payment, and a pairing code to set up this phone.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
