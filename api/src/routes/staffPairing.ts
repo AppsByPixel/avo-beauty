@@ -46,7 +46,9 @@
  * THE RESIDUAL CHANNEL, stated rather than denied, as the member reset request
  * states its own: a wrong guess at a number that HAS a live code also runs an
  * UPDATE that changes a row (the strike count), where a miss runs the same
- * UPDATE and changes none; and the fifth strike writes one audit row. Both are a
+ * UPDATE and changes none; the row-lock statement locks her row where a miss
+ * runs it and locks none (as the code's FOR UPDATE always did); and the fifth
+ * strike writes one audit row. Each is a
  * database round trip against four argon2 verifies, behind a budget of ten
  * attempts per number per quarter-hour (services/pairLimit.ts) — not a
  * measurement platform.
@@ -244,7 +246,9 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
     await db.transaction(async (tx) => {
       // Serialise issuers on the staff row, and re-read the deactivation under
       // the lock: a leaver deactivated between the read above and here must not
-      // be handed a live code.
+      // be handed a live code. HER ROW BEFORE HER CODES — the redeem and the
+      // deactivation take the same order (§ LOCK ORDER at the redeem); reversing
+      // it here is the 40P01 lane D forced in phase 2.
       const [locked] = await tx
         .select({ id: staffUser.id, deactivatedAt: staffUser.deactivatedAt })
         .from(staffUser)
@@ -326,7 +330,8 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
    *   3. HASH THE CHOSEN PIN — on every request, hit or miss, so the token path's
    *      miss and hit cost the same argon2 and the hash is not computed under a
    *      row lock.
-   *   4. ONE TRANSACTION: find the live code(s) FOR UPDATE; on the phone path
+   *   4. ONE TRANSACTION: lock the staff row(s) the code(s) belong to, THEN find
+   *      the live code(s) FOR UPDATE (§ LOCK ORDER below); on the phone path
    *      verify the digits against a fixed number of hashes; on a miss record the
    *      strike and commit; on a hit CLAIM the code with the `used_at IS NULL AND
    *      voided_at IS NULL AND expires_at > now()` guard (two racing redeems
@@ -335,6 +340,36 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
    *      enrol the till if the code named a branch, write the audit rows, and
    *      mint the scanner session — all or nothing. A session minted outside the
    *      transaction could outlive a rolled-back claim.
+   *
+   * LOCK ORDER — staff_user, THEN staff_pairing_code, THEN device_enrolment. The
+   * same order `POST /staff/:id/pairing-code` (her row, then her codes) and
+   * `DELETE /staff/:id` (her row, then her codes, then her till) take.
+   *
+   * This handler used to take them the other way round — the code FOR UPDATE,
+   * then her row to bind the PIN — and lane D forced the cycle that made
+   * (e2e/staff-pairing.test.ts, phase 2 knownBug): a manager re-issuing holds her
+   * row and waits for the old code; the phone redeeming the old code holds the
+   * code and waits for her row; Postgres aborts one (`40P01 deadlock detected …
+   * while locking tuple in relation "staff_user"`) and the redeem answers 500.
+   * In the product, that is "new code" pressed at the moment the phone scans.
+   *
+   * A code row does not say whose it is until it is read, so the staff ids come
+   * from an UNLOCKED read first (4a), the rows are locked in id order (4b — the
+   * order matters only when the phone path finds more than one, and then it is
+   * what keeps two redeems of one number from crossing each other), and the codes
+   * are read AGAIN under that lock (4c), restricted to the staff rows actually
+   * held. That re-read is what the guarantees stand on, not the first read:
+   * a code voided, spent, struck or re-issued while 4b waited is seen as it is
+   * now (READ COMMITTED: each statement takes a fresh snapshot), and a code
+   * issued since 4a for somebody NOT in the locked set is simply not this
+   * request's to try — it behaves as if it arrived a moment earlier. The claim
+   * guard, the strike-under-lock and the single live code per staff row are
+   * unchanged; they now run with her row already held.
+   *
+   * UNIFORM COST KEPT: 4a, 4b and 4c run on every well-formed request, against
+   * no rows when nothing was found (`sql\`false\``, the strike UPDATE's own
+   * trick), so a number with a live code still costs the same round trips as
+   * one without.
    */
   app.post('/staff/pair', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -372,35 +407,67 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
 
     // ----------------------------------------------------- 4. the transaction --
     const outcome = await db.transaction(async (tx) => {
-      const select = () =>
-        tx
+      const herRow = and(
+        eq(staffUser.id, staffPairingCode.staffId),
+        eq(staffUser.salonId, staffPairingCode.salonId),
+      );
+
+      /**
+       * What finds the code(s): the token's hash, or the number. `null` for a
+       * malformed token, number or digits, which reads nothing — as before.
+       */
+      const lookup = viaToken
+        ? token
+          ? eq(staffPairingCode.tokenHash, hashPairingToken(token))
+          : null
+        : phone && digits
+          ? eq(staffUser.phone, phone)
+          : null;
+      const bound = viaToken ? 1 : PAIRING_MAX_CODES_PER_PHONE;
+
+      let candidates: PairingCandidate[] = [];
+      if (lookup) {
+        // 4a. WHOSE ROWS — unlocked, and only ever used to choose what to lock.
+        const seen = await tx
+          .select({ staffId: staffPairingCode.staffId })
+          .from(staffPairingCode)
+          .innerJoin(staffUser, herRow)
+          .where(and(lookup, liveCode()))
+          .orderBy(desc(staffPairingCode.createdAt))
+          .limit(bound);
+        const staffIds = [...new Set(seen.map((s) => s.staffId))];
+
+        // 4b. HER ROW FIRST — the issuer's and the leaver's order. The ORDER BY is
+        // the lock order (Postgres locks rows as the sorted scan returns them).
+        await tx
+          .select({ id: staffUser.id })
+          .from(staffUser)
+          .where(staffIds.length > 0 ? inArray(staffUser.id, staffIds) : sql`false`)
+          .orderBy(staffUser.id)
+          .for('update');
+
+        // 4c. THE CODES, re-read under her lock, and only for rows actually held.
+        candidates = await tx
           .select({ code: staffPairingCode, staff: staffUser })
           .from(staffPairingCode)
-          .innerJoin(
-            staffUser,
-            and(eq(staffUser.id, staffPairingCode.staffId), eq(staffUser.salonId, staffPairingCode.salonId)),
-          );
+          .innerJoin(staffUser, herRow)
+          .where(
+            and(
+              lookup,
+              staffIds.length > 0 ? inArray(staffPairingCode.staffId, staffIds) : sql`false`,
+              liveCode(),
+            ),
+          )
+          .orderBy(desc(staffPairingCode.createdAt))
+          .limit(bound)
+          .for('update', { of: staffPairingCode });
+      }
 
       let matched: PairingCandidate | null = null;
 
       if (viaToken) {
-        const rows = token
-          ? await select()
-              .where(and(eq(staffPairingCode.tokenHash, hashPairingToken(token)), liveCode()))
-              .limit(1)
-              .for('update', { of: staffPairingCode })
-          : [];
-        matched = rows[0] ?? null;
+        matched = candidates[0] ?? null;
       } else {
-        const candidates =
-          phone && digits
-            ? await select()
-                .where(and(eq(staffUser.phone, phone), liveCode()))
-                .orderBy(desc(staffPairingCode.createdAt))
-                .limit(PAIRING_MAX_CODES_PER_PHONE)
-                .for('update', { of: staffPairingCode })
-            : [];
-
         // A FIXED number of verifies, whatever was found. See the constant.
         for (let i = 0; i < PAIRING_MAX_CODES_PER_PHONE; i++) {
           const c = candidates[i];
@@ -484,11 +551,12 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
       // ------------------------------------------------- bind the PIN -------
       /**
        * THE PHONE SHE IS LEAVING, read under her row lock. The UPDATE below
-       * returns only the new values, and a plain read here could see a binding a
-       * concurrent redeem is about to replace — then the wrong phone would be
-       * unenrolled and the one actually replaced left live. The lock is the one
-       * the UPDATE takes next anyway, in the same order (code row, then staff
-       * row), so it adds no new way to deadlock.
+       * returns only the new values, and a read without the lock could see a
+       * binding a concurrent redeem is about to replace — then the wrong phone
+       * would be unenrolled and the one actually replaced left live. Her row is
+       * already held since 4b; the FOR UPDATE here re-states that rather than
+       * taking anything new, so a refactor that moves this read cannot quietly
+       * drop the lock it depends on.
        */
       const [prior] = await tx
         .select({ pinDeviceId: staffUser.pinDeviceId })
