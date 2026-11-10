@@ -74,6 +74,15 @@ const SHARED_TILL = `DEV-PR-TILL-${RUN}`;
 const REPAIR_DEVICES: string[] = [SHARED_TILL];
 /** A manager re-issues while her phone redeems the earlier code (phase 2 deadlock). */
 const RACER = `PR-ST-I-${RUN}`;
+/** Holds a live code when she is deactivated, then is re-hired through a reset link. */
+const CODE_LEAVER = `PR-ST-J-${RUN}`;
+const CODE_LEAVER_PHONE_LOCAL = localNumber();
+/** Pairs a `PH-` till, then is deactivated: the till must go with her. */
+const PHONE_LEAVER = `PR-ST-K-${RUN}`;
+/** Holds her PIN on a TYPED till, then is deactivated: the till must stay. */
+const TILL_LEAVER = `PR-ST-L-${RUN}`;
+const LEAVER_TILL = `DEV-PR-LEAVE-${RUN}`;
+REPAIR_DEVICES.push(LEAVER_TILL);
 const PAIRED_PHONE_LOCAL = localNumber();
 const PAIRED_PHONE = `+965${PAIRED_PHONE_LOCAL}`;
 const SECOND_PHONE = `+965${localNumber()}`;
@@ -160,6 +169,16 @@ suite('staff phone pairing', () => {
     await db.execute(sql`
       INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner)
       VALUES (${RACER}, ${SALON}, 'PR Racer', ${`pr-l-${RUN}`}, 'artist', true)`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, phone, role, perm_scanner)
+      VALUES (${CODE_LEAVER}, ${SALON}, 'PR Code Leaver', ${`pr-m-${RUN}`}, ${`+965${CODE_LEAVER_PHONE_LOCAL}`},
+              'artist', true)`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner)
+      VALUES (${PHONE_LEAVER}, ${SALON}, 'PR Phone Leaver', ${`pr-n-${RUN}`}, 'artist', true)`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner, pin_hash, pin_device_id)
+      VALUES (${TILL_LEAVER}, ${SALON}, 'PR Till Leaver', ${`pr-o-${RUN}`}, 'artist', true, ${pinHash}, ${LEAVER_TILL})`);
 
     manager = await dashboardSession(MANAGER);
     frontdesk = await dashboardSession(FRONTDESK);
@@ -181,7 +200,7 @@ suite('staff phone pairing', () => {
     if (db) {
       const ids = [
         PAIRED, SECOND, LEAVER, WEBBY, TEAM_NO_DASH, FOREIGN_STAFF, REPAIRED, TILL_USER,
-        RACER,
+        RACER, CODE_LEAVER, PHONE_LEAVER, TILL_LEAVER,
       ];
       for (const id of ids) {
         await db.execute(sql`DELETE FROM device_enrolment WHERE device_id IN
@@ -723,6 +742,151 @@ suite('staff phone pairing', () => {
       const ok = await post('/staff/pair', { token: fresh.token, pin: '2718' }, undefined, RACE_IP);
       expect(ok.statusCode, ok.body).toBe(200);
       expect(StaffPairResponseSchema.parse(ok.json()).staff.id).toBe(RACER);
+    });
+  });
+
+  // ========================================================== the leaver ==
+  /**
+   * Trunk's ruling, phase 2: deactivating a staff member retires her pairing
+   * state with her, in the same transaction, as it already spends her reset
+   * links — her live codes are voided, and the till enrolled under her
+   * server-issued `PH-` phone is revoked. A typed or seeded till is never
+   * touched.
+   */
+  describe('DELETE /staff/:id retires her pairing state', () => {
+    const LEAVE_IP = `10.${octet()}.${octet()}.${octet()}`;
+    const deactivate = (staffId: string) =>
+      app.inject({
+        method: 'DELETE',
+        url: `/staff/${staffId}`,
+        headers: { authorization: `Bearer ${manager}` },
+      });
+    const enrolmentsOf = (deviceId: string) =>
+      exec(sql`
+        SELECT branch_id, revoked_at, revoked_by_staff_id FROM device_enrolment
+         WHERE salon_id = ${SALON} AND device_id = ${deviceId}
+         ORDER BY created_at`);
+
+    it("voids her live code, so it cannot pair her even after she is re-hired within its life", async () => {
+      const code = await issueCode(CODE_LEAVER);
+
+      const res = await deactivate(CODE_LEAVER);
+      expect(res.statusCode, res.body).toBe(200);
+      const [row] = await exec(sql`
+        SELECT voided_at, used_at FROM staff_pairing_code
+         WHERE token_hash = ${createHash('sha256').update(code.token).digest('hex')}`);
+      expect(row!.voided_at, 'her code outlived her deactivation').not.toBeNull();
+      expect(row!.used_at, 'voided, not spent: nobody redeemed it').toBeNull();
+
+      // RE-HIRED through the product's own door: a reset link, accepted. The
+      // token is minted here because the route never returns one (#6); the row
+      // is the outbox a sender would deliver from.
+      const resetToken = `pr-reset-${RUN}-${'x'.repeat(24)}`;
+      await db.execute(sql`
+        INSERT INTO staff_password_reset (staff_id, salon_id, token_hash, requested_by, expires_at)
+        VALUES (${CODE_LEAVER}, ${SALON}, ${createHash('sha256').update(resetToken).digest('hex')},
+                ${MANAGER}, now() + interval '1 hour')`);
+      const rehire = await post('/auth/staff/password-reset', {
+        token: resetToken,
+        password: 'a-returning-password',
+      }, undefined, LEAVE_IP);
+      expect(rehire.statusCode, rehire.body).toBeLessThan(300);
+      const [back] = await exec(sql`SELECT deactivated_at, phone FROM staff_user WHERE id = ${CODE_LEAVER}`);
+      expect(back!.deactivated_at, 'precondition: she is active again').toBeNull();
+      expect(back!.phone, 'precondition: her number came back with her').toBe(`+965${CODE_LEAVER_PHONE_LOCAL}`);
+
+      // Inside the code's ten minutes, neither door pairs her with it.
+      const byToken = await post('/staff/pair', { token: code.token, pin: '1593' }, undefined, LEAVE_IP);
+      expect(byToken.statusCode).toBe(400);
+      expect(byToken.json()).toEqual(REFUSAL);
+      const byPhone = await post(
+        '/staff/pair',
+        { phone: CODE_LEAVER_PHONE_LOCAL, code: code.code, pin: '1593' },
+        undefined,
+        LEAVE_IP,
+      );
+      expect(byPhone.statusCode).toBe(400);
+      expect(byPhone.json()).toEqual(REFUSAL);
+      const [staff] = await exec(sql`SELECT pin_hash, pin_device_id FROM staff_user WHERE id = ${CODE_LEAVER}`);
+      expect(staff!.pin_hash).toBeNull();
+      expect(staff!.pin_device_id).toBeNull();
+
+      const [audit] = await exec(sql`
+        SELECT metadata->>'pairingCodesVoided' AS voided FROM audit_log
+         WHERE subject_id = ${CODE_LEAVER} AND action = 'Staff account deactivated'`);
+      expect(audit!.voided).toBe('1');
+
+      // A code issued AFTER the re-hire is hers, and works.
+      const fresh = await issueCode(CODE_LEAVER);
+      const ok = await post('/staff/pair', { token: fresh.token, pin: '1593' }, undefined, LEAVE_IP);
+      expect(ok.statusCode, ok.body).toBe(200);
+      REPAIR_DEVICES.push(StaffPairResponseSchema.parse(ok.json()).deviceId);
+    });
+
+    it('revokes the PH- till her phone was enrolled as, as the manager, with reason staff_deactivated', async () => {
+      const code = await issueCode(PHONE_LEAVER, { branchId: SALMIYA });
+      const res = await post('/staff/pair', { token: code.token, pin: '8024' }, undefined, LEAVE_IP);
+      expect(res.statusCode, res.body).toBe(200);
+      const phone = StaffPairResponseSchema.parse(res.json()).deviceId;
+      REPAIR_DEVICES.push(phone);
+      expect(phone.startsWith('PH-')).toBe(true);
+      expect((await enrolmentsOf(phone))[0]!.revoked_at, 'precondition: her phone is a live till').toBeNull();
+
+      const gone = await deactivate(PHONE_LEAVER);
+      expect(gone.statusCode, gone.body).toBe(200);
+
+      // Revoked, not deleted — the history stays — and by the manager who did it.
+      const rows = await enrolmentsOf(phone);
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.revoked_at).not.toBeNull();
+      expect(rows[0]!.revoked_by_staff_id).toBe(MANAGER);
+
+      // The re-pair's audit row, with the deactivation's reason.
+      const audits = await exec(sql`
+        SELECT kind::text AS kind, actor_kind::text AS actor_kind, actor_id, source::text AS source,
+               subject_type, detail, metadata->>'reason' AS reason, metadata->>'pairedStaffId' AS staff
+          FROM audit_log
+         WHERE subject_id = ${phone} AND action = 'device_revoked'`);
+      expect(audits).toEqual([
+        expect.objectContaining({
+          kind: 'rules',
+          actor_kind: 'staff',
+          actor_id: MANAGER,
+          source: 'merchant',
+          subject_type: 'device',
+          reason: 'staff_deactivated',
+          staff: PHONE_LEAVER,
+        }),
+      ]);
+      expect(String(audits[0]!.detail)).toContain(phone);
+
+      const [summary] = await exec(sql`
+        SELECT metadata->>'tillsRevoked' AS tills FROM audit_log
+         WHERE subject_id = ${PHONE_LEAVER} AND action = 'Staff account deactivated'`);
+      expect(summary!.tills).toBe('1');
+    });
+
+    it('leaves a typed DEV- till enrolled: it may be the counter tablet the team still uses', async () => {
+      const enrol = await post(
+        `/salons/${SALON}/devices`,
+        { deviceId: LEAVER_TILL, branchId: KUWAIT_CITY, label: 'PR leaver counter tablet' },
+        manager,
+      );
+      expect(enrol.statusCode, enrol.body).toBe(201);
+
+      const gone = await deactivate(TILL_LEAVER);
+      expect(gone.statusCode, gone.body).toBe(200);
+      const [staff] = await exec(sql`SELECT pin_device_id, deactivated_at FROM staff_user WHERE id = ${TILL_LEAVER}`);
+      expect(staff!.deactivated_at).not.toBeNull();
+      expect(staff!.pin_device_id, 'her PIN binding still goes').toBeNull();
+
+      expect(await enrolmentsOf(LEAVER_TILL)).toEqual([
+        expect.objectContaining({ branch_id: KUWAIT_CITY, revoked_at: null, revoked_by_staff_id: null }),
+      ]);
+      const [revokes] = await exec(sql`
+        SELECT count(*)::int AS n FROM audit_log
+         WHERE subject_id = ${LEAVER_TILL} AND action = 'device_revoked'`);
+      expect(revokes!.n).toBe(0);
     });
   });
 

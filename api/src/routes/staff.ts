@@ -33,9 +33,10 @@ import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
+import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
-import { staffPasswordReset, staffUser } from '../db/schema/staff';
+import { staffPairingCode, staffPasswordReset, staffUser } from '../db/schema/staff';
 import {
   PERM_COLUMN,
   PERMISSION_NAMES,
@@ -49,6 +50,7 @@ import {
 import { revokeAllSessions } from '../auth/sessions';
 import {
   hashPasswordResetToken as hashResetToken,
+  isServerIssuedDeviceId,
   mintPasswordResetToken as mintResetToken,
 } from '../auth/tokens';
 import { badRequest, conflict, notFound } from '../http/errors';
@@ -678,6 +680,11 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
    * PIN because `staff_user_pin_is_device_scoped` requires the two to be null
    * together.
    *
+   * And what she could still sign in WITH LATER goes too, in the same
+   * transaction: unused reset links are spent, live pairing codes are voided,
+   * and the till enrolled under her server-issued `PH-` phone is revoked
+   * (trunk's ruling, phase 2 — a typed or seeded till is never touched).
+   *
    * TWO REFUSALS, both of them lockouts waiting to happen:
    *
    *   - you cannot deactivate YOURSELF. A manager who does it by accident has
@@ -714,6 +721,22 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
 
     const deactivatedAt = new Date();
     const [row] = await db.transaction(async (tx) => {
+      /**
+       * HER ROW FIRST, and the phone her PIN is bound to read UNDER that lock —
+       * the redeem's reason (routes/staffPairing.ts § LOCK ORDER): a pair
+       * committing while this waits moves `pin_device_id` to a new `PH-` id, and
+       * that new phone is the till to revoke, not the one a plain read saw.
+       * staff_user, then staff_pairing_code, then device_enrolment — the order
+       * the issue and the redeem take, so a leaver deactivated mid-pairing
+       * cannot deadlock either.
+       */
+      const [held] = await tx
+        .select({ pinDeviceId: staffUser.pinDeviceId })
+        .from(staffUser)
+        .where(eq(staffUser.id, target.id))
+        .for('update');
+      const pinDeviceId = held?.pinDeviceId ?? null;
+
       const updated = await tx
         .update(staffUser)
         .set({
@@ -738,6 +761,76 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
         .set({ usedAt: deactivatedAt })
         .where(and(eq(staffPasswordReset.staffId, target.id), isNull(staffPasswordReset.usedAt)));
 
+      /**
+       * HER PAIRING STATE GOES WITH HER — trunk's ruling, phase 2, and the reset
+       * link's argument above: a code on a manager's screen, or in a phone's
+       * camera roll, outlives a deactivation by up to its ten minutes. The
+       * redeem refuses a deactivated member, but re-hire re-activates her, and
+       * then a code issued to the leaver would pair the returner without anyone
+       * issuing her one. Voided, not marked used: nobody redeemed it.
+       */
+      const voidedCodes = await tx
+        .update(staffPairingCode)
+        .set({ voidedAt: deactivatedAt })
+        .where(
+          and(
+            eq(staffPairingCode.staffId, target.id),
+            isNull(staffPairingCode.usedAt),
+            isNull(staffPairingCode.voidedAt),
+          ),
+        )
+        .returning({ id: staffPairingCode.id });
+
+      /**
+       * AND THE PHONE SHE PAIRED, IF IT IS A TILL — but only a phone THIS SERVER
+       * ISSUED, the re-pair's rule in routes/staffPairing.ts and for its reason:
+       * a `PH-` till is one person's phone, and that person has left; a typed or
+       * seeded id (`DEV-SCANNER-01`) may be the counter's shared tablet, which
+       * the rest of the team still signs into, and her leaving says nothing
+       * about it.
+       *
+       * Revoked exactly as the re-pair revokes, which is exactly as
+       * `DELETE /salons/:id/devices/:deviceId` does: `revoked_at IS NULL` in the
+       * WHERE so the row count decides, the history row kept, the same
+       * `rules` / `device_revoked` audit row. The actor is the manager who
+       * deactivated her — her leaving is that manager's act, and
+       * `device_enrolment_revocation_is_whole` needs a staff id in
+       * `revoked_by_staff_id` — and the reason is `staff_deactivated`.
+       */
+      let revokedTills = 0;
+      if (isServerIssuedDeviceId(pinDeviceId)) {
+        const unenrolled = await tx
+          .update(deviceEnrolment)
+          .set({ revokedAt: deactivatedAt, revokedByStaffId: p.id, updatedAt: deactivatedAt })
+          .where(
+            and(
+              eq(deviceEnrolment.salonId, target.salonId),
+              eq(deviceEnrolment.deviceId, pinDeviceId),
+              isNull(deviceEnrolment.revokedAt),
+            ),
+          )
+          .returning({ id: deviceEnrolment.id, label: deviceEnrolment.label });
+        revokedTills = unenrolled.length;
+
+        for (const till of unenrolled) {
+          await writeAudit(tx, p, {
+            salonId: target.salonId,
+            kind: 'rules',
+            action: 'device_revoked',
+            detail: `${till.label} (${pinDeviceId})`,
+            source: 'merchant',
+            subjectType: 'device',
+            subjectId: pinDeviceId,
+            metadata: {
+              via: 'staff_deactivation',
+              reason: 'staff_deactivated',
+              pairedStaffId: target.id,
+            },
+            ...clientMeta(req),
+          });
+        }
+      }
+
       await writeAudit(tx, p, {
         salonId: p.salonId,
         kind: 'access',
@@ -751,6 +844,8 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
           handle: target.handle,
           role: target.role,
           permsAtDeparture: permsOf(target),
+          pairingCodesVoided: voidedCodes.length,
+          tillsRevoked: revokedTills,
         },
         ...clientMeta(req),
       });
