@@ -195,9 +195,30 @@ export const copy = {
   // ----------------------------------------------------------------- void --
   /** :309 */
   voidSheetTitle: 'Void this charge?',
-  /** :310 */
+  /**
+   * CHANGED from the design, by ruling — DECISIONS.md § "Staff phone pairing,
+   * phone sign-in, and a truthful receipt line — Aftab, 2026-11-10", ruling 3,
+   * extended the same day ("yes change the void WhatsApp line too").
+   *
+   * design:310 reads "The full amount goes straight back to her wallet, the
+   * visit is removed, and she gets a WhatsApp notice. This is recorded against
+   * your name." The third clause was false twice over: there is no WhatsApp
+   * sender (`RECEIPT_DRIVER` is `logging | email`), and `POST /voids`
+   * (api/src/routes/charges.ts § performVoid) queues no receipt and no
+   * notification of any kind — `queueReceipts` is never called on a void. Only
+   * that clause changes. The replacement is worded in the ruling, not the design
+   * (INVENTED as far as the design is concerned), and it is true today: the
+   * wallet's bell marks the voided charge "Voided — the amount is back in your
+   * wallet" (`bellChargeVoided`, apps/wallet), off the `voidedAt` the API
+   * serialises from the reversal row this void writes.
+   *
+   * The KEY keeps its name on purpose, so the revert is one value.
+   * REVERT to the design's sentence when a WhatsApp sender ships AND
+   * `POST /voids` queues a notice. A sender alone is not enough — the void would
+   * still send her nothing.
+   */
   voidSheetBody:
-    'The full amount goes straight back to her wallet, the visit is removed, and she gets a WhatsApp notice. This is recorded against your name.',
+    'The full amount goes straight back to her wallet, the visit is removed, and her AVO app shows the void. This is recorded against your name.',
   /** :543 / :785 — the three reasons, in order */
   voidReasons: [
     { id: 'wrong', label: 'Wrong amount or service' },

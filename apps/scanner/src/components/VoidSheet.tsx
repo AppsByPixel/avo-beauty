@@ -102,9 +102,13 @@ export function VoidSheet({
        * `calendar_disconnected | booking_no_show | campaign_held`, and the
        * customer's own feed masks `note` on an `adjustment` by a database fact
        * rather than a ternary. Four checks, this lane's own, agreeing with Lane
-       * A's. Note that `voidSheetBody` above tells the staff member "she gets a
-       * WhatsApp notice" — that is design copy, kept verbatim, and it is false
-       * against this API today. Reported, not silently reworded.)
+       * A's. The same four made the design's void line (design:310) false: it
+       * promised her a WhatsApp message that nothing sends. That was reported
+       * rather than silently reworded, and Aftab ruled the replacement —
+       * `voidSheetBody` above now says her AVO app shows the void, which is true:
+       * the wallet bell marks the voided charge (`bellChargeVoided`). DECISIONS.md
+       * § "Staff phone pairing, phone sign-in, and a truthful receipt line",
+       * ruling 3 as extended 2026-11-10; copy/en.ts carries when to revert.)
        *
        * `reasonCode` is the CODE, and it is what reaches the artist whose work
        * this is about — `GET /artists/me/bookings § voidReason`, rendered by
