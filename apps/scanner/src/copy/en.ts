@@ -486,9 +486,80 @@ export const copy = {
   codeUsedBody: 'Ask the customer to show a fresh one.',
   scanUnreadable: "That isn't an AVO wallet code.",
 
+  // ------------------------------------------------------------- pairing --
+  // NO DESIGN EXISTS FOR THESE SCREENS. Every string in this group is INVENTED
+  // as far as the design is concerned, under DECISIONS.md § "Staff phone
+  // pairing, phone sign-in, and a truthful receipt line — Aftab, 2026-11-10"
+  // (ruling 1: build proper pairing). Where the ruling or its brief named the
+  // words, they are used as named; the rest are the plainest sentence that
+  // does the job. English only — design/README.md § Known gaps 1.
+  // See src/screens/SetupScreen.tsx and src/screens/ChoosePinScreen.tsx.
+  /** INVENTED (no design source); named in the ruling's brief. The screen title. */
+  setupTitle: 'Set up this phone',
+  /**
+   * INVENTED (no design source). Where the code comes from: lane C's "Pair a
+   * phone" action on the staff card (ruling § Surfaces). The lifetime is
+   * `STAFF_PAIRING_TTL_MINUTES`, passed in, so the sentence cannot drift from it.
+   */
+  setupBody: (minutes: number) =>
+    `Ask a manager to pair this phone from your staff card in the AVO dashboard. The code lasts ${minutes} minutes.`,
+  /** INVENTED (no design source); named in the ruling's brief. The first way in. */
+  setupScan: 'Scan the pairing code',
+  /** INVENTED (no design source); named in the ruling's brief. The second way in. */
+  setupTyped: 'Enter mobile number and code',
+  /**
+   * INVENTED (no design source); named in the ruling's brief. The old typed
+   * binding form (EnrolScreen), kept only as this muted path for the seeded pilot.
+   */
+  setupManual: 'Set up manually',
+  /**
+   * INVENTED (no design source). Shown only when the phone already has a
+   * binding and was sent here from the PIN screen's link, so a mistaken tap is
+   * not a dead end that needs a manager.
+   */
+  setupBackToSignIn: '‹ Back to sign in',
+  /** INVENTED (no design source). From the camera or the typed form back to the two choices. */
+  setupBack: '‹ Back',
+  /** INVENTED (no design source). Above the camera frame. */
+  setupScanPrompt: "Point the camera at the pairing code on the manager's screen.",
+  /**
+   * INVENTED (no design source). The camera-permission body on THIS screen.
+   * `cameraDeniedBody` above names a wallet code and the member lookup, both
+   * wrong here; `cameraDenied` and `cameraAsk` are reused as they are.
+   */
+  setupCameraDeniedBody: 'Turn it on in Settings, or enter your mobile number and code instead.',
+  /** INVENTED (no design source). */
+  setupPhoneLabel: 'Mobile number',
+  /**
+   * INVENTED (no design source). The two forms `domain/pairing.ts
+   * #normaliseStaffPhone` accepts, said once so a refused form is not a mystery.
+   */
+  setupPhoneHint: 'A Kuwait number can be typed without +965. Any other needs its + and country code.',
+  /** INVENTED (no design source). */
+  setupCodeLabel: 'Six-digit code',
+  /** INVENTED (no design source). */
+  setupContinue: 'Continue',
+  /** INVENTED (no design source); named in the ruling's brief. The PIN step's title. */
+  pairPinTitle: 'Choose a PIN',
+  /** INVENTED (no design source). The first entry. */
+  pairPinChoose: 'Four digits, to sign in on this phone',
+  /** INVENTED (no design source). The second entry. */
+  pairPinConfirm: 'Enter it again',
+  /** INVENTED (no design source). The two entries differed; both are cleared. */
+  pairPinMismatch: "Those PINs didn't match. Choose one again.",
+  /**
+   * INVENTED (no design source); worded in the ruling's brief. Every refusal of
+   * `POST /staff/pair` — `pairing_refused` — is one sentence, because the server
+   * answers every cause with one body on purpose (packages/types § staff
+   * pairing). Client-held rather than the server's message, as the brief names
+   * it; the 429 reuses `pinTooMany` / `pinTooManyTitle` above.
+   */
+  pairingRefused: "That code didn't work. Ask a manager for a new one.",
+
   // ----------------------------------------------------------- enrolment --
   // NO DESIGN EXISTS FOR THIS SCREEN — see src/screens/EnrolScreen.tsx for why
-  // it has to exist and what was escalated.
+  // it has to exist and what was escalated. Since the 2026-11-10 pairing ruling
+  // it is reached only from `setupManual` on the setup screen.
   enrolTitle: 'Set up this device',
   enrolBody:
     'A PIN is scoped to one device and one salon, so this phone has to be named before anyone can sign in.',

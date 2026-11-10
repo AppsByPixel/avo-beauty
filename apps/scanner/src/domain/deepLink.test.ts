@@ -52,6 +52,17 @@ describe('a URL that is not a payment code', () => {
     }
   });
 
+  /**
+   * The other `avostaff://` link (DECISIONS.md § Staff phone pairing, Aftab
+   * 2026-11-10). It carries a `t` too, and while signed in it must be silence —
+   * not a charge, and not "That isn't an AVO wallet code". The setup screen
+   * reads it through `domain/pairing.ts#parsePairingLink` instead.
+   */
+  it('is ignored when it is a staff pairing link', () => {
+    expect(deepLinkAction(`avostaff://pair?t=${'a'.repeat(43)}`)).toEqual({ kind: 'ignore' });
+    expect(deepLinkAction(`AVOSTAFF://PAIR?t=${'a'.repeat(43)}`)).toEqual({ kind: 'ignore' });
+  });
+
   it('is ignored when there is no launch URL at all', () => {
     // A standalone build opened from the home screen.
     expect(deepLinkAction(null)).toEqual({ kind: 'ignore' });
