@@ -91,7 +91,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function submitMerchant(): Promise<string> {
+async function submitMerchant(username = 'noura'): Promise<string> {
   window.history.replaceState(null, '', SCOPES.merchant.signIn);
   mount();
   // The router is a module singleton and outlives `cleanup()`, so the previous
@@ -100,7 +100,7 @@ async function submitMerchant(): Promise<string> {
   await waitFor(() => expect(router.state.location.pathname).toBe(SCOPES.merchant.signIn), LOADED);
   await screen.findByRole('button', { name: 'Sign in' }, LOADED);
   fireEvent.change(screen.getByLabelText('Workspace'), { target: { value: 'SAL-AMARA' } });
-  fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'noura' } });
+  fireEvent.change(screen.getByLabelText('Username or mobile number'), { target: { value: username } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'not-her-password' } });
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   const alert = await screen.findByRole('alert', {}, LOADED);
@@ -176,5 +176,34 @@ describe('console sign-in: the same mapping', () => {
   it('a network failure still shows the connection sentence', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     expect(await submitConsole()).toContain("Can't reach AVO. Check your connection and try again.");
+  });
+});
+
+/**
+ * A STAFF MEMBER'S MOBILE NUMBER IS A SIGN-IN NAME (Aftab, 2026-11-10 —
+ * DECISIONS.md § Staff phone pairing). The field says so, and the number leaves
+ * this browser exactly as she typed it, in `username`: reading "9912 3456" as
+ * +96599123456 is `POST /auth/web/session`'s job, so the dashboard and the
+ * scanner cannot drift into two readings of one number.
+ *
+ * And an unknown number is refused exactly as a wrong password is — the server
+ * makes the two indistinguishable, so this form must not tell them apart either.
+ */
+describe('merchant sign-in: a mobile number is a username', () => {
+  it('sends the number in `username` as typed, not reformatted', async () => {
+    answers(401, { error: 'invalid_credentials', message: 'Those details do not match.' });
+    await submitMerchant('9912 3456');
+    const init = fetchMock.mock.calls[0]?.[1];
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.username).toBe('9912 3456');
+    expect(body.salonId).toBe('SAL-AMARA');
+    expect(Object.keys(body)).not.toContain('phone');
+  });
+
+  it('an unknown number reads exactly as a wrong password', async () => {
+    answers(401, { error: 'invalid_credentials', message: 'Those details do not match.' });
+    expect(await submitMerchant('+96550000000')).toContain(
+      'That username and password do not match. Try again.',
+    );
   });
 });

@@ -268,7 +268,7 @@ describe('the Workspace field is reachable on every host the dashboard is served
     await signInPageOn('98a0-39-49-146-53.ngrok-free.app');
 
     fireEvent.change(screen.getByLabelText('Workspace'), { target: { value: 'SAL-AMARA' } });
-    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'amara' } });
+    fireEvent.change(screen.getByLabelText('Username or mobile number'), { target: { value: 'amara' } });
     const password = screen
       .getByRole('button', { name: 'Sign in' })
       .closest('form')
