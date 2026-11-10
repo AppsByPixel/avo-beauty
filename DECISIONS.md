@@ -2376,3 +2376,53 @@ ships.
 **Out of this slice, noted:** a manager PIN-unlock (the lockout copy promises one; none exists);
 proof the customer is present on a no-token charge (product call); the Tills copy that points at a
 device id "on the scanner's sign-in screen".
+
+**Trunk rulings during the build, 2026-11-10 (reversible; each argued in the lane's commit):**
+
+- **A re-pair unenrols the phone she left — only a server-issued one.** `POST /staff/pair`
+  revokes the live `device_enrolment` of her previous `pin_device_id` when that id carries the
+  `PH-` prefix the pair mint issues (`isServerIssuedDeviceId`). A typed or seeded till
+  (`DEV-SCANNER-01`) is never unenrolled by pairing: it may be a shared counter till. The old
+  phone could not sign in anyway; leaving it listed as a live till was clutter with a branch
+  attached. (lane A `fcc6cf6`)
+- **A leaver's pairing state leaves with her.** `DELETE /staff/:id` voids her live pairing codes
+  and revokes her `PH-` till in the same transaction, as it already voids her password-reset
+  links — otherwise a re-activation inside a code's ten minutes would bring back a code issued
+  before she left. (lane A, phase 3)
+- **One lock order for issue and redeem.** Lane D forced a deadlock between
+  `POST /staff/:id/pairing-code` (staff row, then codes) and `POST /staff/pair` (codes, then
+  staff row): a manager pressing "New code" as the phone redeems got a 500. Both now take the
+  same order. (lane A, phase 3; lane D's spec promoted from known bug)
+
+**Verified live, 2026-11-10.** Dashboard (browser, lane C): Pair a phone → QR, six digits,
+countdown; "New code" voids the old digits (`pairing_refused`), the new ones pair; `phone_taken`
+on a duplicate; sign-in by mobile number. Scanner (iPhone 17 simulator, lane B): "Enter mobile
+number and code" → choose PIN → signed in; relaunch → PIN works on the server-issued `PH-` id and
+not on `DEV-SCANNER-01`; a reused code is refused; a lookup charge shows "Receipt in the
+customer's AVO app". **Not verified:** the `avostaff://pair?t=` deep link and the camera reading
+the QR — the deep link needs the next native build (the checked-out `ios/` was prebuilt in August
+without the `avostaff` scheme), and the simulator has no camera.
+
+**Aftab, later the same day: "yes change the void WhatsApp line too".** The scanner's void sheet
+now says "…and her AVO app shows the void" instead of "she gets a WhatsApp notice": `POST /voids`
+queues nothing, and the wallet bell is what actually tells her (`bellChargeVoided`). Revert with
+the receipt lines when a WhatsApp sender ships.
+
+**Aftab, the same day: "yes add the scan and charge warning too".** "Pair a phone" warns, by
+name, when the account has Scan & charge off — a warning, not a block, because a paired phone is
+also how an artist reads My bookings and My schedule, which need no charge permission.
+
+**Follow-up, trunk + lane C + mock:** `StaffUserSchema.phone` stays `.nullable().optional()`. The API
+emits it on every path, but tightening it to `.nullable()` turned 27 dashboard tests and the mock's
+typecheck red (2026-11-10, measured): their staff fixtures omit the key. Add `phone: null` to those
+fixtures, then tighten.
+
+**Residual, pinned as known bugs in `e2e/staff-pairing.test.ts` (lane D, low):** two concurrent
+`DELETE /staff/:id` write two "deactivated" audit rows (pre-existing: the deactivated check is
+outside the lock); two managers pairing each other's phones at the same instant can still deadlock
+through foreign-key key-share locks. Also open: a code a manager issued stays redeemable for its ten
+minutes after that manager is deactivated.
+
+**Open, for Aftab:** under
+`RECEIPT_DRIVER=logging` a `receipt_job` is marked `channel=whatsapp, status=sent` although
+nothing sent it (pre-existing, lane A).
