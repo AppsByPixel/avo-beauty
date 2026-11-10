@@ -72,6 +72,8 @@ const SHARED_TILL = `DEV-PR-TILL-${RUN}`;
  * longer points at it.
  */
 const REPAIR_DEVICES: string[] = [SHARED_TILL];
+/** A manager re-issues while her phone redeems the earlier code (phase 2 deadlock). */
+const RACER = `PR-ST-I-${RUN}`;
 const PAIRED_PHONE_LOCAL = localNumber();
 const PAIRED_PHONE = `+965${PAIRED_PHONE_LOCAL}`;
 const SECOND_PHONE = `+965${localNumber()}`;
@@ -155,6 +157,9 @@ suite('staff phone pairing', () => {
     await db.execute(sql`
       INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner, pin_hash, pin_device_id)
       VALUES (${TILL_USER}, ${SALON}, 'PR Till', ${`pr-k-${RUN}`}, 'artist', true, ${pinHash}, ${SHARED_TILL})`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner)
+      VALUES (${RACER}, ${SALON}, 'PR Racer', ${`pr-l-${RUN}`}, 'artist', true)`);
 
     manager = await dashboardSession(MANAGER);
     frontdesk = await dashboardSession(FRONTDESK);
@@ -174,7 +179,10 @@ suite('staff phone pairing', () => {
 
   afterAll(async () => {
     if (db) {
-      const ids = [PAIRED, SECOND, LEAVER, WEBBY, TEAM_NO_DASH, FOREIGN_STAFF, REPAIRED, TILL_USER];
+      const ids = [
+        PAIRED, SECOND, LEAVER, WEBBY, TEAM_NO_DASH, FOREIGN_STAFF, REPAIRED, TILL_USER,
+        RACER,
+      ];
       for (const id of ids) {
         await db.execute(sql`DELETE FROM device_enrolment WHERE device_id IN
                                (SELECT pin_device_id FROM staff_user WHERE id = ${id})`);
@@ -639,6 +647,82 @@ suite('staff phone pairing', () => {
       const res = await post('/staff/pair', { token: `pair_${'B'.repeat(43)}`, pin: '1234' }, undefined, ip);
       expect(res.statusCode).toBe(429);
       expect(res.json().error).toBe('too_many_attempts');
+    });
+  });
+
+  // ========================================================= lock order ==
+  /**
+   * PHASE 2, lane D's knownBug (e2e/staff-pairing.test.ts): the issue locked her
+   * staff row then her codes, the redeem locked the code then her staff row, and
+   * a re-issue interleaved with a redeem of the earlier code was a `40P01` and a
+   * 500. Lane D's spec is the contract; this is the same arrangement held in
+   * lane A's own column, so the fix has a regression test that does not depend
+   * on another lane's file being promoted.
+   *
+   * ARRANGED, NOT HOPED FOR. A transaction here takes her row FOR UPDATE; the
+   * re-issue is let in and observed queueing on it; then the redeem, observed
+   * queueing too; then the row is released. Before the fix the redeem queued at
+   * the PIN bind holding the claimed code — the cycle. After it, the redeem
+   * queues at its first lock holding nothing, and simply loses to the re-issue.
+   */
+  describe('a re-issue racing a redeem of the earlier code', () => {
+    const RACE_IP = `10.${octet()}.${octet()}.${octet()}`;
+
+    /** Backends of this database waiting on a lock, other than the probe itself. */
+    const lockWaiters = async () =>
+      Number(
+        (
+          await exec(sql`
+            SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND pid <> pg_backend_pid()
+               AND wait_event_type = 'Lock'`)
+        )[0]!.n,
+      );
+    const until = async (cond: () => Promise<boolean>, what: string) => {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        if (await cond()) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`precondition failed: ${what}`);
+    };
+
+    it('both answer inside the contract — never a 500 — and the new code then pairs', async () => {
+      const first = await issueCode(RACER);
+
+      let release!: () => void;
+      const released = new Promise<void>((r) => (release = r));
+      let taken!: () => void;
+      const lockTaken = new Promise<void>((r) => (taken = r));
+      const holder = db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT 1 FROM staff_user WHERE id = ${RACER} FOR UPDATE`);
+        taken();
+        await released;
+      });
+      await lockTaken;
+
+      let reissue: ReturnType<typeof post> | undefined;
+      let redeem: ReturnType<typeof post> | undefined;
+      try {
+        reissue = post(`/staff/${RACER}/pairing-code`, {}, manager);
+        await until(async () => (await lockWaiters()) >= 1, 'the re-issue never queued on her row');
+        redeem = post('/staff/pair', { token: first.token, pin: '3141' }, undefined, RACE_IP);
+        await until(async () => (await lockWaiters()) >= 2, 'the redeem never queued behind it');
+      } finally {
+        release();
+        await holder;
+      }
+      const [reissued, redeemed] = await Promise.all([reissue!, redeem!]);
+
+      expect(reissued.statusCode, `the re-issue: ${reissued.body}`).toBe(201);
+      expect([200, 400], `the redeem: ${redeemed.statusCode} ${redeemed.body}`).toContain(redeemed.statusCode);
+      if (redeemed.statusCode === 400) expect(redeemed.json()).toEqual(REFUSAL);
+
+      // Either way the re-issued code is the live one, and it pairs.
+      const fresh = StaffPairingCodeSchema.parse(reissued.json());
+      const ok = await post('/staff/pair', { token: fresh.token, pin: '2718' }, undefined, RACE_IP);
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(StaffPairResponseSchema.parse(ok.json()).staff.id).toBe(RACER);
     });
   });
 
