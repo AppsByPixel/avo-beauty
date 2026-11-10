@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { StaffUser } from '@avo/types';
 import {
   Button,
@@ -9,17 +9,21 @@ import {
   FilterChips,
   FilterEmpty,
   FilterSelect,
+  InlineError,
   Pill,
   Segmented,
   Select,
   Skeleton,
   TextField,
 } from '@avo/ui';
+import { ApiError } from '../api/client.js';
 import {
   PERMISSIONS,
   ROLE_LABEL,
   applyPermissionRules,
   changedPerms,
+  formatStaffPhone,
+  readStaffPhone,
   roleOptionsFor,
   useCreateStaff,
   useDeactivateStaff,
@@ -27,8 +31,8 @@ import {
   useStaff,
   useUpdateStaff,
   type BranchAccess,
+  type CreateStaffInput,
   type PermissionName,
-  type StaffPerms,
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
@@ -77,6 +81,14 @@ import { SectionError, WriteError } from './sectionState.js';
  * "Temporary password" field. It is not built and must not be — non-negotiable #6
  * and `refuseCredentialFields` on the endpoint both refuse it. Access is
  * established with a reset link. See `useCreateStaff` for the full reasoning.
+ *
+ * ONE ADDITION WITH NO DESIGN BEHIND IT — Aftab approved it on 2026-11-10
+ * (DECISIONS.md § Staff phone pairing), so its copy is invented and plain:
+ *
+ *   - "Mobile number", optional, on New team account and on each card. It is a
+ *     second sign-in name beside the username, on the scanner and the dashboard.
+ *     `readStaffPhone` reads eight digits as Kuwait; the server stays the judge,
+ *     and its `phone_taken` / `invalid_phone` refusals land on the field.
  */
 
 type Tab = 'team' | 'customers';
@@ -460,6 +472,22 @@ function AccountCard({
   onRemove,
 }: AccountCardProps) {
   const perms = account.perms;
+
+  /* THE MOBILE NUMBER — shown in the identity column, edited below the head. */
+  const phone = account.phone ?? null;
+  const phoneButton = useRef<HTMLButtonElement>(null);
+  const [editingPhone, setEditingPhone] = useState(false);
+  const closePhone = useCallback(() => setEditingPhone(false), []);
+  /*
+   * The Add/Change button is not rendered while the editor is open, so focus is
+   * restored once it is back in the DOM — after the commit, not in the handler.
+   */
+  const phoneWasEditing = useRef(false);
+  useEffect(() => {
+    if (phoneWasEditing.current && !editingPhone) phoneButton.current?.focus();
+    phoneWasEditing.current = editingPhone;
+  }, [editingPhone]);
+
   /*
    * Two confirmations, both for actions whose consequence lands on somebody
    * else's phone before the merchant sees any feedback. Held in the card rather
@@ -487,6 +515,22 @@ function AccountCard({
         <div className="account__ident">
           <div className="account__name">{account.name}</div>
           <div className="account__handle">@{account.handle}</div>
+          <div className="account__phone">
+            <span className={phone ? undefined : 'account__phone--none'}>
+              {phone ? formatStaffPhone(phone) : 'No mobile number'}
+            </span>
+            {leaver || editingPhone ? null : (
+              <button
+                ref={phoneButton}
+                type="button"
+                className="account__phone-edit"
+                aria-label={`${phone ? 'Change' : 'Add'} mobile number — ${account.name}`}
+                onClick={() => setEditingPhone(true)}
+              >
+                {phone ? 'Change' : 'Add'}
+              </button>
+            )}
+          </div>
         </div>
 
         {leaver ? (
@@ -600,6 +644,8 @@ function AccountCard({
           </button>
         )}
       </div>
+
+      {editingPhone && !leaver ? <PhoneEditor account={account} onDone={closePhone} /> : null}
 
       {confirmRemove ? (
         /*
@@ -736,6 +782,95 @@ function AccountCard({
   );
 }
 
+/* ------------------------------------------------------------ mobile number */
+
+/** A refusal the server makes about the number itself, which belongs on the field. */
+function phoneRefusal(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  if (error.code === 'phone_taken') {
+    return error.message || 'Another active account in your salon already uses this number.';
+  }
+  if (error.code === 'invalid_phone') return error.message || null;
+  return null;
+}
+
+/**
+ * The card's mobile number, edited in place below the card's head.
+ *
+ * ITS OWN `useUpdateStaff`, NOT THE SCREEN'S. The screen's one write-error banner
+ * says "That account is unchanged." under the whole list, which is right for a
+ * chip and wrong for this: a number another teammate already uses is a fact about
+ * the FIELD, and the merchant needs it beside the box she typed in, with the box
+ * still open. A separate mutation keeps that refusal here and leaves the banner to
+ * the writes it was written for. Its success still lands in the roster cache
+ * through the same `patchRow`, so the card shows the number the server stored.
+ *
+ * Emptying the field and saving REMOVES the number (`phone: null`) — the field is
+ * optional, so "none" is a value it can be set back to.
+ */
+function PhoneEditor({ account, onDone }: { account: StaffUser; onDone: () => void }) {
+  const update = useUpdateStaff();
+  const current = account.phone ?? null;
+  const [draft, setDraft] = useState(() => (current ? formatStaffPhone(current) : ''));
+  const [localError, setLocalError] = useState<string | null>(null);
+  const errorId = useId();
+
+  const fieldError = localError ?? (update.isError ? phoneRefusal(update.error) : null);
+
+  function save() {
+    const reading = readStaffPhone(draft);
+    if (!reading.ok) {
+      setLocalError(reading.message);
+      return;
+    }
+    setLocalError(null);
+    if (reading.phone === current) {
+      onDone();
+      return;
+    }
+    update.mutate({ staffId: account.id, patch: { phone: reading.phone } }, { onSuccess: onDone });
+  }
+
+  return (
+    <div className="account__phone-form" role="group" aria-label={`Mobile number — ${account.name}`}>
+      <TextField
+        label="Mobile number"
+        placeholder="9912 3456"
+        inputMode="tel"
+        autoComplete="off"
+        autoFocus
+        value={draft}
+        disabled={update.isPending}
+        aria-invalid={fieldError ? true : undefined}
+        describedBy={fieldError ? errorId : undefined}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setLocalError(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') save();
+          if (event.key === 'Escape') onDone();
+        }}
+      />
+      {fieldError ? <InlineError id={errorId} message={fieldError} /> : null}
+      {update.isError && fieldError === null ? (
+        <WriteError error={update.error} reassurance="Her mobile number is unchanged." />
+      ) : null}
+      <p className="account__phone-note">
+        She can sign in with this number instead of her username. Leave it empty to remove it.
+      </p>
+      <div className="account__confirm-actions">
+        <Button variant="secondary" disabled={update.isPending} onClick={save}>
+          {update.isPending ? 'Saving…' : 'Save number'}
+        </Button>
+        <Button variant="quiet" disabled={update.isPending} onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The expiry of a reset link, in the salon's reading rather than an ISO string.
  * Time only when it is today — a 60-minute TTL never crosses a day in practice,
@@ -754,13 +889,7 @@ interface NewAccountFormProps {
   busy: boolean;
   error: unknown;
   onCancel: () => void;
-  onCreate: (input: {
-    name: string;
-    handle: string;
-    role: string;
-    branchAccess: BranchAccess;
-    perms: Partial<StaffPerms>;
-  }) => void;
+  onCreate: (input: CreateStaffInput) => void;
 }
 
 /**
@@ -783,7 +912,21 @@ function NewAccountForm({ branches, busy, error, onCancel, onCreate }: NewAccoun
   const [handle, setHandle] = useState('');
   const [role, setRole] = useState<string>('frontdesk');
   const [branchAccess, setBranchAccess] = useState<string>('all');
+  const [phone, setPhone] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const phoneErrorId = useId();
+
+  /*
+   * THE SERVER'S REFUSAL OF THE NUMBER LANDS ON THE NUMBER. `phone_taken` (another
+   * active account in this salon has it) and `invalid_phone` are about one field,
+   * so they render under it and the banner below stays for everything else. The
+   * check before the request (`readStaffPhone`) is the courtesy; this is the
+   * authority.
+   */
+  const [dismissed, setDismissed] = useState<unknown>(null);
+  const serverPhoneError = error !== dismissed ? phoneRefusal(error) : null;
+  const shownPhoneError = phoneError ?? serverPhoneError;
 
   /*
    * The same handle rule the server applies, applied before the request rather
@@ -807,13 +950,22 @@ function NewAccountForm({ branches, busy, error, onCancel, onCreate }: NewAccoun
       setLocalError('A username is letters, numbers, dots, dashes and underscores — no spaces.');
       return;
     }
+    const reading = readStaffPhone(phone);
+    if (!reading.ok) {
+      setLocalError(null);
+      setPhoneError(reading.message);
+      return;
+    }
     setLocalError(null);
+    setPhoneError(null);
     onCreate({
       name: name.trim(),
       handle: cleanHandle,
       role,
       branchAccess: branchAccess === 'all' ? 'all' : [branchAccess],
       perms: {},
+      // Absent, not null, when left empty: a new account with no number is the default.
+      ...(reading.phone === null ? {} : { phone: reading.phone }),
     });
   }
 
@@ -860,11 +1012,33 @@ function NewAccountForm({ branches, busy, error, onCancel, onCreate }: NewAccoun
           spellCheck={false}
           onChange={(event) => setHandle(event.target.value)}
         />
+        <div className="new-account__phone">
+          <TextField
+            label="Mobile number"
+            placeholder="9912 3456"
+            inputMode="tel"
+            autoComplete="off"
+            value={phone}
+            disabled={busy}
+            aria-invalid={shownPhoneError ? true : undefined}
+            describedBy={shownPhoneError ? phoneErrorId : undefined}
+            onChange={(event) => {
+              setPhone(event.target.value);
+              setPhoneError(null);
+              // Typing a different number answers the refusal; it stops showing.
+              setDismissed(error);
+            }}
+          />
+          {shownPhoneError ? <InlineError id={phoneErrorId} message={shownPhoneError} /> : null}
+          <p className="new-account__hint">
+            Optional. She can sign in with it instead of her username.
+          </p>
+        </div>
       </div>
 
       {localError ? (
         <div className="new-account__error">{localError}</div>
-      ) : error ? (
+      ) : error && phoneRefusal(error) === null ? (
         <WriteError error={error} reassurance="No account was created." />
       ) : null}
 

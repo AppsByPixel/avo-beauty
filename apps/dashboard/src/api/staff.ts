@@ -5,7 +5,11 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import { StaffUserSchema, type StaffUser } from '@avo/types';
+import {
+  PhoneSchema,
+  StaffUserSchema,
+  type StaffUser,
+} from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import type { Paginated } from './salon.js';
@@ -19,7 +23,7 @@ import type { Paginated } from './salon.js';
  *
  *   GET    /staff                      the roster
  *   POST   /staff                      create        (201)
- *   PATCH  /staff/{id}                 perms, role, branchAccess
+ *   PATCH  /staff/{id}                 perms, role, branchAccess, phone
  *   DELETE /staff/{id}                 deactivate, NOT delete
  *   POST   /staff/{id}/password-reset  send a link   (202)
  *
@@ -349,6 +353,8 @@ export interface StaffPatch {
   perms?: Partial<StaffPerms>;
   role?: string;
   branchAccess?: BranchAccess;
+  /** E.164, or `null` to remove the number. Always through `readStaffPhone` first. */
+  phone?: string | null;
 }
 
 /**
@@ -413,6 +419,8 @@ export interface CreateStaffInput {
   role: string;
   branchAccess: BranchAccess;
   perms: Partial<StaffPerms>;
+  /** E.164. Absent rather than `null` when the field was left empty. */
+  phone?: string;
 }
 
 export function useCreateStaff(): UseMutationResult<StaffUser, unknown, CreateStaffInput> {
@@ -558,6 +566,56 @@ export function useSendPasswordReset(): UseMutationResult<
      * would be inventing a state change the server did not make.
      */
   });
+}
+
+/* ========================================================================== */
+/*                         the staff member's mobile number                    */
+/* ========================================================================== */
+
+/**
+ * What the "Mobile number" field reads as, before any request.
+ *
+ * `null` is "no number" — the field is optional, and on the card's edit an
+ * emptied field removes the number. A refusal carries the sentence the field
+ * shows; the server still decides (`parseE164` behind `POST /staff` and
+ * `PATCH /staff/{id}`), this only spares the merchant a round trip for a typo.
+ */
+export type StaffPhoneReading =
+  | { ok: true; phone: string | null }
+  | { ok: false; message: string };
+
+export const STAFF_PHONE_FORMAT_HINT =
+  'Enter an 8-digit Kuwait number, or the full number with its country code, like +96599123456.';
+
+/**
+ * EIGHT DIGITS ARE KUWAIT, AND THAT IS THE ONE GUESS THIS MAKES.
+ *
+ * DECISIONS.md § Staff phone pairing: "A Kuwait 8-digit local number is read as
+ * `+965`" — the same reading the API applies to a mobile number typed at
+ * sign-in, so a manager typing "9912 3456" here and the staff member typing it
+ * on the scanner arrive at the same identity. Anything else must already be
+ * E.164, judged by `PhoneSchema` from `@avo/types` rather than a second copy of
+ * its regex here.
+ *
+ * Spaces and dashes are stripped first, as `parseE164` strips them on the
+ * server: "+965 9912-3456" is a number with punctuation, not a different number.
+ */
+export function readStaffPhone(raw: string): StaffPhoneReading {
+  const compact = raw.trim().replace(/[\s-]/g, '');
+  if (compact === '') return { ok: true, phone: null };
+  if (/^\d{8}$/.test(compact)) return { ok: true, phone: `+965${compact}` };
+  if (PhoneSchema.safeParse(compact).success) return { ok: true, phone: compact };
+  return { ok: false, message: STAFF_PHONE_FORMAT_HINT };
+}
+
+/**
+ * "+96599123456" → "+965 9912 3456". A Kuwait mobile is read in two fours; any
+ * other country is shown exactly as stored rather than grouped by a rule that
+ * is only right for one of them.
+ */
+export function formatStaffPhone(e164: string): string {
+  const kw = /^\+965(\d{4})(\d{4})$/.exec(e164);
+  return kw ? `+965 ${kw[1]} ${kw[2]}` : e164;
 }
 
 /** One place that knows how a single row is replaced inside the paginated list. */
