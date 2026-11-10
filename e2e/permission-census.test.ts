@@ -195,6 +195,21 @@ const ANONYMOUS: Record<string, string> = {
     'the same, for the console. Driven end to end in console-reset.test.ts.',
   'POST /staff/session': 'the scanner PIN front door, device-scoped and rate limited',
   /**
+   * PAIRING A PHONE — DECISIONS.md § "Staff phone pairing, phone sign-in, and a truthful
+   * receipt line — Aftab, 2026-11-10". Open for the reason `POST /auth/staff/password-reset`
+   * is: the phone being paired holds no credential yet, so the CODE is the credential — a
+   * high-entropy QR token, or the staff member's mobile number plus six digits issued by a
+   * manager holding perms.team (`POST /staff/:id/pairing-code`, pinned `→ team` below).
+   * Single-use, ten minutes, one refusal body for every cause, five wrong digits burn it,
+   * a per-address and per-phone budget in front. All of that is driven, and NOT here —
+   * an ANONYMOUS line is an exemption from permission probing by definition — in
+   * `staff-pairing.test.ts`.
+   */
+  'POST /staff/pair':
+    'the phone being paired has no credential yet; the single-use code a perms.team manager ' +
+    'issued IS the credential. Ten minutes, uniform refusals, five wrong digits burn it, ' +
+    'per-address and per-phone budget in front. Driven in staff-pairing.test.ts.',
+  /**
    * THE PAYMENT WEBHOOK, AND IT IS IN THIS LEDGER ONLY BECAUSE THE CENSUS CAN FINALLY
    * SEE IT.
    *
@@ -1266,7 +1281,23 @@ const PINNED_COVERAGE: string[] = [
   'POST /salons/:id/reports/sales/download-url → dashboard',
   'POST /scans → scanner',
   'POST /staff → team',
+  /**
+   * Staff phone pairing (DECISIONS.md, Aftab 2026-11-10). Written from the contract BEFORE
+   * lane A's routes were readable, so these two lines are red until they land, by design —
+   * they are what makes the census notice if the routes arrive under other names.
+   *
+   * ONE `→ team` LINE AND NOT TWO. The decision gates a code that names a `branchId` on
+   * perms.dashboard as well, but that half depends on the BODY, and the generated probe
+   * sends `{}`, so it can only ever reach the team gate. A census reading `→ dashboard` here
+   * would mean the guard ORDER is wrong — dashboard checked before team on every call. The
+   * body-dependent half is driven by hand in `staff-pairing.test.ts` ("with a branchId,
+   * perms.dashboard off → 403 with the dashboard copy"), with its mirror. The granted mirror
+   * below is safe to run: `/staff/ZZ-NO-SUCH-THING/pairing-code` is a 404, and no code is
+   * minted for nobody.
+   */
+  'POST /staff/:id/pairing-code → team',
   'POST /staff/:id/password-reset → team',
+  'POST /staff/pair [ANONYMOUS]',
   'POST /staff/session [ANONYMOUS]',
   'POST /topups [requireMember]',
   'POST /v1/platform/admins → admins',
