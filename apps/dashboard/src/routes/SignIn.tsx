@@ -331,8 +331,17 @@ export function SignIn() {
             }}
           />
 
+          {/*
+            "OR MOBILE NUMBER" IS NOT FROM THE DESIGN. AVO Login.dc.html 5a labels
+            this field "Username"; Aftab ruled on 2026-11-10 that a staff member's
+            own mobile number is a sign-in name too (DECISIONS.md § Staff phone
+            pairing), and `POST /auth/web/session` reads one in `username` — an
+            8-digit number as Kuwait. The value is sent exactly as typed (trimmed,
+            like every other username): reading it is the server's job, so the
+            dashboard and the scanner cannot disagree about what a number means.
+          */}
           <TextField
-            label="Username"
+            label="Username or mobile number"
             placeholder="amara"
             autoComplete="username"
             autoCapitalize="none"

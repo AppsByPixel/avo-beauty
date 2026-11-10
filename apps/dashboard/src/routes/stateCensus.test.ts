@@ -449,6 +449,11 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  * read, no screen; its pending, refused and offline states are pinned in
  * `overviewExport.test.tsx`, and its hosts (the analytics grid, Gross by day)
  * own the loading/empty/error/offline of the figures it exports.
+ * `PairPhoneDialog.tsx` is a modal over one Accounts card. It owns no READ — its
+ * one request is a write (`POST /staff/{id}/pairing-code`), so there is nothing to
+ * be empty or stale. Its pending (Skeletons), refused and offline (`WriteError`)
+ * and expired states are its own and pinned in `pairPhoneDialog.test.tsx`; the
+ * roster it sits on is `Accounts.tsx`'s, which is a SECTION_SCREENS entry.
  */
 const NON_SCREENS = [
   'NotBuiltYet.tsx',
@@ -457,6 +462,7 @@ const NON_SCREENS = [
   'depositCopy.tsx',
   'walletCardChoice.tsx',
   'overviewExport.tsx',
+  'PairPhoneDialog.tsx',
 ] as const;
 
 /**

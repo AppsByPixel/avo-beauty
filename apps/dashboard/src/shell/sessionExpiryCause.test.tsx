@@ -305,7 +305,7 @@ async function expireTheSession(scope: 'merchant' | 'owner') {
 
 /** Fill the merchant door's three fields and submit. */
 async function signInWith() {
-  const username = screen.getByLabelText('Username');
+  const username = screen.getByLabelText('Username or mobile number');
   const workspace = screen.getByLabelText('Workspace');
   const form = username.closest('form');
   if (!form) throw new Error('The sign-in fields are not inside a <form>.');
