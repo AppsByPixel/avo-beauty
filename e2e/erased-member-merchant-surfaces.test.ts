@@ -982,6 +982,28 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
  * exemption somebody has to maintain. A hand-kept ledger of exceptions is what
  * rotted `DYNAMIC_PERMISSION` in `permission-census.test.ts` within a day.
  *
+ * A STAFF MEMBER'S OWN NUMBER IS NOT A MEMBER'S, AND IT IS SET ASIDE BY SHAPE TOO.
+ * The regex below matches on the receiver's NAME (`member`, `m`, `r`, `row`),
+ * and a name is not a table. Migration 0073 gave `staff_user` a `phone` column —
+ * a staff member's own sign-in number (DECISIONS.md § Staff phone pairing, Aftab
+ * 2026-11-10) — and `serialiseStaff(row: typeof staffUser.$inferSelect)` emits it
+ * as `phone: row.phone ?? null`, which this scan then reported as a member's
+ * phone at `routes/staff.ts:84`. It is not one, and erasure cannot reach it:
+ * `services/erasure.ts` never imports `staffUser` and no write in it targets
+ * `staff_user`, and `staff_user` has no column pointing at a member.
+ *
+ * THE FIX WAS NOT A FILE ENTRY BELOW, deliberately. `ACCOUNTED` is keyed by
+ * FILE, and `routes/staff.ts` is precisely the file that must not be waved
+ * through whole: it imports `member` and holds a member row in `m` for
+ * `POST /scans` (`const m = rows[0]`, then `serialiseMember(m)`) — the very
+ * variable name this regex watches. A `staff.ts` entry would have accepted a
+ * future `phone: m.phone` beside it without a word. So the discriminator is the
+ * receiver's DECLARED TABLE: a site whose receiver is a parameter of its nearest
+ * enclosing top-level function, declared `typeof staffUser.$inferSelect`, is a
+ * staff phone and is set aside — anything else, including every receiver whose
+ * table cannot be read off the source, is still counted as a member's. The
+ * default is the conservative direction; only a positive `staffUser` exempts.
+ *
  * WHY PHONE AND NOT NAME. The tombstone NAME is the de-identified answer and is
  * meant to travel — "Deleted account" is what a merchant should read. Only the
  * phone is dialable, so only the phone is the leak, and a census over `name`
@@ -1024,15 +1046,49 @@ describe('the inventory — every projection of a member phone in api/src is acc
      * `<key>: member.phone` or `<key>: m.phone`. A projection has a key; a
      * predicate does not.
      */
-    const projection = /[A-Za-z0-9_]+\s*:\s*(?:member|m|r|row)\.phone\b/;
+    const projection = /[A-Za-z0-9_]+\s*:\s*(member|m|r|row)\.phone\b/;
+
+    /**
+     * The table `receiver` is DECLARED as at line `at`, or `null` when the source
+     * does not say. Read off the NEAREST ENCLOSING TOP-LEVEL FUNCTION only — its
+     * own parameter list, `(<receiver>: typeof <table>.$inferSelect` — and only if
+     * nothing between that header and the site rebinds the name. A sibling
+     * lambda's parameter higher up the same file is NOT an enclosing declaration,
+     * which is why the walk stops at the first column-0 `function` or `}` rather
+     * than searching the file. `null` keeps the site COUNTED.
+     *
+     * Over-reach is caught by this same spec: were it ever to read
+     * `serialiseMember(m: typeof member.$inferSelect)` as staff, `routes/auth.ts`
+     * would drop out of `files` and the staleness check at the bottom goes red
+     * naming it.
+     */
+    const declaredTable = (lines: string[], at: number, receiver: string): string | null => {
+      const declares = new RegExp(`[(,]\\s*${receiver}\\s*:\\s*typeof\\s+([A-Za-z0-9_]+)\\.\\$inferSelect\\b`);
+      const rebinds = new RegExp(
+        `\\b(?:const|let|var)\\s+(?:\\[\\s*)?${receiver}\\b|[(,]\\s*${receiver}\\s*(?:[),=]|=>)|\\b${receiver}\\s*=>`,
+      );
+      for (let i = at - 1; i >= 0; i--) {
+        const line = lines[i]!;
+        if (/^(?:export\s+)?(?:async\s+)?function\b/.test(line)) {
+          return declares.exec(line)?.[1] ?? null;
+        }
+        if (/^\}/.test(line) || rebinds.test(line)) return null;
+      }
+      return null;
+    };
 
     const sites: string[] = [];
+    /** Set aside as a staff member's own number — named in every failure message below. */
+    const staffSites: string[] = [];
     for (const dir of roots) {
       for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.includes('.test.'))) {
         const rel = `${dir.slice(repoRoot.length + 1)}/${file}`.replace(/\\/g, '/');
-        const source = readFileSync(join(dir, file), 'utf8');
-        source.split('\n').forEach((line, i) => {
-          if (projection.test(line)) sites.push(`${rel}:${i + 1}`);
+        const lines = readFileSync(join(dir, file), 'utf8').split('\n');
+        lines.forEach((line, i) => {
+          const hit = projection.exec(line);
+          if (!hit) return;
+          if (declaredTable(lines, i, hit[1]!) === 'staffUser') staffSites.push(`${rel}:${i + 1}`);
+          else sites.push(`${rel}:${i + 1}`);
         });
       }
     }
@@ -1061,7 +1117,9 @@ describe('the inventory — every projection of a member phone in api/src is acc
         'and what was missing was the list. Add the site here with an account of where it ' +
         'surfaces, and if the answer is "a merchant sees it", add it to § 2 as well: an ' +
         'entry here without a driven scan is a note, not a guard.\n\n' +
-        `Found: ${sites.join(', ')}\n`,
+        `Found: ${sites.join(', ')}\n` +
+        `Set aside as a STAFF member's own number (receiver declared \`typeof staffUser.$inferSelect\`): ` +
+        `${staffSites.join(', ') || 'none'}\n`,
     ).toEqual([]);
 
     /**
