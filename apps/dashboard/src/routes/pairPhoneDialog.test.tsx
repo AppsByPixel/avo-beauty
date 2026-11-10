@@ -137,15 +137,19 @@ function codeBody(over: Record<string, unknown> = {}) {
 /** Responses for the pairing route, in order. A function is called with the body. */
 let pairingAnswers: Array<(body: unknown) => unknown> = [];
 
+/** What `GET /staff` answers. Mutable per test, so a refetch can carry a change. */
+let roster: ReadonlyArray<ReturnType<typeof staff>> = STAFF;
+
 beforeEach(() => {
   branches = ONE_BRANCH;
   session.perms = { team: true, dashboard: true };
   pairingAnswers = [];
+  roster = STAFF;
   window.localStorage.clear();
   window.sessionStorage.clear();
   window.history.replaceState(null, '', '/accounts');
   authedRequest.mockImplementation((_scope: string, path: string, options?: { body?: unknown }) => {
-    if (path === '/staff') return Promise.resolve({ items: STAFF, nextCursor: null });
+    if (path === '/staff') return Promise.resolve({ items: roster, nextCursor: null });
     if (/^\/staff\/[^/]+\/pairing-code$/.test(path)) {
       const next = pairingAnswers.shift();
       if (!next) throw new Error(`no pairing answer queued for ${path}`);
@@ -355,6 +359,132 @@ describe('Pair a phone — the code', () => {
     await act(async () => release(undefined));
     expect(await within(dialog).findByText('654 321')).toBeTruthy();
     expect(pairingCalls()).toHaveLength(2);
+  });
+});
+
+/* ============================================= the Scan & charge warning == */
+
+/**
+ * RULING (Aftab, in chat, 2026-11-10 — "yes add the scan and charge warning too").
+ * Pairing an account whose Scan & charge is off succeeds and the phone signs in —
+ * and then cannot take a charge, with nothing in this dialog having said so. The
+ * dialog now says so. A WARNING, NOT A BLOCK: a paired phone is also how a staff
+ * member reads My bookings and My schedule, which need no Scan & charge, so the
+ * code is still requested and still shown either way.
+ *
+ * The copy is exact, and names the account twice rather than using a pronoun —
+ * nobody's pronouns are recorded.
+ */
+describe('the Scan & charge warning', () => {
+  const warningFor = (name: string) =>
+    `${name} can sign in on this phone but can't take payments yet: Scan & charge is off for this account. Turn it on from the card to let ${name} charge.`;
+
+  /** The roster with one account's `perms.scanner` set. */
+  const withScanner = (id: string, scanner: boolean) =>
+    STAFF.map((s) => (s.id === id ? { ...s, perms: { ...s.perms, scanner } } : s));
+
+  /** Every request the screen made was the roster read or the one pairing POST. */
+  const onlyRosterAndPairing = () =>
+    authedRequest.mock.calls.every(
+      ([, path]) => path === '/staff' || /^\/staff\/[^/]+\/pairing-code$/.test(String(path)),
+    );
+
+  it('perms.scanner off: the warning, in exact words, above the QR and digits — and the code is still issued and shown', async () => {
+    roster = withScanner('ST-002', false);
+    pairingAnswers.push(() => codeBody());
+    mount();
+    const dialog = await openFor('Hessa Al-Mutairi');
+    const digits = await within(dialog).findByText('123 456');
+
+    const notice = within(dialog).getByText(warningFor('Hessa Al-Mutairi'));
+    expect(notice.textContent).toBe(warningFor('Hessa Al-Mutairi'));
+    // The name, substituted both times.
+    expect(notice.textContent?.split('Hessa Al-Mutairi')).toHaveLength(3);
+    expect(notice.textContent).not.toMatch(/\{name\}|\b(she|her|he|him|his|they|them)\b/i);
+    // The chip's own label, so a manager can find it on the card.
+    expect(notice.textContent).toContain('Scan & charge');
+
+    // Above the QR and the digits.
+    const qr = within(dialog).getByRole('img', { name: 'Pairing QR code for Hessa Al-Mutairi' });
+    expect(notice.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.compareDocumentPosition(digits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // The dialog's description, so it is read when focus enters the dialog.
+    expect(notice.id).toBeTruthy();
+    expect(dialog.getAttribute('aria-describedby')).toBe(notice.id);
+
+    // A warning, not a block.
+    expect(pairingCalls()).toHaveLength(1);
+    expect(pairingCalls()[0]![1]).toBe('/staff/ST-002/pairing-code');
+    expect(qr.querySelector('path')?.getAttribute('d')).toBe(qrPath(pairingPayload(TOKEN)).d);
+    expect(onlyRosterAndPairing()).toBe(true);
+  });
+
+  it('perms.scanner on: no warning — and the same code is issued and shown', async () => {
+    roster = withScanner('ST-002', true);
+    pairingAnswers.push(() => codeBody());
+    mount();
+    const dialog = await openFor('Hessa Al-Mutairi');
+    await within(dialog).findByText('123 456');
+
+    expect(within(dialog).queryByText(/can't take payments/)).toBeNull();
+    expect(dialog.textContent).not.toContain('Scan & charge is off');
+    expect(dialog.hasAttribute('aria-describedby')).toBe(false);
+
+    expect(pairingCalls()).toHaveLength(1);
+    const qr = within(dialog).getByRole('img', { name: 'Pairing QR code for Hessa Al-Mutairi' });
+    expect(qr.querySelector('path')?.getAttribute('d')).toBe(qrPath(pairingPayload(TOKEN)).d);
+  });
+
+  it('names whichever account the dialog is for', async () => {
+    roster = withScanner('ST-003', false);
+    pairingAnswers.push(() => codeBody({ staffId: 'ST-003' }));
+    mount();
+    const dialog = await openFor('Dana Yousef');
+    await within(dialog).findByText('123 456');
+    expect(within(dialog).getByText(warningFor('Dana Yousef'))).toBeTruthy();
+  });
+
+  it('is not shown over a refusal — "can sign in on this phone" beside "Nothing was paired." would contradict it', async () => {
+    roster = withScanner('ST-002', false);
+    pairingAnswers.push(() => {
+      throw new ApiError('That account has been removed from the team.', {
+        status: 409,
+        code: 'staff_deactivated',
+      });
+    });
+    pairingAnswers.push(() => codeBody());
+    mount();
+    const dialog = await openFor('Hessa Al-Mutairi');
+    await within(dialog).findByRole('alert');
+    expect(within(dialog).queryByText(/can't take payments/)).toBeNull();
+    expect(dialog.hasAttribute('aria-describedby')).toBe(false);
+
+    // Try again lands a code, and the warning is back above it.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    await within(dialog).findByText('123 456');
+    expect(within(dialog).getByText(warningFor('Hessa Al-Mutairi'))).toBeTruthy();
+  });
+
+  it('goes away when the roster refetches with Scan & charge on — the card’s own data, no request of its own', async () => {
+    roster = withScanner('ST-002', false);
+    pairingAnswers.push(() => codeBody());
+    const { client } = mount();
+    const dialog = await openFor('Hessa Al-Mutairi');
+    await within(dialog).findByText('123 456');
+    expect(within(dialog).getByText(warningFor('Hessa Al-Mutairi'))).toBeTruthy();
+
+    // Granted elsewhere — another tab, another manager — and the roster is re-read.
+    roster = withScanner('ST-002', true);
+    await act(async () => client.invalidateQueries());
+
+    await waitFor(() => expect(within(dialog).queryByText(/can't take payments/)).toBeNull());
+    expect(dialog.hasAttribute('aria-describedby')).toBe(false);
+    // The same dialog and the same code: the refetch neither closed it nor re-issued.
+    expect(screen.getByRole('dialog', { name: 'Pair a phone' })).toBe(dialog);
+    expect(within(dialog).getByText('123 456')).toBeTruthy();
+    expect(pairingCalls()).toHaveLength(1);
+    expect(onlyRosterAndPairing()).toBe(true);
   });
 });
 

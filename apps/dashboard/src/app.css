@@ -3946,6 +3946,19 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/* "Scan & charge is off for this account" — a consequence to read, not an error:
+   `.account__confirm`'s warning surface and register, warn text on warn ground.
+   No brand fill, so non-negotiable #9 has nothing to bite on. */
+.pair__warn {
+  margin: 0;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
 .pair__actions {
   display: flex;
   gap: 10px;

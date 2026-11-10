@@ -9,6 +9,7 @@ import {
 import { Button, Select, Skeleton } from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import {
+  PERMISSIONS,
   formatStaffPhone,
   issuePairingCode,
   staffKeys,
@@ -109,6 +110,27 @@ export function formatCountdown(ms: number): string {
 /** "123456" → "123 456". */
 export function groupDigits(code: string): string {
   return `${code.slice(0, 3)} ${code.slice(3)}`;
+}
+
+/**
+ * The card's own name for `perms.scanner` — the chip's label in
+ * `api/staff.ts § PERMISSIONS` — so this notice and the chip it sends a manager
+ * to can never call it two different things.
+ */
+const SCAN_AND_CHARGE = PERMISSIONS.find((p) => p.key === 'scanner')?.label ?? 'Scan & charge';
+
+/**
+ * INVENTED — Aftab's ruling, in chat, 2026-11-10: "yes add the scan and charge
+ * warning too". Pairing an account whose Scan & charge is off succeeds and the
+ * phone signs in, and then it cannot take a charge — and nothing here said so.
+ *
+ * A WARNING, NOT A BLOCK: a paired phone is also how a staff member reads My
+ * bookings and My schedule, which need no Scan & charge, so the code is still
+ * issued and shown. The account is named twice rather than given a pronoun,
+ * because nobody's pronouns are recorded.
+ */
+function scanChargeWarning(name: string): string {
+  return `${name} can sign in on this phone but can't take payments yet: ${SCAN_AND_CHARGE} is off for this account. Turn it on from the card to let ${name} charge.`;
 }
 
 type Phase =
@@ -290,6 +312,17 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
   /** Showing a code that still works. `shown` past its deadline is expired for up to a tick. */
   const live = shown !== null && remaining > 0 ? shown : null;
 
+  /*
+   * THE SCAN & CHARGE WARNING — `scanChargeWarning` above. `account` is the
+   * card's own row from the roster query, so there is no request of its own: a
+   * grant that reaches the roster (the chip's mutation patches the row; a refetch
+   * replaces it) re-renders this dialog without it. `!== true` is the chip's own
+   * test for "on", so the two cannot disagree. Not over a refusal: "can sign in on
+   * this phone" beside "Nothing was paired." would contradict it.
+   */
+  const warnId = `${titleId}-scan`;
+  const cannotCharge = account.perms.scanner !== true && phase.kind !== 'failed';
+
   return (
     <div className="pair" role="presentation">
       <div
@@ -297,6 +330,7 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        {...(cannotCharge ? { 'aria-describedby': warnId } : {})}
         ref={panel}
         tabIndex={-1}
       >
@@ -321,6 +355,12 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
         </div>
 
         <div className="pair__body">
+          {cannotCharge ? (
+            <p className="pair__warn" id={warnId}>
+              {scanChargeWarning(account.name)}
+            </p>
+          ) : null}
+
           {phase.kind === 'choose' ? (
             <div className="pair__choose">
               <Select
