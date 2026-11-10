@@ -74,7 +74,7 @@
  * `services/signInLimit.ts § THERE IS NO EXEMPTION` keeps the measurement.
  */
 
-import { and, asc, eq, gte, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, ne, or, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
@@ -101,7 +101,7 @@ import {
 } from '../auth/sessions';
 import { hashPasswordResetToken, mintPasswordResetToken } from '../auth/tokens';
 import { badRequest, conflict, forbidden, tooManyRequests, unauthorized } from '../http/errors';
-import { parseE164 } from '../http/fields';
+import { normaliseStaffPhone, parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
 import { type Executor, writeAudit } from '../services/audit';
 import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
@@ -774,6 +774,17 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const password = typeof body.password === 'string' ? body.password : '';
 
     /**
+     * A MOBILE NUMBER IS A USERNAME TOO — Aftab, 2026-11-10 (DECISIONS.md § Staff
+     * phone pairing). `+96599124408`, `+965 9912 4408` and `99124408` (eight
+     * digits read as Kuwait) all normalise to one E.164; anything that does not
+     * read as a number is a handle, exactly as before. A handle cannot contain a
+     * `+` or a space, and `POST /staff` now refuses one that reads as a number, so
+     * the two spaces only meet at an eight-digit handle created before that rule
+     * — and the lookup below still finds it.
+     */
+    const asPhone = normaliseStaffPhone(username);
+
+    /**
      * The same budget as the wallet and the console, keyed on `(salon, username)`
      * — the pair `staff_user_salon_handle_uq` makes unique and the same pair the
      * WHERE clause below uses, so a variant that dodges the bucket also fails to
@@ -781,13 +792,38 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
      *
      * The lower-casing is above this line on purpose: `NOURA` and `noura` are one
      * account, so they must be one bucket.
+     *
+     * A NUMBER IS KEYED ON ITS E.164, for the same reason: `99124408` and
+     * `+96599124408` are one account, so they are one bucket — every spelling of
+     * a number that can reach a row lands in that number's bucket, and a legacy
+     * eight-digit handle can only be reached by a spelling that normalises to the
+     * same number. Handles are keyed exactly as they always were, so no existing
+     * bucket moved.
      */
-    await chargeSignInBudget(db, 'web', salonId, username);
+    await chargeSignInBudget(db, 'web', salonId, asPhone ?? username);
 
+    /**
+     * ONE QUERY, ONE ROW, ONE VERIFY — whichever kind of name was typed, so a
+     * number and a handle cost the same and an unknown number is answered
+     * exactly as a wrong password (below). By number, only an ACTIVE row matches
+     * (`staff_user_salon_active_phone_uq` makes that unique; a leaver holds no
+     * password anyway). The phone match is preferred over a legacy handle match.
+     */
     const rows = await db
       .select()
       .from(staffUser)
-      .where(and(eq(staffUser.salonId, salonId), eq(staffUser.handle, username)))
+      .where(
+        and(
+          eq(staffUser.salonId, salonId),
+          asPhone === null
+            ? eq(staffUser.handle, username)
+            : or(
+                and(eq(staffUser.phone, asPhone), isNull(staffUser.deactivatedAt)),
+                eq(staffUser.handle, username),
+              ),
+        ),
+      )
+      .orderBy(sql`(${staffUser.phone} IS NOT DISTINCT FROM ${asPhone}) DESC`)
       .limit(1);
     const staff = rows[0];
 
@@ -1042,6 +1078,33 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const passwordHash = await hashSecret(password);
 
     /**
+     * HER MOBILE NUMBER, IF SOMEBODY ACTIVE NOW HOLDS IT, DOES NOT COME BACK WITH
+     * HER. `staff_user_salon_active_phone_uq` (migration 0073) is unique among
+     * ACTIVE staff only, because a number is a SIM and the next hire may hold a
+     * leaver's — so re-activating her could otherwise meet the index as a 500 on
+     * the one door that lets a leaver back in. Her number is dropped instead, the
+     * audit row says so, and a manager can enter her current one on the staff
+     * card. Not a race-proof check, and it need not be: the index is the control,
+     * and losing that race is the same 500 this avoids in every ordinary case.
+     */
+    let dropPhone = false;
+    if (reactivating && staff.phone) {
+      const [holder] = await db
+        .select({ id: staffUser.id })
+        .from(staffUser)
+        .where(
+          and(
+            eq(staffUser.salonId, staff.salonId),
+            eq(staffUser.phone, staff.phone),
+            isNull(staffUser.deactivatedAt),
+            ne(staffUser.id, staff.id),
+          ),
+        )
+        .limit(1);
+      dropPhone = holder !== undefined;
+    }
+
+    /**
      * The UPDATE carries the `used_at IS NULL` predicate rather than trusting
      * the SELECT above. Two redemptions of one link racing each other is the
      * double-tapped scanner in another costume, and the database resolves it:
@@ -1060,6 +1123,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         passwordHash,
         // Both facts in one statement. See the note above.
         ...(reactivating ? { deactivatedAt: null } : {}),
+        ...(dropPhone ? { phone: null } : {}),
         updatedAt: new Date(),
       })
       .where(eq(staffUser.id, staff.id));
@@ -1085,7 +1149,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       source: 'merchant',
       subjectType: 'staff_user',
       subjectId: staff.id,
-      metadata: { requestedBy: reset.requestedBy, reactivated: reactivating },
+      metadata: {
+        requestedBy: reset.requestedBy,
+        reactivated: reactivating,
+        ...(dropPhone ? { phoneDropped: true } : {}),
+      },
       ...clientMeta(req),
     });
 
@@ -1590,7 +1658,25 @@ export async function staffPinSession(req: FastifyRequest): Promise<{
   const body = (req.body ?? {}) as Record<string, unknown>;
   const salonId = requireString(body.salonId, 'salonId', 100);
   const deviceId = requireString(body.deviceId, 'deviceId', 200);
-  const handle = requireString(body.handle, 'handle', 100).toLowerCase();
+
+  /**
+   * `handle` OR `phone`, exactly one — Aftab, 2026-11-10 (DECISIONS.md § Staff
+   * phone pairing): "the number is going to be the username". Neither is the
+   * old `handle is required.` refusal, unchanged, so a client that sends
+   * nothing hears what it always heard.
+   *
+   * A NUMBER THAT DOES NOT PARSE IS NOT REFUSED HERE. It is an unknown number,
+   * and an unknown number is answered exactly as a wrong PIN, below — same
+   * status, same body, same argon2 time, same `pin_attempt` row against this
+   * device. A distinguishable 400 for "not a number" would tell nobody anything,
+   * but one refusal path is simpler to keep honest than a list of harmless ones.
+   */
+  const viaPhone = body.phone !== undefined && body.phone !== null;
+  if (viaPhone && body.handle !== undefined && body.handle !== null) {
+    throw badRequest('invalid_request', 'Send handle or phone, not both.');
+  }
+  const handle = viaPhone ? null : requireString(body.handle, 'handle', 100).toLowerCase();
+  const phone = viaPhone ? normaliseStaffPhone(body.phone) : null;
   const pin = body.pin;
 
   if (!isFourDigitPin(pin)) {
@@ -1621,10 +1707,23 @@ export async function staffPinSession(req: FastifyRequest): Promise<{
     );
   }
 
+  /**
+   * By handle exactly as before; by number among ACTIVE staff, which
+   * `staff_user_salon_active_phone_uq` makes one row. `''` for a number that did
+   * not parse: no row can hold it (`staff_user_phone_is_e164`), so the query
+   * runs and misses like any unknown number rather than being skipped.
+   */
   const rows = await db
     .select()
     .from(staffUser)
-    .where(and(eq(staffUser.salonId, salonId), eq(staffUser.handle, handle)))
+    .where(
+      and(
+        eq(staffUser.salonId, salonId),
+        handle !== null
+          ? eq(staffUser.handle, handle)
+          : and(eq(staffUser.phone, phone ?? ''), isNull(staffUser.deactivatedAt)),
+      ),
+    )
     .limit(1);
   const staff = rows[0];
 

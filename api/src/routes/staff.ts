@@ -52,10 +52,12 @@ import {
   mintPasswordResetToken as mintResetToken,
 } from '../auth/tokens';
 import { badRequest, conflict, notFound } from '../http/errors';
+import { normaliseStaffPhone, parseStaffPhone } from '../http/fields';
 import { requireString } from '../money/validate';
 import { peekToken } from '../services/walletToken';
 import { writeAudit } from '../services/audit';
 import { counterEnvelope } from '../services/counter';
+import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
 import { chargeScannerBudget } from '../services/scannerLimit';
 import { serialiseMember, staffPinSession } from './auth';
 
@@ -71,6 +73,15 @@ export function serialiseStaff(row: typeof staffUser.$inferSelect) {
     salonId: row.salonId,
     name: row.name,
     handle: row.handle,
+    /**
+     * Her mobile, E.164, or `null` — ALWAYS EMITTED, never omitted. Every path
+     * that returns a staff body goes through this function (the roster, `/me`,
+     * create, edit, deactivate, both sign-ins, the pairing redeem), so emitting it
+     * here is what lets trunk tighten `StaffUserSchema.phone` from
+     * `.nullable().optional()` to `.nullable()`. A sign-in name, not a secret:
+     * the roster that shows her handle shows this.
+     */
+    phone: row.phone ?? null,
     role: row.role,
     branchAccess: row.branchAccessAll ? ('all' as const) : row.branchAccessIds,
     pinSet: row.pinHash !== null,
@@ -270,6 +281,51 @@ function refuseVoidWithoutCharges(perms: StaffPerms): void {
   }
 }
 
+/**
+ * `staff_user.phone` from a body: E.164, an eight-digit number read as Kuwait's,
+ * or `null` / `''` to clear it. Aftab, 2026-11-10 (DECISIONS.md § Staff phone
+ * pairing).
+ */
+function parsePhoneField(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  return parseStaffPhone(value);
+}
+
+const PHONE_TAKEN = () =>
+  conflict('phone_taken', 'That mobile number already belongs to someone else on this team.');
+
+/**
+ * THE POLITE PRE-CHECK; `staff_user_salon_active_phone_uq` is the control. A
+ * number is a SIGN-IN NAME (`POST /staff/session` and `POST /auth/web/session`
+ * both accept it), so two active accounts at one salon sharing one would be one
+ * login that opens whichever row the planner reaches first. Leavers do not hold
+ * a number against the next hire — the index is partial on `deactivated_at`.
+ */
+async function refusePhoneTaken(salonId: string, phone: string, exceptId: string | null): Promise<void> {
+  const [clash] = await db
+    .select({ id: staffUser.id })
+    .from(staffUser)
+    .where(
+      and(
+        eq(staffUser.salonId, salonId),
+        eq(staffUser.phone, phone),
+        isNull(staffUser.deactivatedAt),
+        exceptId ? ne(staffUser.id, exceptId) : undefined,
+      ),
+    )
+    .limit(1);
+  if (clash) throw PHONE_TAKEN();
+}
+
+/** The race the pre-check cannot see: the index refused it. Same 409. */
+function rethrowPhoneTaken(err: unknown): never {
+  if (isUniqueViolation(err) && violatedConstraint(err) === 'staff_user_salon_active_phone_uq') {
+    throw PHONE_TAKEN();
+  }
+  throw err;
+}
+
 /** The two audit columns every handler in this file fills the same way. */
 function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent: string | null } {
   return {
@@ -342,7 +398,7 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body ?? {}) as Record<string, unknown>;
     refuseCredentialFields(body);
 
-    const allowed = new Set(['name', 'handle', 'role', 'perms', 'branchAccess']);
+    const allowed = new Set(['name', 'handle', 'role', 'perms', 'branchAccess', 'phone']);
     const rejected = Object.keys(body).filter((k) => !allowed.has(k));
     if (rejected.length > 0) {
       throw badRequest(
@@ -361,7 +417,22 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
         'A handle is letters, numbers, dots, dashes and underscores — no spaces.',
       );
     }
+    /**
+     * A HANDLE THAT READS AS A MOBILE NUMBER IS REFUSED. `POST /auth/web/session`
+     * reads an eight-digit username as a Kuwait number (Aftab, 2026-11-10), so a
+     * handle like `99124408` would be one string naming two people — the account
+     * whose handle it is, and the one whose phone it is. Refused at the door so
+     * that cannot arise; the sign-in still falls back to the handle for any such
+     * row created before this rule (routes/auth.ts § web sign-in).
+     */
+    if (normaliseStaffPhone(handle) !== null) {
+      throw badRequest(
+        'invalid_handle',
+        'A handle cannot be a phone number — add the number as the mobile number instead.',
+      );
+    }
     const role = parseRole(body.role);
+    const phone = 'phone' in body ? parsePhoneField(body.phone) : null;
 
     // Default: no branch. The same safe direction the branch close takes — a new
     // account reaches nothing until somebody says what it may reach.
@@ -387,6 +458,8 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    if (phone) await refusePhoneTaken(p.salonId, phone, null);
+
     const id = staffId();
     const [row] = await db.transaction(async (tx) => {
       const inserted = await tx
@@ -396,6 +469,7 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
           salonId: p.salonId,
           name,
           handle,
+          phone,
           role,
           ...access,
           ...Object.fromEntries(PERMISSION_NAMES.map((n) => [PERM_COLUMN[n], perms[n]])),
@@ -412,11 +486,19 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
         source: 'merchant',
         subjectType: 'staff_user',
         subjectId: id,
-        metadata: { name, handle, role, perms, branchAccess: body.branchAccess ?? [] },
+        // `phoneSet`, not the number: whether she has one is the access fact.
+        metadata: {
+          name,
+          handle,
+          role,
+          perms,
+          branchAccess: body.branchAccess ?? [],
+          phoneSet: phone !== null,
+        },
         ...clientMeta(req),
       });
       return inserted;
-    });
+    }).catch(rethrowPhoneTaken);
 
     if (!row) throw conflict('staff_not_created', 'That staff account could not be created.');
     return reply.code(201).send(serialiseStaff(row));
@@ -446,7 +528,7 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
     // A credential is never set through the authority endpoint.
     refuseCredentialFields(body);
 
-    const allowed = new Set(['perms', 'role', 'branchAccess']);
+    const allowed = new Set(['perms', 'role', 'branchAccess', 'phone']);
     const rejected = Object.keys(body).filter((k) => !allowed.has(k));
     if (rejected.length > 0) {
       throw badRequest(
@@ -454,8 +536,8 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
         `These fields cannot be edited on a staff account: ${rejected.join(', ')}.`,
       );
     }
-    if (!('perms' in body) && !('role' in body) && !('branchAccess' in body)) {
-      throw badRequest('invalid_request', 'Send perms, role or branchAccess.');
+    if (!('perms' in body) && !('role' in body) && !('branchAccess' in body) && !('phone' in body)) {
+      throw badRequest('invalid_request', 'Send perms, role, branchAccess or phone.');
     }
 
     const before = permsOf(target);
@@ -486,22 +568,37 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
         ? await parseBranchAccess(body.branchAccess, p.salonId)
         : { branchAccessAll: target.branchAccessAll, branchAccessIds: target.branchAccessIds };
 
+    /**
+     * HER MOBILE NUMBER — a sign-in name since Aftab's 2026-11-10 ruling, set by
+     * the same authority that sets her handle-adjacent facts. `null` or `''`
+     * clears it. Checked against the salon's other ACTIVE staff; a leaver's row
+     * may be edited too, and then only meets the index when she is re-activated
+     * (routes/auth.ts § staff password-reset handles that).
+     */
+    const phone = 'phone' in body ? parsePhoneField(body.phone) : target.phone;
+    const phoneChanged = phone !== target.phone;
+    if (phoneChanged && phone && target.deactivatedAt === null) {
+      await refusePhoneTaken(p.salonId, phone, target.id);
+    }
+
     const changed = PERMISSION_NAMES.filter((n) => before[n] !== next[n]);
     const roleChanged = role !== target.role;
     const accessChanged =
       access.branchAccessAll !== target.branchAccessAll ||
       access.branchAccessIds.join(',') !== target.branchAccessIds.join(',');
 
-    if (changed.length > 0 || roleChanged || accessChanged) {
+    if (changed.length > 0 || roleChanged || accessChanged || phoneChanged) {
       await db
         .update(staffUser)
         .set({
           ...Object.fromEntries(PERMISSION_NAMES.map((n) => [PERM_COLUMN[n], next[n]])),
           role,
           ...access,
+          phone,
           updatedAt: new Date(),
         })
-        .where(eq(staffUser.id, target.id));
+        .where(eq(staffUser.id, target.id))
+        .catch(rethrowPhoneTaken);
 
       // Every grant and every revoke, named. `kind: 'access'` is the dashboard's
       // Access filter — design/README.md § Merchant dashboard.
@@ -511,7 +608,12 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
       await writeAudit(db, p, {
         salonId: p.salonId,
         kind: 'access',
-        action: 'Permissions changed',
+        // A number-only edit is not a permission change; everything else keeps
+        // the action the Access filter and lane D's assertions already read.
+        action:
+          changed.length > 0 || roleChanged || accessChanged
+            ? 'Permissions changed'
+            : 'Sign-in number changed',
         detail:
           `${target.name}: ` +
           [
@@ -521,6 +623,11 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
               ? [
                   `branches ${describeAccess(target.branchAccessAll, target.branchAccessIds)}→${describeAccess(access.branchAccessAll, access.branchAccessIds)}`,
                 ]
+              : []),
+            // Which way, never the number: the roster shows the number to those
+            // who may see it, and the audit log is read more widely.
+            ...(phoneChanged
+              ? [target.phone === null ? 'mobile number added' : phone === null ? 'mobile number removed' : 'mobile number changed']
               : []),
           ].join(', '),
         source: 'merchant',
@@ -539,6 +646,7 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
                 branchAccessAfter: access.branchAccessAll ? 'all' : access.branchAccessIds,
               }
             : {}),
+          ...(phoneChanged ? { phoneSetBefore: target.phone !== null, phoneSetAfter: phone !== null } : {}),
         },
         ...clientMeta(req),
       });

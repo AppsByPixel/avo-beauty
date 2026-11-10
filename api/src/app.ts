@@ -28,6 +28,7 @@ import { registerErrorHandler } from './http/errors';
 import { registerAuthRoutes } from './routes/auth';
 import { registerMemberRoutes } from './routes/members';
 import { registerStaffRoutes } from './routes/staff';
+import { registerStaffPairingRoutes } from './routes/staffPairing';
 import { registerChargeRoutes } from './routes/charges';
 import { registerDeviceRoutes } from './routes/devices';
 import { registerTopupRoutes } from './routes/topups';
@@ -178,6 +179,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerAuthRoutes(app);
   await registerMemberRoutes(app);
   await registerStaffRoutes(app);
+  await registerStaffPairingRoutes(app);
   await registerDeviceRoutes(app);
   await registerChargeRoutes(app);
   await registerTopupRoutes(app);
