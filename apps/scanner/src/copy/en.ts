@@ -108,9 +108,22 @@ export const copy = {
   lookupNoneTitle: 'No member found',
   /** :230 */
   lookupNoneBody: 'Check the number, or ask her to sign up in the AVO app first.',
-  /** :235 */
+  /**
+   * CHANGED from the design, by ruling — DECISIONS.md § "Staff phone pairing,
+   * phone sign-in, and a truthful receipt line — Aftab, 2026-11-10", ruling 3.
+   *
+   * design:235 reads "Manual lookups are logged with your name. The customer
+   * gets a WhatsApp confirmation for every charge taken this way." There is no
+   * WhatsApp sender (`RECEIPT_DRIVER` is `logging | email`), so the second
+   * sentence told staff something false. The replacement is worded in the
+   * ruling, not the design (INVENTED as far as the design is concerned), and it
+   * is true today: the wallet's bell is built from `receipt_job` whatever the
+   * driver.
+   *
+   * REVERT to the design's sentence when a WhatsApp sender ships.
+   */
   lookupLogged:
-    'Manual lookups are logged with your name. The customer gets a WhatsApp confirmation for every charge taken this way.',
+    "Manual lookups are logged with your name. Every charge taken this way shows in the customer's AVO app.",
   /** :734 — "ID · 8842" */
   memberId: (id: string) => `ID · ${id}`,
   /**
@@ -382,8 +395,21 @@ export const copy = {
     x2stamp: 'Double stamps',
     x3stamp: 'Triple stamps',
   },
-  /** :386 */
-  receiptSent: 'WhatsApp receipt sent',
+  /**
+   * CHANGED from the design, by ruling — DECISIONS.md § "Staff phone pairing,
+   * phone sign-in, and a truthful receipt line — Aftab, 2026-11-10", ruling 3.
+   *
+   * design:386 reads "WhatsApp receipt sent". No WhatsApp sender exists
+   * (`RECEIPT_DRIVER` is `logging | email`), so the result screen was telling
+   * staff — and the customer looking at the phone — something false. The
+   * replacement is worded in the ruling, not the design (INVENTED as far as the
+   * design is concerned), and is true today: the receipt job is queued inside
+   * the charge transaction and the wallet's bell is built from it.
+   *
+   * The KEY keeps its name on purpose, so the revert is one value.
+   * REVERT to "WhatsApp receipt sent" when a WhatsApp sender ships.
+   */
+  receiptSent: "Receipt in the customer's AVO app",
   /** interaction-spec.md §3 — the reduced-motion replacement for a pulse dot. */
   receiptPending: 'Waiting for the receipt…',
   /** :390 */
