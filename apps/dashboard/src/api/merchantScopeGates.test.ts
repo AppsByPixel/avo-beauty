@@ -1,7 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { StaffPairingCodeSchema } from '@avo/types';
 import { stripComments } from '../testing/stripComments.js';
 
 /**
@@ -384,30 +383,37 @@ describe('the parsers', () => {
 /**
  * ROUTES TRUNK HAS FIXED BY NAME THAT LANE A IS STILL BUILDING — AND THIS LIST EMPTIES ITSELF.
  *
- * Lanes build in parallel against a contract trunk lands first. `POST
- * /staff/:id/pairing-code` is named in `packages/types` § staff pairing and in the
- * dispatch brief (DECISIONS.md § Staff phone pairing, 2026-11-10), and the dashboard
- * calls it in the same release that lane A registers it — so in lane C's tree the call
- * resolves to nothing, and "resolves every merchant call" would be red for a reason
- * that is about the merge order, not the call.
+ * Lanes build in parallel against a contract trunk lands first. When the dashboard calls
+ * a route named in `packages/types` in the same release that lane A registers it, the
+ * call resolves to nothing in lane C's tree, and "resolves every merchant call" would be
+ * red for a reason that is about the merge order, not the call.
  *
- * AN ALLOW-LIST IS WHERE A SCAN STOPS, so this one is built to not outlive its reason:
+ * EMPTY IS THE HEALTHY STATE. The one entry so far, `POST /staff/:id/pairing-code`
+ * (DECISIONS.md § Staff phone pairing, 2026-11-10), turned red by name the day lane A's
+ * route merged and was deleted — that call now goes through the sweep like every other,
+ * and a test below holds it there. The mechanism stays for the next contract that lands
+ * ahead of its route; its matcher is held by a fixture, not by this list, so an empty
+ * list does not leave the matcher unproven.
  *
- *   - an entry excuses ONLY an unresolved call with exactly that method and path —
+ * AN ALLOW-LIST IS WHERE A SCAN STOPS, so an entry is built to not outlive its reason:
+ *
+ *   - it excuses ONLY an unresolved call with exactly that method and path —
  *     a call to `/v1/staff/…/pairing-code`, or to any other path, is still red;
  *   - the moment a route by that name IS registered, the entry fails below by name.
- *     Delete it then, and the call goes through the sweep like every other — which
- *     is the check that matters: that it lands on a dashboard-surface guard.
- *
- * The contract schema each entry stands for is imported, so the entry also cannot
- * outlive the contract it points at.
+ *     Delete it then, and the call goes through the sweep — which is the check that
+ *     matters: that it lands on a dashboard-surface guard;
+ *   - it names the contract schema it stands for (import it), so it cannot outlive the
+ *     contract, and the dashboard must actually make the call, so it is not dead weight.
  */
-const CONTRACTED_AHEAD_OF_ROUTE: ReadonlyArray<{ route: string; contract: unknown }> = [
-  { route: 'POST /staff/:id/pairing-code', contract: StaffPairingCodeSchema },
-];
+type ContractedAhead = { route: string; contract: unknown };
 
-function contractedAhead(call: DashboardCall): boolean {
-  return CONTRACTED_AHEAD_OF_ROUTE.some(({ route }) => {
+const CONTRACTED_AHEAD_OF_ROUTE: ReadonlyArray<ContractedAhead> = [];
+
+function contractedAhead(
+  call: DashboardCall,
+  list: ReadonlyArray<ContractedAhead> = CONTRACTED_AHEAD_OF_ROUTE,
+): boolean {
+  return list.some(({ route }) => {
     const sp = route.indexOf(' ');
     const pattern = route
       .slice(sp + 1)
@@ -421,26 +427,36 @@ function contractedAhead(call: DashboardCall): boolean {
 }
 
 describe('routes contracted ahead of their registration', () => {
-  it.each(CONTRACTED_AHEAD_OF_ROUTE)('$route is still unregistered here — else delete its entry', ({ route, contract }) => {
-    expect(contract, `${route} names a contract schema that no longer exists`).toBeDefined();
-    expect(
-      GATES.find((g) => g.name === route),
-      `${route} is now registered in api/src/routes. Delete its CONTRACTED_AHEAD_OF_ROUTE ` +
-        `entry in merchantScopeGates.test.ts so the call is checked by the sweep below.`,
-    ).toBeUndefined();
-  });
+  for (const entry of CONTRACTED_AHEAD_OF_ROUTE) {
+    it(`${entry.route} is still unregistered here — else delete its entry`, () => {
+      expect(entry.contract, `${entry.route} names a contract schema that no longer exists`).toBeDefined();
+      expect(
+        GATES.find((g) => g.name === entry.route),
+        `${entry.route} is now registered in api/src/routes. Delete its CONTRACTED_AHEAD_OF_ROUTE ` +
+          `entry in merchantScopeGates.test.ts so the call is checked by the sweep below.`,
+      ).toBeUndefined();
+    });
 
-  it('excuses only the exact contracted path, never a near miss', () => {
+    it(`${entry.route} — the dashboard does make the call, so the entry is not dead weight`, () => {
+      expect(CALLS.some((c) => contractedAhead(c, [entry]))).toBe(true);
+    });
+  }
+
+  it('excuses only the exact contracted path, never a near miss (a fixture, not the live list)', () => {
+    const fixture: ReadonlyArray<ContractedAhead> = [{ route: 'POST /staff/:id/pairing-code', contract: {} }];
     const exact: DashboardCall = { scope: 'merchant', name: `POST /staff/${WILDCARD}/pairing-code`, where: 'x' };
     const prefixed: DashboardCall = { scope: 'merchant', name: `POST /v1/staff/${WILDCARD}/pairing-code`, where: 'x' };
     const wrongMethod: DashboardCall = { scope: 'merchant', name: `GET /staff/${WILDCARD}/pairing-code`, where: 'x' };
-    expect(contractedAhead(exact)).toBe(true);
-    expect(contractedAhead(prefixed)).toBe(false);
-    expect(contractedAhead(wrongMethod)).toBe(false);
+    expect(contractedAhead(exact, fixture)).toBe(true);
+    expect(contractedAhead(prefixed, fixture)).toBe(false);
+    expect(contractedAhead(wrongMethod, fixture)).toBe(false);
   });
 
-  it('the dashboard does make the contracted call, so the entry is not dead weight', () => {
-    expect(CALLS.filter(contractedAhead).map((c) => c.where.split(':')[0])).toEqual(['staff.ts']);
+  it('the pairing-code call, once excused here, now resolves to its registered route and is swept', () => {
+    const pairing = CALLS.filter((c) => c.name === `POST /staff/${WILDCARD}/pairing-code`);
+    expect(pairing.map((c) => c.where.split(':')[0])).toEqual(['staff.ts']);
+    expect(pairing.some((c) => contractedAhead(c))).toBe(false);
+    expect(pairing.map((c) => routeFor(c)?.name)).toEqual(['POST /staff/:id/pairing-code']);
   });
 });
 
