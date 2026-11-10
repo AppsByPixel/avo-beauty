@@ -219,7 +219,10 @@ export function pairingRefusal(err: unknown): PairingRefusal {
   return { kind: 'server', message: err.message, reference: err.reference };
 }
 
+/** The two refusals no PIN can fix. */
+export type EndedPairing = Extract<PairingRefusal, { kind: 'refused' | 'throttled' }>;
+
 /** A refusal no PIN can fix sends her back to the setup screen. */
-export function refusalEndsPairing(refusal: PairingRefusal): boolean {
+export function refusalEndsPairing(refusal: PairingRefusal): refusal is EndedPairing {
   return refusal.kind === 'refused' || refusal.kind === 'throttled';
 }
