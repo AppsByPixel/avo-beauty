@@ -50,6 +50,10 @@ import { ApiError } from '../api/client.js';
  *                                                                                none needed
  *   Audit log     /audit              → perms.dashboard      (none, ever)        none needed
  *   Accounts      /staff              → perms.team           staff/* → team      none needed
+ *                                                           pairing-code + a
+ *                                                           branchId → team AND
+ *                                                           dashboard           perms.dashboard
+ *                                                                                (the branch only)
  *   Shop          /products           → perms.shop          products/* → shop   none needed
  *   Marketing     /promotions         → requirePrincipal     boosts, happy-hours,
  *                                       NO PERMISSION        campaigns → marketing
@@ -61,6 +65,15 @@ import { ApiError } from '../api/client.js';
  * Only the last two have the ungated-read/gated-write shape, and both now carry a
  * gate naming the permission the server actually checks. The other seven are
  * deliberately ungated on the client, and that is a decision rather than a gap.
+ *
+ * ACCOUNTS GREW ONE ROW OF THE APPOINTMENTS SHAPE (below), 2026-11-10. A pairing
+ * code that names a branch also enrols a till, so `POST /staff/{id}/pairing-code`
+ * with a `branchId` needs `perms.dashboard` on top of `perms.team` — and the
+ * roster read's `team` does not imply it. So the dialog sends a branch only for a
+ * `dashboard` session (`Accounts.tsx` header, `PairPhoneDialog.tsx`). The action
+ * itself is also behind `perms.team`, which the read already implies; the brief
+ * asked for it explicitly, and it only differs from the read when the sign-in
+ * snapshot is stale.
  *
  * APPOINTMENTS IS A THIRD SHAPE, AND IT IS THE ONE THIS LEDGER DID NOT HAVE A
  * COLUMN FOR. Its read IS permission-gated, so by the rule above it needs no

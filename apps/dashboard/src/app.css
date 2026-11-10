@@ -3794,6 +3794,149 @@ a:hover {
   color: var(--avo-text-muted-soft);
 }
 
+/* ---- pair a phone (PairPhoneDialog.tsx) ---- */
+
+/* The onboarding wizard's overlay, at a pairing code's width.
+   interaction-spec.md §1: modals cap at 720px and center. */
+.pair {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--avo-ink) 50%, transparent);
+  backdrop-filter: blur(4px);
+  animation: avo-fade 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pair {
+    animation: none;
+  }
+}
+
+.pair__panel {
+  width: 440px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  background: var(--avo-surface);
+  border-radius: 22px;
+  box-shadow: 0 40px 80px -30px color-mix(in srgb, var(--avo-ink) 50%, transparent);
+  position: relative;
+}
+
+.pair__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+.pair__title {
+  margin: 0;
+  font-size: 20px;
+}
+
+.pair__who {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.pair__close {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+  background: var(--avo-surface-alt2);
+  border-radius: 10px;
+  color: var(--avo-text-muted);
+}
+
+.pair__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px 22px;
+}
+
+.pair__choose {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pair__code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Dark modules on a light ground, always: a scanner reads contrast, not brand. */
+.pair__qr {
+  width: 196px;
+  height: 196px;
+  border-radius: 14px;
+  border: 1px solid var(--avo-hairline);
+}
+
+.pair__qr-bg {
+  fill: var(--avo-white);
+}
+
+.pair__qr-ink {
+  fill: var(--avo-ink);
+}
+
+.pair__digits {
+  margin: 4px 0 0;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-ink);
+}
+
+.pair__expiry {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-text-muted);
+}
+
+.pair__expired {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+  text-align: center;
+}
+
+.pair__expired-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--avo-warn-text);
+}
+
+.pair__note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-text-muted);
+}
+
+.pair__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ============================================================== audit log == */
 
 .audit {

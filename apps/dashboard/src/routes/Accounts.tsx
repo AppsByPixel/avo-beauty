@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { StaffUser } from '@avo/types';
 import {
   Button,
@@ -25,6 +26,7 @@ import {
   formatStaffPhone,
   readStaffPhone,
   roleOptionsFor,
+  staffKeys,
   useCreateStaff,
   useDeactivateStaff,
   useSendPasswordReset,
@@ -35,7 +37,8 @@ import {
   type PermissionName,
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
-import { useSession } from '../auth/AuthProvider.js';
+import { useSalonId, useSession } from '../auth/AuthProvider.js';
+import { PairPhoneDialog } from './PairPhoneDialog.js';
 import {
   TEXT_PARAM,
   enumParam,
@@ -82,13 +85,22 @@ import { SectionError, WriteError } from './sectionState.js';
  * and `refuseCredentialFields` on the endpoint both refuse it. Access is
  * established with a reset link. See `useCreateStaff` for the full reasoning.
  *
- * ONE ADDITION WITH NO DESIGN BEHIND IT — Aftab approved it on 2026-11-10
- * (DECISIONS.md § Staff phone pairing), so its copy is invented and plain:
+ * TWO ADDITIONS WITH NO DESIGN BEHIND THEM — Aftab approved both on 2026-11-10
+ * (DECISIONS.md § Staff phone pairing), so their copy is invented and plain:
  *
  *   - "Mobile number", optional, on New team account and on each card. It is a
  *     second sign-in name beside the username, on the scanner and the dashboard.
  *     `readStaffPhone` reads eight digits as Kuwait; the server stays the judge,
  *     and its `phone_taken` / `invalid_phone` refusals land on the field.
+ *   - "Pair a phone" on an active account's card (`PairPhoneDialog.tsx`). This
+ *     one DOES carry a courtesy gate, and on two permissions: `perms.team` for
+ *     the action — the same gate as the roster read, so it can only differ when
+ *     the session snapshot is stale — and `perms.dashboard` for the branch,
+ *     because a code naming a branch also enrols a till. That second one is NOT
+ *     implied by anything this screen reads, so without the gate a manager with
+ *     `team` and no `dashboard` would be offered a branch the server must refuse.
+ *     Both are checked again server-side (#7); sectionState.tsx's ledger has the
+ *     row.
  */
 
 type Tab = 'team' | 'customers';
@@ -204,6 +216,19 @@ export function Accounts() {
   const items = staff.data?.items;
   const branches = salon.data?.branches ?? [];
   const branchNames = new Map(branches.map((b) => [b.id, b.name]));
+
+  /*
+   * PAIRING'S TWO COURTESIES — see the header. `canEnrolTill` decides whether the
+   * dialog sends a branch at all, and it needs the salon's branches to do that:
+   * until `GET /salons/{id}` has answered, "one branch" and "no branches" look the
+   * same, and the dialog would pair without enrolling a till the merchant expected.
+   * So for a `perms.dashboard` session the action waits for that read. A FAILED
+   * read does not hold it — pairing without a till is still a working pairing, and
+   * Tills can enrol the phone afterwards.
+   */
+  const canPair = session.perms.team === true;
+  const canEnrolTill = session.perms.dashboard === true;
+  const pairWaitsForBranches = canEnrolTill && salon.data === undefined && !salon.isError;
 
   /*
    * The last holder of `perms.team` cannot be removed and cannot have `team`
@@ -368,6 +393,9 @@ export function Accounts() {
                   branches={branches}
                   isSoleTeamAdmin={account.id === soleTeamAdminId}
                   isSelf={account.id === session.staffId}
+                  canPair={canPair}
+                  canEnrolTill={canEnrolTill}
+                  pairWaitsForBranches={pairWaitsForBranches}
                   resetExpiresAt={resetSent[account.id]}
                   busy={
                     (updateStaff.isPending && updateStaff.variables?.staffId === account.id) ||
@@ -445,6 +473,12 @@ interface AccountCardProps {
   isSoleTeamAdmin: boolean;
   /** The signed-in user's own row. `DELETE /staff/{id}` refuses it, 409. */
   isSelf: boolean;
+  /** `session.perms.team` — the courtesy over "Pair a phone". */
+  canPair: boolean;
+  /** `session.perms.dashboard` — whether a pairing code may name a till's branch. */
+  canEnrolTill: boolean;
+  /** The salon's branches have not arrived yet, and the dialog needs to count them. */
+  pairWaitsForBranches: boolean;
   /** ISO instant from the 202, when a link has been issued this session. */
   resetExpiresAt: string | undefined;
   busy: boolean;
@@ -462,6 +496,9 @@ function AccountCard({
   branches,
   isSoleTeamAdmin,
   isSelf,
+  canPair,
+  canEnrolTill,
+  pairWaitsForBranches,
   resetExpiresAt,
   busy,
   resetting,
@@ -472,6 +509,27 @@ function AccountCard({
   onRemove,
 }: AccountCardProps) {
   const perms = account.perms;
+  const queryClient = useQueryClient();
+  const salonId = useSalonId();
+
+  /*
+   * PAIR A PHONE. The trigger stays mounted while the dialog is open, so closing
+   * is a plain focus restore (interaction-spec.md §2: focus "returns to the
+   * trigger on close").
+   *
+   * The roster is re-read on close because the dialog cannot see the other end:
+   * if she redeemed the code while it was open, the server has set her PIN, and
+   * this card's "No PIN" is now false. A background refetch keeps the cards on
+   * screen while it lands. Stable, because the dialog's key listener re-binds on
+   * it.
+   */
+  const pairButton = useRef<HTMLButtonElement>(null);
+  const [pairing, setPairing] = useState(false);
+  const closePairing = useCallback(() => {
+    setPairing(false);
+    pairButton.current?.focus();
+    void queryClient.invalidateQueries({ queryKey: staffKeys.list(salonId) });
+  }, [queryClient, salonId]);
 
   /* THE MOBILE NUMBER — shown in the identity column, edited below the head. */
   const phone = account.phone ?? null;
@@ -587,6 +645,24 @@ function AccountCard({
           </Pill>
         )}
         {account.passwordSet || leaver ? null : <Pill tone="quiet">Invite pending</Pill>}
+
+        {canPair && !leaver ? (
+          /*
+           * A leaver holds no credential, and the server refuses to pair her
+           * (`staff_deactivated`), so the action is not offered on her card.
+           */
+          <Button
+            ref={pairButton}
+            variant="secondary"
+            className="account__reset"
+            aria-haspopup="dialog"
+            aria-label={`Pair a phone — ${account.name}`}
+            disabled={pairWaitsForBranches}
+            onClick={() => setPairing(true)}
+          >
+            Pair a phone
+          </Button>
+        ) : null}
 
         {resetExpiresAt ? (
           /*
@@ -778,6 +854,15 @@ function AccountCard({
           {leaver ? null : <> Branch access: {branchLabel}.</>}
         </p>
       </div>
+
+      {pairing && canPair && !leaver ? (
+        <PairPhoneDialog
+          account={account}
+          branches={branches}
+          canEnrolTill={canEnrolTill}
+          onClose={closePairing}
+        />
+      ) : null}
     </Card>
   );
 }

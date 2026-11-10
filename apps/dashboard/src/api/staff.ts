@@ -7,6 +7,8 @@ import {
 } from '@tanstack/react-query';
 import {
   PhoneSchema,
+  StaffPairingCodeRequestSchema,
+  StaffPairingCodeSchema,
   StaffUserSchema,
   type StaffUser,
 } from '@avo/types';
@@ -26,6 +28,9 @@ import type { Paginated } from './salon.js';
  *   PATCH  /staff/{id}                 perms, role, branchAccess, phone
  *   DELETE /staff/{id}                 deactivate, NOT delete
  *   POST   /staff/{id}/password-reset  send a link   (202)
+ *   POST   /staff/{id}/pairing-code    pair a phone  — `perms.team`, and with a
+ *                                      `branchId` also `perms.dashboard`
+ *                                      (DECISIONS.md § Staff phone pairing)
  *
  * `PATCH /staff/{id}` is the endpoint that SETS authority, which makes it the
  * most sensitive route in the API — lane A's own header calls it the
@@ -616,6 +621,48 @@ export function readStaffPhone(raw: string): StaffPhoneReading {
 export function formatStaffPhone(e164: string): string {
   const kw = /^\+965(\d{4})(\d{4})$/.exec(e164);
   return kw ? `+965 ${kw[1]} ${kw[2]}` : e164;
+}
+
+/* ========================================================================== */
+/*                               pairing a phone                               */
+/* ========================================================================== */
+
+export type StaffPairingCode = ReturnType<typeof StaffPairingCodeSchema.parse>;
+
+/**
+ * `POST /staff/{id}/pairing-code` — one single-use code, shown once.
+ *
+ * A PLAIN FUNCTION, NOT A `useMutation`, AND THAT IS THE WHOLE POINT OF IT.
+ * The response carries the pairing token in the clear: whoever holds it can
+ * bind a phone to this staff member and choose her PIN. React Query keeps a
+ * mutation's `data` in the client's MutationCache after its component has gone
+ * (until `gcTime`), so a hook here would leave the token sitting in a shared
+ * cache for five minutes after the dialog that showed it was closed. Called
+ * directly, the parsed body is returned to exactly one place —
+ * `routes/PairPhoneDialog.tsx`'s own state — and is gone when it unmounts. It
+ * is never logged, never cached, never written to storage and never put in a
+ * URL; `pairPhoneDialog.test.tsx` checks all four after a close.
+ *
+ * `branchId` is sent only when the dialog decided to enrol a till (it needs
+ * `perms.dashboard`, checked again server-side). The body goes through the
+ * contract's request schema so a malformed id fails here, not as a 400.
+ *
+ * Issuing a code voids the staff member's earlier unused ones, server-side —
+ * which is what "New code" relies on.
+ */
+export async function issuePairingCode(
+  staffId: string,
+  branchId: string | null,
+  signal: AbortSignal,
+): Promise<StaffPairingCode> {
+  const body = StaffPairingCodeRequestSchema.parse(branchId === null ? {} : { branchId });
+  return StaffPairingCodeSchema.parse(
+    await authedRequest<unknown>('merchant', `/staff/${staffId}/pairing-code`, {
+      method: 'POST',
+      body,
+      signal,
+    }),
+  );
 }
 
 /** One place that knows how a single row is replaced inside the paginated list. */

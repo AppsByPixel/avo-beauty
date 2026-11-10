@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { StaffPairingCodeSchema } from '@avo/types';
 import { stripComments } from '../testing/stripComments.js';
 
 /**
@@ -378,6 +379,71 @@ describe('the parsers', () => {
   });
 });
 
+// ------------------------------------------- contracted ahead of the route --
+
+/**
+ * ROUTES TRUNK HAS FIXED BY NAME THAT LANE A IS STILL BUILDING — AND THIS LIST EMPTIES ITSELF.
+ *
+ * Lanes build in parallel against a contract trunk lands first. `POST
+ * /staff/:id/pairing-code` is named in `packages/types` § staff pairing and in the
+ * dispatch brief (DECISIONS.md § Staff phone pairing, 2026-11-10), and the dashboard
+ * calls it in the same release that lane A registers it — so in lane C's tree the call
+ * resolves to nothing, and "resolves every merchant call" would be red for a reason
+ * that is about the merge order, not the call.
+ *
+ * AN ALLOW-LIST IS WHERE A SCAN STOPS, so this one is built to not outlive its reason:
+ *
+ *   - an entry excuses ONLY an unresolved call with exactly that method and path —
+ *     a call to `/v1/staff/…/pairing-code`, or to any other path, is still red;
+ *   - the moment a route by that name IS registered, the entry fails below by name.
+ *     Delete it then, and the call goes through the sweep like every other — which
+ *     is the check that matters: that it lands on a dashboard-surface guard.
+ *
+ * The contract schema each entry stands for is imported, so the entry also cannot
+ * outlive the contract it points at.
+ */
+const CONTRACTED_AHEAD_OF_ROUTE: ReadonlyArray<{ route: string; contract: unknown }> = [
+  { route: 'POST /staff/:id/pairing-code', contract: StaffPairingCodeSchema },
+];
+
+function contractedAhead(call: DashboardCall): boolean {
+  return CONTRACTED_AHEAD_OF_ROUTE.some(({ route }) => {
+    const sp = route.indexOf(' ');
+    const pattern = route
+      .slice(sp + 1)
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/:[A-Za-z]+/g, '[^/]+');
+    return (
+      call.name.startsWith(`${route.slice(0, sp)} `) &&
+      new RegExp(`^${pattern}$`).test(call.name.slice(sp + 1).split(WILDCARD).join('X'))
+    );
+  });
+}
+
+describe('routes contracted ahead of their registration', () => {
+  it.each(CONTRACTED_AHEAD_OF_ROUTE)('$route is still unregistered here — else delete its entry', ({ route, contract }) => {
+    expect(contract, `${route} names a contract schema that no longer exists`).toBeDefined();
+    expect(
+      GATES.find((g) => g.name === route),
+      `${route} is now registered in api/src/routes. Delete its CONTRACTED_AHEAD_OF_ROUTE ` +
+        `entry in merchantScopeGates.test.ts so the call is checked by the sweep below.`,
+    ).toBeUndefined();
+  });
+
+  it('excuses only the exact contracted path, never a near miss', () => {
+    const exact: DashboardCall = { scope: 'merchant', name: `POST /staff/${WILDCARD}/pairing-code`, where: 'x' };
+    const prefixed: DashboardCall = { scope: 'merchant', name: `POST /v1/staff/${WILDCARD}/pairing-code`, where: 'x' };
+    const wrongMethod: DashboardCall = { scope: 'merchant', name: `GET /staff/${WILDCARD}/pairing-code`, where: 'x' };
+    expect(contractedAhead(exact)).toBe(true);
+    expect(contractedAhead(prefixed)).toBe(false);
+    expect(contractedAhead(wrongMethod)).toBe(false);
+  });
+
+  it('the dashboard does make the contracted call, so the entry is not dead weight', () => {
+    expect(CALLS.filter(contractedAhead).map((c) => c.where.split(':')[0])).toEqual(['staff.ts']);
+  });
+});
+
 // ------------------------------------------------------------- the sweep --
 
 describe('no merchant-scope call reaches a scanner-only endpoint', () => {
@@ -389,8 +455,11 @@ describe('no merchant-scope call reaches a scanner-only endpoint', () => {
 
   it('resolves every merchant call to a registered route', () => {
     // An unresolvable path is not itself the defect this file hunts, but it blinds the
-    // sweep to that call — so it fails here rather than passing in silence.
-    const unresolved = merchant.filter((c) => !routeFor(c)).map((c) => `${c.name}  (${c.where})`);
+    // sweep to that call — so it fails here rather than passing in silence. The one
+    // exception is a route contracted ahead of its registration (above), by exact name.
+    const unresolved = merchant
+      .filter((c) => !routeFor(c) && !contractedAhead(c))
+      .map((c) => `${c.name}  (${c.where})`);
     expect(unresolved, `these merchant calls match no route in api/src/routes:\n${unresolved.join('\n')}`).toEqual([]);
   });
 
