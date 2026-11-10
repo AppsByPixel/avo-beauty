@@ -586,6 +586,47 @@ export function noShowWorkerIsRunning(): boolean {
 }
 
 /**
+ * BOOT THIS FILE'S API BEHIND A TRUSTED LOOPBACK PROXY — `TRUST_PROXY=loopback` — so a
+ * spec can say which CLIENT ADDRESS a request comes from with `X-Forwarded-For`.
+ *
+ * WHY ONE FILE NEEDS THIS. Every request this harness sends leaves from 127.0.0.1, and
+ * with `TRUST_PROXY` unset (`env.ts`'s development default) that is what `req.ip` is for
+ * all of them. That is fine for every limiter keyed on a claimed identity. It is not fine
+ * for one keyed on the ADDRESS: `POST /staff/pair` (DECISIONS.md § Staff phone pairing,
+ * 2026-11-10) puts "a per-IP and per-phone budget ... on the existing sign-in-limit
+ * pattern" in front of an unauthenticated endpoint, and a sign-in-shaped budget is ten
+ * attempts in fifteen minutes. A file that redeems thirty codes from one address spends
+ * that budget by its eleventh request, and every later spec fails as `429` for a reason
+ * that has nothing to do with what it is asserting — the signature `sign-in-limit.test.ts`
+ * records for the harness-wide session problem, one level down.
+ *
+ * `loopback`, NOT `true`. `proxy-addr` reads `loopback` as 127.0.0.1/8 and ::1, which is
+ * exactly the hop this harness is, and nothing wider: the deployed shape (a load balancer
+ * the operator names) rather than the forgeable one `env.ts` warns about. A request sent
+ * WITHOUT the header is still 127.0.0.1.
+ *
+ * A FILE THAT CALLS THIS MUST PROVE IT TOOK. `staff-pairing.test.ts` signs its manager in
+ * with a forwarded address and reads `session.ip_address` back from Postgres before any
+ * per-address spec runs — an override that silently did nothing would leave every
+ * per-address budget spec measuring 127.0.0.1 and passing for the wrong reason.
+ *
+ * Same lifecycle and the same guard as `bootWithNoShowWorker`: read at BOOT, so it must
+ * be called before `startTenancyApi()`, and it reaches only the API this file boots —
+ * `fileParallelism: false` means no other file's server is alive beside it.
+ */
+let trustProxyOverride: string | undefined;
+
+export function bootTrustingLoopbackProxy(): void {
+  if (base !== '') {
+    throw new Error(
+      'bootTrustingLoopbackProxy() must be called BEFORE startTenancyApi(). TRUST_PROXY is ' +
+        'read once, when the API process is spawned.',
+    );
+  }
+  trustProxyOverride = 'loopback';
+}
+
+/**
  * The attempt budget the API under test runs with, PINNED HERE rather than left to
  * `env.ts`'s default of 6.
  *
@@ -2187,6 +2228,8 @@ async function bootApiOnce(): Promise<boolean> {
       NO_SHOW_POLL_MS: String(
         noShowWorkerOverride?.pollMs ?? process.env.NO_SHOW_POLL_MS ?? 30_000,
       ),
+      // Only for a file that called `bootTrustingLoopbackProxy()` — see its note.
+      ...(trustProxyOverride ? { TRUST_PROXY: trustProxyOverride } : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
