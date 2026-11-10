@@ -179,6 +179,9 @@ const wrongDigits = (code: string, k = 1): string =>
 /** A token-shaped string nobody issued. */
 const ghostToken = (): string => `qa_${randomBytes(32).toString('base64url')}`;
 
+/** Hex sha256 — how `staff_pairing_code.token_hash` and `staff_password_reset.token_hash` store a token. */
+const sha256 = (raw: string): string => createHash('sha256').update(raw).digest('hex');
+
 // --------------------------------------------------------------- fixtures --
 
 interface StaffSeed {
@@ -1424,12 +1427,39 @@ describe('the budget in front of POST /staff/pair', () => {
  *     its own budget rows, and the budget claims "a phone never sits in the clear".
  *   - `liveCode()` refuses a code whose branch closed after it was issued.
  *
+ *   - LOCK ORDER. The issue door locked `staff_user` and then wrote `staff_pairing_code`;
+ *     the redeem locked `staff_pairing_code` and then wrote `staff_user`. Opposite orders on
+ *     the same two rows — the last spec in this block, filed as a knownBug in phase 2
+ *     (1a0997c), fixed by lane A in 80d4fdb and promoted to a plain `it()` in phase 3.
+ *
  * NOT ADDED, because lane A's own `staffPairing.int.test.ts` already pins them against a real
  * database: a `pin` in the issue body (`:243`) and a handle that reads as a number (`:552`).
- *   - LOCK ORDER. The issue door locks `staff_user` and then writes `staff_pairing_code`;
- *     the redeem locks `staff_pairing_code` and then writes `staff_user`. Opposite orders on
- *     the same two rows.
  */
+
+/** Poll a condition read from Postgres. A plain Error on timeout — a broken arrangement, not a defect. */
+async function waitFor(cond: () => boolean, what: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`precondition failed: ${what} within ${timeoutMs}ms`);
+}
+
+/**
+ * Some backend is parked on a `staff_user` row lock taken by a drizzle `… FOR UPDATE`. The
+ * holder in `withRowLockHeld` writes its own SQL unquoted (`FROM staff_user`), so it never
+ * matches itself. Used to let ONE contender queue before the next is sent, which is what
+ * makes an arranged interleaving an order rather than a hope.
+ */
+const waitingOnAStaffRowLock = (): boolean =>
+  Number(
+    scalar(
+      `select count(*) from pg_stat_activity where datname = current_database() ` +
+        `and wait_event_type = 'Lock' and query ilike '%from "staff_user"%for update%'`,
+    ),
+  ) >= 1;
+
 describe('phase 2 — what lane A built that the contract did not say', () => {
   /** Six digits that are none of `codes`. */
   const noneOf = (codes: string[]): string => {
@@ -1445,16 +1475,6 @@ describe('phase 2 — what lane A built that the contract did not say', () => {
     `+965 ${p.local.slice(0, 4)} ${p.local.slice(4)}`,
     `${p.local.slice(0, 4)}-${p.local.slice(4)}`,
   ];
-
-  /** Poll a condition read from Postgres. A plain Error on timeout — a broken arrangement, not a defect. */
-  async function waitFor(cond: () => boolean, what: string, timeoutMs = 15_000): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (cond()) return;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    throw new Error(`precondition failed: ${what} within ${timeoutMs}ms`);
-  }
 
   it('the per-phone budget is one bucket whatever the spelling — rotating +965…, eight digits, spaces and dashes buys no extra attempts', async () => {
     /**
@@ -1689,64 +1709,496 @@ describe('phase 2 — what lane A built that the contract did not say', () => {
     expect(again.body.error).toBe('unknown_branch');
   });
 
+  it('a manager re-issuing while the phone redeems the earlier code: both answer inside the contract, never a 500', async () => {
+    /**
+     * PROMOTED FROM A knownBug IN PHASE 3. Phase 2 (1a0997c) read the two orders off
+     * `staffPairing.ts` as it stood at 952e052:
+     *
+     *   issue   SELECT staff_user … FOR UPDATE   then UPDATE staff_pairing_code (void)
+     *   redeem  SELECT staff_pairing_code … FOR UPDATE, claim
+     *                                            then UPDATE staff_user (bind the PIN)
+     *
+     * Opposite orders on the same two rows, so a re-issue that reached her staff_user row first
+     * while a redeem held the code was a cycle: Postgres aborted one (`40P01 deadlock detected
+     * … while updating tuple in relation "staff_user"`) and the redeem answered 500. In the
+     * product: a manager pressing "new code" on Pair a phone at the moment the phone scans.
+     *
+     * Lane A, 80d4fdb (`staffPairing.ts` § LOCK ORDER): the redeem now takes the issuer's
+     * order — an unlocked read for whose rows (4a), her staff_user row FOR UPDATE (4b), then
+     * the codes re-read FOR UPDATE under that lock (4c). Shown red again in phase 3 against a
+     * temporary revert of that one file, restored byte-for-byte.
+     *
+     * ARRANGED, not hoped for — `withRowLockHeld` on her staff_user row, the re-issue let in
+     * FIRST (it queues on the row), then the redeem. Under the old order the redeem took the
+     * code and queued on the row second; under the new one it queues on the row at 4b. Either
+     * way the receipt is two waiters on the chain, so this arrangement reaches both handlers'
+     * locks whichever order they take them in.
+     *
+     * EITHER OUTCOME IS LEGAL; A 500 IS NOT. The redeem may win (the old code pairs, and the
+     * re-issue then voids nothing and mints a live code) or lose (the re-issue voids the old
+     * code first, and the redeem gets the uniform refusal). In both, exactly one code is left
+     * live — the re-issued one — and it pairs.
+     */
+    const t = newTarget();
+    const first = await issueOk(t.id);
+
+    const [reissued, redeemed] = await withRowLockHeld({ table: 'staff_user', id: t.id }, 2, async () => {
+      const reissue = issue(t.id);
+      await waitFor(waitingOnAStaffRowLock, 'the re-issue never queued on her staff_user row');
+      const redeem = pair({ token: first.token, pin: PAIR_PIN });
+      return Promise.all([reissue, redeem]);
+    });
+
+    const errors = [
+      ['the re-issue', reissued],
+      ['the redeem', redeemed],
+    ].filter(([, r]) => (r as TenancyResponse<any>).status >= 500) as Array<[string, TenancyResponse<any>]>;
+    expect(
+      errors.map(([who, r]) => `${who}: ${r.status} ${r.raw}`),
+      'a re-issue and a redeem of the earlier code, interleaved, and one of them is a server error. ' +
+        'The two handlers lock staff_user and staff_pairing_code in opposite orders.\n' +
+        `--- the API's own log ---\n${apiLogTail(30)}`,
+    ).toEqual([]);
+
+    expect(succeeded(reissued.status), `the re-issue: ${reissued.status} ${reissued.raw}`).toBe(true);
+    if (!succeeded(redeemed.status)) expectRefused(redeemed, 'the redeem that lost to the re-issue');
+    const fresh = parsed(StaffPairingCodeSchema, reissued.body, 'the re-issued code');
+    expect(
+      scalar(
+        `select coalesce(string_agg(token_hash, ','), '') from staff_pairing_code where staff_id = '${t.id}' ` +
+          'and used_at is null and voided_at is null and expires_at > now()',
+      ),
+      'after the race, the live code is not exactly the re-issued one',
+    ).toBe(sha256(fresh.token));
+    const ok = await pairOk({ token: fresh.token, pin: PAIR_PIN });
+    expect(ok.staff.id).toBe(t.id);
+  }, 90_000);
+});
+
+// ===========================================================================
+// PHASE 3 — A LEAVER TAKES HER PAIRING STATE WITH HER; A RE-PAIR KEEPS A TYPED TILL
+// ===========================================================================
+/**
+ * Trunk's phase-2 ruling, built by lane A in df68e5e (`routes/staff.ts § DELETE /staff/:id`)
+ * on the lock order of 80d4fdb: deactivating a staff member, in the transaction that already
+ * nulls her credentials and spends her reset links, now VOIDS her unused pairing codes and
+ * REVOKES the till enrolled under her server-issued (`PH-`) phone — as the manager who
+ * deactivated her, reason `staff_deactivated`. A typed or seeded till (`DEV-…`, anything a
+ * manager enters in Tills) is never touched: it may be the counter tablet the rest of the team
+ * signs into. The re-pair has applied the same rule since phase 2 (`staffPairing.ts § unenrol
+ * the phone she left`, reason `staff_repaired`) and nothing in this file pinned it.
+ *
+ * Read through the doors a salon actually uses — Tills (`POST /salons/:id/devices`), the
+ * roster's deactivate, the reset link that re-hires her (`POST /staff/:id/password-reset`, then
+ * `POST /auth/staff/password-reset`), and Tills' list (`GET /salons/:id/devices`) — and then
+ * checked at the rows. Column names below are lane A's (`voided_at`, `revoked_by_staff_id`, the
+ * audit `metadata` keys), read from its code rather than from the contract, which names none.
+ */
+describe('phase 3 — a leaver takes her pairing state with her, and a re-pair keeps a typed till', () => {
+  /** Every enrolment of one device at the salon, oldest first, as `branch|live|revoked_by`. */
+  const enrolmentsOf = (deviceId: string): string[] => {
+    const out = scalar(
+      `select coalesce(string_agg(branch_id || '|' || case when revoked_at is null then 'live' else 'revoked' end ` +
+        `|| '|' || coalesce(revoked_by_staff_id, ''), E'\\n' order by created_at, id), '') ` +
+        `from device_enrolment where salon_id = '${SALON}' and device_id = '${deviceId}'`,
+    );
+    return out ? out.split('\n') : [];
+  };
+
+  /** The whole row image of a device's live enrolment — "untouched", not merely "still live". */
+  const liveEnrolmentImage = (deviceId: string): string =>
+    scalar(
+      `select coalesce(to_jsonb(t)::text, '') from device_enrolment t ` +
+        `where salon_id = '${SALON}' and device_id = '${deviceId}' and revoked_at is null`,
+    );
+
+  interface Revoke {
+    actor: string | null;
+    source: string;
+    via: string | null;
+    reason: string | null;
+    staff: string | null;
+    replacedBy: string | null;
+  }
+
+  /** The `rules` / `device_revoked` audit rows naming one device, oldest first. */
+  const revokesOf = (deviceId: string): Revoke[] =>
+    JSON.parse(
+      scalar(
+        `select coalesce(json_agg(json_build_object('actor', actor_id, 'source', source::text, ` +
+          `'via', metadata->>'via', 'reason', metadata->>'reason', 'staff', metadata->>'pairedStaffId', ` +
+          `'replacedBy', metadata->>'replacedByDeviceId') order by seq), '[]') from audit_log ` +
+          `where salon_id = '${SALON}' and kind = 'rules' and action = 'device_revoked' ` +
+          `and subject_type = 'device' and subject_id = '${deviceId}'`,
+      ),
+    ) as Revoke[];
+
+  /** One metadata key off her "Staff account deactivated" rows, one value per row. */
+  const deactivationMeta = (staffId: string, key: string): string =>
+    scalar(
+      `select coalesce(string_agg(coalesce(metadata->>'${key}', '(none)'), ',' order by seq), '') from audit_log ` +
+        `where salon_id = '${SALON}' and action = 'Staff account deactivated' and subject_id = '${staffId}'`,
+    );
+
+  /** What Tills lists — the merchant's own view, through the API. */
+  async function tills(): Promise<string[]> {
+    const res = await treq<any>('GET', `/salons/${SALON}/devices`, { token: mgr });
+    expect(res.status, `GET /salons/${SALON}/devices: ${res.raw}`).toBe(200);
+    return (res.body.items as Array<{ deviceId: string }>).map((i) => i.deviceId);
+  }
+
+  /** A typed till, enrolled the way a manager does it in Tills. */
+  async function enrolTill(deviceId: string, branchId: string, label: string): Promise<void> {
+    const res = await treq<any>('POST', `/salons/${SALON}/devices`, {
+      token: mgr,
+      body: { deviceId, branchId, label },
+    });
+    precondition(res.status === 201, `POST /salons/${SALON}/devices ${deviceId}: ${res.status} ${res.raw}`);
+  }
+
+  /**
+   * RE-HIRED THROUGH THE PRODUCT'S OWN DOOR. The manager asks for a re-activation link, and
+   * she accepts it. `POST /staff/:id/password-reset` never returns its token (non-negotiable
+   * #6) and no sender is wired, so the one step this stands in for is DELIVERY: the row the
+   * manager's request just wrote is given a token this spec holds. Nothing else about the row
+   * changes, and acceptance goes through `POST /auth/staff/password-reset` exactly as hers would.
+   */
+  async function rehire(staffId: string): Promise<void> {
+    const link = await treq<any>('POST', `/staff/${staffId}/password-reset`, { token: mgr, body: {} });
+    precondition(
+      link.status === 202 && link.body.reactivating === true,
+      `the re-activation link for ${staffId}: ${link.status} ${link.raw}`,
+    );
+    const token = `qa-rehire-${RUN}-${randomBytes(18).toString('base64url')}`;
+    const out = psql(
+      `UPDATE staff_password_reset SET token_hash = '${sha256(token)}' WHERE staff_id = '${staffId}' AND used_at IS NULL;`,
+    );
+    precondition(/UPDATE 1\b/.test(out), `expected exactly one live reset link for ${staffId}: ${out}`);
+    const accepted = await treq<any>('POST', '/auth/staff/password-reset', {
+      token: null,
+      body: { token, password: 'qa-returning-password' },
+      headers: { 'x-forwarded-for': nextIp() },
+    });
+    precondition(accepted.status === 204, `accepting the re-activation link: ${accepted.status} ${accepted.raw}`);
+    precondition(staffCol(staffId, 'deactivated_at') === '', `${staffId} is not active again after the link`);
+  }
+
+  it('a code issued before DELETE /staff/:id is voided with her — re-hired by the reset link inside its ten minutes, neither its QR nor her number and its digits pair her; a code issued after the re-hire does', async () => {
+    /**
+     * The hole this closes: the redeem refused a deactivated member, but only WHILE she was
+     * deactivated, and re-hire re-activates her in the UPDATE that sets her password. So a
+     * code issued to the leaver — on a manager's screen, in a phone's camera roll — would
+     * pair the returner inside its ten minutes with nobody having issued her one.
+     *
+     * The code names a branch, so a wrongful pair would also have ENROLLED a till; and
+     * `expires_at > now()` is checked before the refusals, so they cannot be expiry. The doors
+     * are tried BEFORE the rows are read, so a regression fails here as the product would —
+     * the leaver's QR pairing the returner — and not as a column that is null.
+     */
+    const t = newTarget();
+    const phone = nextPhone();
+    await setPhone(t.id, phone.local);
+    const code = await issueOk(t.id, { branchId: BRANCH_2 });
+    await deactivate(t.id);
+    await rehire(t.id);
+    precondition(staffCol(t.id, 'phone') === phone.e164, 'her number did not come back with her');
+    precondition(
+      scalar(`select (expires_at > now())::text from staff_pairing_code where token_hash = '${sha256(code.token)}'`) ===
+        'true',
+      "the leaver's code expired before it could be tried, so a refusal would prove nothing about voiding",
+    );
+
+    expectRefused(await pair({ token: code.token, pin: PAIR_PIN }), "a leaver's QR, after her re-hire");
+    expectRefused(
+      await pair({ phone: phone.e164, code: code.code, pin: PAIR_PIN }),
+      "a leaver's number and digits, after her re-hire",
+    );
+    expect(staffCol(t.id, 'pin_hash'), "the leaver's code set a PIN on the returner").toBe('');
+    expect(staffCol(t.id, 'pin_device_id')).toBe('');
+    expect(
+      Number(
+        scalar(
+          `select count(*) from device_enrolment where salon_id = '${SALON}' and branch_id = '${BRANCH_2}' ` +
+            `and label = (select name from staff_user where id = '${t.id}') || '''s phone'`,
+        ),
+      ),
+      "the leaver's code enrolled her phone as a till",
+    ).toBe(0);
+
+    // WHY it is dead: voided by the deactivation — not marked used, since nobody redeemed it.
+    expect(
+      scalar(
+        `select (voided_at is not null)::text || '|' || (used_at is null)::text from staff_pairing_code ` +
+          `where token_hash = '${sha256(code.token)}'`,
+      ),
+      'her code outlived the deactivation (voided_at null) — or was marked USED, which nobody did',
+    ).toBe('true|true');
+    expect(deactivationMeta(t.id, 'pairingCodesVoided'), 'the deactivation row does not count the voided code').toBe(
+      '1',
+    );
+
+    // THE CONTROL: she is pairable — it was the code that was dead, not her.
+    const fresh = await issueOk(t.id);
+    const ok = await pairOk({ token: fresh.token, pin: PAIR_PIN });
+    expect(ok.staff.id).toBe(t.id);
+  }, 60_000);
+
+  it("her PH- till is revoked as she leaves — by the manager who deactivated her, reason staff_deactivated — and drops out of Tills; a colleague's PH- till does not", async () => {
+    const t = newTarget();
+    const colleague = newTarget();
+    const mine = await pairOk({ token: (await issueOk(t.id, { branchId: BRANCH_2 })).token, pin: PAIR_PIN });
+    const theirs = await pairOk({
+      token: (await issueOk(colleague.id, { branchId: BRANCH_2 })).token,
+      pin: PAIR_PIN,
+    });
+    precondition(
+      mine.deviceId.startsWith('PH-') && theirs.deviceId.startsWith('PH-'),
+      `the paired ids are not server-issued: ${mine.deviceId}, ${theirs.deviceId}`,
+    );
+    precondition(enrolmentsOf(mine.deviceId).join() === `${BRANCH_2}|live|`, 'her phone was never a live till');
+    precondition((await tills()).includes(mine.deviceId), 'Tills never listed her phone');
+
+    await deactivate(t.id);
+
+    // Revoked, not deleted — the history row stays — and by the manager whose act it was.
+    expect(enrolmentsOf(mine.deviceId), "the leaver's phone is still a live till").toEqual([
+      `${BRANCH_2}|revoked|${MGR}`,
+    ]);
+    expect(revokesOf(mine.deviceId)).toEqual([
+      {
+        actor: MGR,
+        source: 'merchant',
+        via: 'staff_deactivation',
+        reason: 'staff_deactivated',
+        staff: t.id,
+        replacedBy: null,
+      },
+    ]);
+    expect(deactivationMeta(t.id, 'tillsRevoked')).toBe('1');
+
+    const listed = await tills();
+    expect(listed, 'Tills still lists a phone nobody can sign into').not.toContain(mine.deviceId);
+    expect(listed, "her leaving took a colleague's phone out of Tills").toContain(theirs.deviceId);
+    expect(enrolmentsOf(theirs.deviceId), "her leaving revoked a colleague's PH- till").toEqual([
+      `${BRANCH_2}|live|`,
+    ]);
+    expect(revokesOf(theirs.deviceId)).toEqual([]);
+    expect((await me(mine.accessToken)).status, "the leaver's paired-phone session still answers").toBe(401);
+    expect((await me(theirs.accessToken)).status, "her leaving signed a colleague's phone out").toBe(200);
+  }, 60_000);
+
+  it('a DEV- till enrolled through POST /salons/:id/devices — the counter tablet her PIN was on — survives her leaving untouched, and a colleague’s charge there is still ESTABLISHED at its branch', async () => {
+    const counter = nextDevice('COUNTER');
+    const t = newTarget({ pinDevice: counter });
+    const colleague = newTarget({ pinDevice: counter });
+    await enrolTill(counter, BRANCH_2, `QA counter tablet ${RUN}`);
+    const before = liveEnrolmentImage(counter);
+    precondition(before !== '', 'the counter tablet has no live enrolment');
+    precondition(staffCol(t.id, 'pin_device_id') === counter, 'her PIN is not on the counter tablet');
+
+    await deactivate(t.id);
+
+    expect(staffCol(t.id, 'pin_device_id'), 'her PIN binding outlived her').toBe('');
+    expect(liveEnrolmentImage(counter), "the counter tablet's enrolment row was rewritten by her leaving").toBe(
+      before,
+    );
+    expect(enrolmentsOf(counter)).toEqual([`${BRANCH_2}|live|`]);
+    expect(revokesOf(counter), 'a device_revoked row names the counter tablet').toEqual([]);
+    expect(await tills(), 'Tills lost the counter tablet').toContain(counter);
+
+    // Still the team's till — at the money, not only in the table.
+    const session = await signInScanner(SALON, colleague.handle, counter);
+    const token = await mintWalletTokenFor(wallet, MEMBER);
+    const charge = await treq<any>('POST', '/charges', {
+      token: session,
+      idempotencyKey: `qa-pair-${RUN}-counter-after-leaver`,
+      body: { memberId: MEMBER, serviceIds: [SERVICE], token, confirmDuplicate: true },
+    });
+    expect(charge.status, `a colleague's charge on the counter tablet: ${charge.raw}`).toBe(200);
+    expect(
+      scalar(`select branch_id || '|' || branch_assumed::text from transaction where id = '${charge.body.transaction.id}'`),
+      "the counter tablet's charge is no longer established at its branch",
+    ).toBe(`${BRANCH_2}|false`);
+
+    // Last, because it is df68e5e's new audit key and not the guard: her row says 0 tills.
+    expect(deactivationMeta(t.id, 'tillsRevoked')).toBe('0');
+  }, 60_000);
+
+  it('re-paired twice: the first PH- till is revoked as staff_repaired and the second is live, while the DEV- till she started on is untouched throughout', async () => {
+    const start = nextDevice('START');
+    const t = newTarget({ pinDevice: start });
+    await enrolTill(start, BRANCH_1, `QA start tablet ${RUN}`);
+    const before = liveEnrolmentImage(start);
+    precondition(before !== '', 'the start tablet has no live enrolment');
+
+    // ONE: her PIN leaves the typed tablet for a phone. The tablet is not hers to revoke.
+    const first = await pairOk({ token: (await issueOk(t.id, { branchId: BRANCH_2 })).token, pin: PAIR_PIN });
+    precondition(first.deviceId.startsWith('PH-'), `not server-issued: ${first.deviceId}`);
+    expect(liveEnrolmentImage(start), 'the first pair rewrote the typed till her PIN left').toBe(before);
+    expect(revokesOf(start)).toEqual([]);
+    expect(enrolmentsOf(first.deviceId)).toEqual([`${BRANCH_2}|live|`]);
+
+    // TWO: her PIN leaves the first phone for a second. The first phone IS hers, and goes.
+    const second = await pairOk({ token: (await issueOk(t.id, { branchId: BRANCH_2 })).token, pin: PAIR_PIN });
+    expect(second.deviceId, 'the second pair re-used the first phone id').not.toBe(first.deviceId);
+    expect(enrolmentsOf(first.deviceId), 'the phone she left is still a live till').toEqual([
+      `${BRANCH_2}|revoked|${t.id}`,
+    ]);
+    expect(revokesOf(first.deviceId)).toEqual([
+      {
+        actor: t.id,
+        source: 'scanner',
+        via: 'pairing',
+        reason: 'staff_repaired',
+        staff: t.id,
+        replacedBy: second.deviceId,
+      },
+    ]);
+    expect(enrolmentsOf(second.deviceId)).toEqual([`${BRANCH_2}|live|`]);
+    expect(liveEnrolmentImage(start), 'the second pair rewrote the typed till').toBe(before);
+    expect(revokesOf(start)).toEqual([]);
+
+    const listed = await tills();
+    expect(listed).toContain(second.deviceId);
+    expect(listed).toContain(start);
+    expect(listed, 'Tills still lists the phone she left').not.toContain(first.deviceId);
+    expect((await me(first.accessToken)).status, "the first phone's session survived the second pair").toBe(401);
+    expect((await me(second.accessToken)).status).toBe(200);
+  }, 60_000);
+
+  it('deactivated while her phone redeems a code naming a branch — the redeem commits first, and the till it just enrolled is the one revoked', async () => {
+    /**
+     * `DELETE /staff/:id` reads `pin_device_id` UNDER her row lock (staff.ts, "HER ROW
+     * FIRST"), because a pair committing while the deactivation waits moves her onto a new
+     * `PH-` id — and that new phone is the till to revoke. The handler also reads her row
+     * BEFORE its transaction, unlocked, when she has no phone at all; a revoke keyed on that
+     * read finds nothing and leaves the freshly enrolled till live in Tills.
+     *
+     * ARRANGED: her staff_user row held; the redeem let in first (it queues at its step 4b),
+     * then the deactivation (it queues behind). Released, the redeem commits and enrols; the
+     * deactivation then takes her row. The redeem winning is a PRECONDITION, not a claim — the
+     * other order is the sequential spec above, and would make this one vacuous.
+     */
+    const t = newTarget();
+    const code = await issueOk(t.id, { branchId: BRANCH_2 });
+
+    const [redeemed, left] = await withRowLockHeld({ table: 'staff_user', id: t.id }, 2, async () => {
+      const redeem = pair({ token: code.token, pin: PAIR_PIN });
+      await waitFor(waitingOnAStaffRowLock, 'the redeem never queued on her staff_user row');
+      const gone = treq<any>('DELETE', `/staff/${t.id}`, { token: mgr });
+      return Promise.all([redeem, gone]);
+    });
+    precondition(
+      succeeded(redeemed.status),
+      `the arrangement did not let the redeem commit first: ${redeemed.status} ${redeemed.raw}`,
+    );
+    expect(left.status, `DELETE /staff/${t.id}: ${left.raw}`).toBe(200);
+    const phone = parsed(StaffPairResponseSchema, redeemed.body, 'the redeem that won').deviceId;
+
+    expect(staffCol(t.id, 'deactivated_at')).not.toBe('');
+    expect(staffCol(t.id, 'pin_device_id')).toBe('');
+    expect(
+      enrolmentsOf(phone),
+      'the till her phone became a moment before she left is still live — the revoke read her row before the pair committed',
+    ).toEqual([`${BRANCH_2}|revoked|${MGR}`]);
+    expect(revokesOf(phone).map((r) => r.reason)).toEqual(['staff_deactivated']);
+    expect(await tills()).not.toContain(phone);
+    expect((await me(redeemed.body.accessToken)).status, "the leaver's brand-new phone session still answers").toBe(
+      401,
+    );
+  }, 90_000);
+
   knownBug(
-    'a manager re-issuing while the phone redeems the earlier code: both answer inside the contract, never a 500',
+    'two DELETE /staff/:id of one staff member at the same instant write one "Staff account deactivated" row, not two',
     async () => {
       /**
-       * THE TWO ORDERS, read off `staffPairing.ts`:
+       * The handler's own comment: "Idempotent. Deactivating a leaver is not an error and must
+       * not write a second audit row claiming she left twice." The check behind it
+       * (`if (target.deactivatedAt)`) runs on the read BEFORE the transaction, and is not
+       * repeated under the row lock df68e5e added. So two deactivations that both read her
+       * active — a double-clicked Remove, or two managers on the roster — both queue on her
+       * row, and the second, let through after the first commits, deactivates her AGAIN: a
+       * second audit row (0 voided, 0 revoked) and `deactivated_at` rewritten by the second request.
+       * Pre-existing; lane A named it in its phase-3 report and left it out of scope.
        *
-       *   issue   :247  SELECT staff_user … FOR UPDATE   then :254 UPDATE staff_pairing_code (void)
-       *   redeem  :386  SELECT staff_pairing_code … FOR UPDATE, :469 claim
-       *                                                  then :486 UPDATE staff_user (bind the PIN)
-       *
-       * Opposite orders on the same two rows, so a re-issue that reaches her staff_user row
-       * first while a redeem holds the code is a cycle: the re-issue waits for the code, the
-       * redeem waits for her row, and Postgres aborts one of them (`40P01`) into a 500. In the
-       * product that is a manager pressing "new code" on the Pair a phone dialog at the moment
-       * the phone redeems the old one.
-       *
-       * ARRANGED, not hoped for — `withRowLockHeld` on her staff_user row, the re-issue let in
-       * FIRST (it queues on the row), then the redeem (it takes the code, claims it, and queues
-       * on the row behind the re-issue). The receipt is two waiters on the chain.
-       *
-       * EITHER OUTCOME IS LEGAL; A 500 IS NOT. The redeem may win (the old code pairs, and the
-       * re-issue then voids nothing and mints a live code) or lose (the re-issue voids the old
-       * code first, and the redeem gets the uniform refusal). In both, the NEW code then pairs.
+       * ARRANGED on her staff_user row. Both answering 200 is correct either way (the route is
+       * idempotent by design), so it is a precondition; the claim is the count.
        */
       const t = newTarget();
-      const first = await issueOk(t.id);
-
-      const waitingForHerRow = () =>
+      const [a, b] = await withRowLockHeld({ table: 'staff_user', id: t.id }, 2, () =>
+        Promise.all([
+          treq<any>('DELETE', `/staff/${t.id}`, { token: mgr }),
+          treq<any>('DELETE', `/staff/${t.id}`, { token: mgr }),
+        ]),
+      );
+      precondition(a.status === 200 && b.status === 200, `the two DELETEs: ${a.status} ${a.raw} | ${b.status} ${b.raw}`);
+      expect(
         Number(
           scalar(
-            `select count(*) from pg_stat_activity where datname = current_database() ` +
-              `and wait_event_type = 'Lock' and query ilike '%from "staff_user"%for update%'`,
+            `select count(*) from audit_log where salon_id = '${SALON}' ` +
+              `and action = 'Staff account deactivated' and subject_id = '${t.id}'`,
           ),
-        ) >= 1;
+        ),
+        'two racing deactivations of one leaver wrote a "Staff account deactivated" row each — she left twice',
+      ).toBe(1);
+    },
+    60_000,
+  );
 
-      const [reissued, redeemed] = await withRowLockHeld({ table: 'staff_user', id: t.id }, 2, async () => {
-        const reissue = issue(t.id);
-        await waitFor(waitingForHerRow, 'the re-issue never queued on her staff_user row');
-        const redeem = pair({ token: first.token, pin: PAIR_PIN });
-        return Promise.all([reissue, redeem]);
+  knownBug(
+    "two managers pairing each other at the same instant — M issuing X a code while M's own phone redeems the code X issued her — both answer inside the contract, never a 500",
+    async () => {
+      /**
+       * THE RESIDUAL lane A named in 80d4fdb and did not close: the lock order is now one
+       * order PER STAFF ROW, but a foreign key reaches a SECOND row.
+       *
+       *   M issues for X   locks X FOR UPDATE, then INSERTs X's code — and the FK
+       *                    (created_by, salon_id) takes FOR KEY SHARE on M's row.
+       *   M's phone pairs  locks M FOR UPDATE (4b), then — the code names a branch —
+       *                    INSERTs device_enrolment, whose FK enrolled_by_staff_id takes
+       *                    FOR KEY SHARE on X's row (X issued it).
+       *
+       * FOR UPDATE conflicts with FOR KEY SHARE, so each holds what the other needs. In the
+       * product: two managers, each pairing her phone from the other's dashboard.
+       *
+       * ARRANGED on X's staff_user row: the issue let in first (it queues for X FOR UPDATE),
+       * then the redeem (it takes M, claims, binds, and queues on X at the enrolment's FK
+       * check, behind the issue). Released, the issue takes X and then waits on M — a cycle.
+       * Both requests are independently legal — different staff, different codes — so the
+       * contract is BOTH succeed, and a fix (any FK-aware lock order) turns this red.
+       */
+      const managers = [1, 2].map((n) => {
+        const id = `ST-QA-PR-${RUN}-MX${n}`;
+        const handle = `pr-${run}-mx${n}`;
+        psql(
+          staffSql({ id, salon: SALON, handle, name: `QA Pairing Mutual ${n}`, role: 'manager', password: true, pinDevice: null, perms: ALL_PERMS }),
+        );
+        return { id, handle };
+      });
+      const [m, x] = managers as [Target, Target];
+      const mToken = await signInDashboard(SALON, m.handle);
+      const xToken = await signInDashboard(SALON, x.handle);
+
+      const forM = await issueOk(m.id, { branchId: BRANCH_2 }, xToken);
+
+      const [issued, redeemed] = await withRowLockHeld({ table: 'staff_user', id: x.id }, 2, async () => {
+        const issueForX = issue(x.id, {}, mToken);
+        await waitFor(waitingOnAStaffRowLock, "M's issue for X never queued on X's staff_user row");
+        const redeemForM = pair({ token: forM.token, pin: PAIR_PIN });
+        return Promise.all([issueForX, redeemForM]);
       });
 
       const errors = [
-        ['the re-issue', reissued],
-        ['the redeem', redeemed],
+        ['M issuing for X', issued],
+        ["M's phone redeeming X's code", redeemed],
       ].filter(([, r]) => (r as TenancyResponse<any>).status >= 500) as Array<[string, TenancyResponse<any>]>;
       expect(
         errors.map(([who, r]) => `${who}: ${r.status} ${r.raw}`),
-        'a re-issue and a redeem of the earlier code, interleaved, and one of them is a server error. ' +
-          'The two handlers lock staff_user and staff_pairing_code in opposite orders.\n' +
-          `--- the API's own log ---\n${apiLogTail(30)}`,
+        'two managers pairing each other at once, and one of them is a server error — the FK key-share ' +
+          `locks cross the two staff rows.\n--- the API's own log ---\n${apiLogTail(30)}`,
       ).toEqual([]);
-
-      expect(succeeded(reissued.status), `the re-issue: ${reissued.status} ${reissued.raw}`).toBe(true);
-      if (!succeeded(redeemed.status)) expectRefused(redeemed, 'the redeem that lost to the re-issue');
-      const fresh = parsed(StaffPairingCodeSchema, reissued.body, 'the re-issued code');
-      const ok = await pairOk({ token: fresh.token, pin: PAIR_PIN });
-      expect(ok.staff.id).toBe(t.id);
+      expect(succeeded(issued.status), `M issuing for X: ${issued.status} ${issued.raw}`).toBe(true);
+      expect(succeeded(redeemed.status), `M's phone: ${redeemed.status} ${redeemed.raw}`).toBe(true);
     },
     90_000,
   );
