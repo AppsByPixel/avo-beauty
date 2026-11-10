@@ -9,7 +9,8 @@
  */
 
 import { z } from 'zod';
-import { StaffUserSchema } from '@avo/types';
+import { StaffPairRequestSchema, StaffPairResponseSchema, StaffUserSchema } from '@avo/types';
+import type { DeviceBinding } from '../state/device';
 import { getJson, postJson } from './client';
 
 /**
@@ -75,6 +76,55 @@ export async function signIn(
     };
   }
   return { accessToken: body.token, refreshToken: null, expiresAt: null, staff: body.staff };
+}
+
+export type StaffPairRequest = z.infer<typeof StaffPairRequestSchema>;
+
+/** What a redeemed pairing code gives the phone: its binding, and a live session. */
+export interface PairedPhone {
+  binding: DeviceBinding;
+  session: StaffSession;
+}
+
+/**
+ * `POST /staff/pair` — redeem a pairing code and choose the PIN in one request.
+ *
+ * DECISIONS.md § "Staff phone pairing, phone sign-in, and a truthful receipt
+ * line — Aftab, 2026-11-10"; contract in packages/types § staff pairing.
+ * Unauthenticated (it is what mints the first token), so no access token;
+ * single-use on the server, so a double tap cannot redeem twice — the second
+ * one is refused like any used code.
+ *
+ * The body is parsed with `StaffPairRequestSchema` BEFORE it is sent, so a
+ * malformed one fails here, off the network and outside the server's attempt
+ * budget. The setup screens only ever build valid ones (domain/pairing.ts);
+ * this is the last line, not the first.
+ *
+ * Same rule as `signIn` above for the PIN (non-negotiable #6): it is in the
+ * body, sent once, and never stored or logged. What comes back is the
+ * server-issued device id — the PIN only works from that id — and a
+ * scanner-scope session, normalised into the shape `signIn` produces so the
+ * signed-in shell cannot tell which door she came through.
+ */
+export async function pairPhone(
+  request: StaffPairRequest,
+  signal?: AbortSignal,
+): Promise<PairedPhone> {
+  const body = StaffPairRequestSchema.parse(request);
+  const paired = await postJson('/staff/pair', body, StaffPairResponseSchema, undefined, signal);
+  return {
+    binding: {
+      salonId: paired.salonId,
+      deviceId: paired.deviceId,
+      handle: paired.staff.handle,
+    },
+    session: {
+      accessToken: paired.accessToken,
+      refreshToken: paired.refreshToken,
+      expiresAt: paired.expiresAt,
+      staff: paired.staff,
+    },
+  };
 }
 
 /** `GET /staff/me` — authority, re-read rather than remembered. */

@@ -48,6 +48,10 @@ const read = (name: string) => readFileSync(join(__dirname, name), 'utf8');
  *   ResultScreen  renders a charge already completed and passed in.
  *   EnrolScreen   "NOT A DESIGNED SCREEN" — writes a local device binding only,
  *                 no network call at all.
+ *   SetupScreen   "NOT A DESIGNED SCREEN" (DECISIONS.md § Staff phone pairing,
+ *                 Aftab 2026-11-10). A camera and a form that only READ a
+ *                 pairing code; it never talks to the server. The request that
+ *                 redeems the code is ChoosePinScreen's, classified below.
  *
  * ScannerFlow is the shell rather than a screen; it already calls `reportFailure`
  * and owns the swap to PIN.
@@ -70,7 +74,24 @@ const FETCHING_SCREENS = [
  */
 const SIGN_IN_SCREEN = 'PinScreen.tsx';
 
-const EXCLUDED = ['HomeScreen.tsx', 'ScanScreen.tsx', 'ResultScreen.tsx', 'EnrolScreen.tsx'];
+/**
+ * The second door (DECISIONS.md § Staff phone pairing, Aftab 2026-11-10).
+ * `ChoosePinScreen` sends `POST /staff/pair` before any session exists, so it is
+ * PinScreen's kind of screen: it must not call `reportFailure` (there is no
+ * session to end), and it owes the offline guarantee. It meets that one through
+ * `pairingRefusal` in domain/pairing.ts rather than inline `kind === …` branches,
+ * so the guarantee is asserted on that function (domain/pairing.test.ts) and the
+ * screen is asserted below to route EVERY failure through it.
+ */
+const PAIRING_SCREEN = 'ChoosePinScreen.tsx';
+
+const EXCLUDED = [
+  'HomeScreen.tsx',
+  'ScanScreen.tsx',
+  'ResultScreen.tsx',
+  'EnrolScreen.tsx',
+  'SetupScreen.tsx',
+];
 
 describe('the screen census stays honest', () => {
   /**
@@ -82,7 +103,7 @@ describe('the screen census stays honest', () => {
     const onDisk = readdirSync(__dirname)
       .filter((f) => f.endsWith('Screen.tsx'))
       .sort();
-    const accounted = [...FETCHING_SCREENS, SIGN_IN_SCREEN, ...EXCLUDED].sort();
+    const accounted = [...FETCHING_SCREENS, SIGN_IN_SCREEN, PAIRING_SCREEN, ...EXCLUDED].sort();
     expect(onDisk).toEqual(accounted);
   });
 });
@@ -123,6 +144,76 @@ describe('the sign-in screen is the one exception, and only to one rule', () => 
     expect(src).toMatch(/kind === 'offline'/);
     // A dead connection and a wrong PIN must not read the same.
     expect(src).toMatch(/kind === 'refused'/);
+  });
+});
+
+describe('the pairing door is a door too', () => {
+  const src = read(PAIRING_SCREEN);
+
+  /**
+   * On the CODE, not the file: the screen's header explains why it does not
+   * call `reportFailure`, and the schedule block below records why a test that
+   * cannot survive a screen naming its own reasoning is the wrong test.
+   */
+  it('does not report a dead session — there is no session yet', () => {
+    expect(codeOf(src)).not.toContain('reportFailure');
+    // The guard on the guard: the header still says why.
+    expect(src).toContain('reportFailure');
+  });
+
+  /** The catch block's body, braces balanced — not "to the end of the file". */
+  function catchBlock(): string {
+    const code = codeOf(src);
+    const marker = '} catch (err) {';
+    const open = code.indexOf(marker);
+    expect(open).toBeGreaterThan(-1);
+    let depth = 0;
+    let i = open + marker.length - 1;
+    for (; i < code.length; i += 1) {
+      if (code[i] === '{') depth += 1;
+      else if (code[i] === '}' && --depth === 0) break;
+    }
+    return code.slice(open + marker.length, i);
+  }
+
+  it('routes every failure through pairingRefusal, which tells offline apart', () => {
+    const handler = catchBlock();
+    expect(handler).toContain('pairingRefusal(err)');
+    // No second, inline reading of the error beside it to drift from the first.
+    expect(handler).not.toContain('instanceof ApiError');
+    expect(handler).not.toMatch(/err\.(?:kind|code|status)/);
+    // Both destinations are reached from the one reading.
+    expect(handler).toContain('onEnded(refusal)');
+    expect(handler).toContain('setProblem(refusal)');
+  });
+
+  /**
+   * Non-negotiable #6 on the way out: the chosen PIN goes on every failure,
+   * before the screen decides where she goes next.
+   */
+  it('drops the chosen PIN first, in every failure branch', () => {
+    const handler = catchBlock();
+    const reset = handler.indexOf('setChoice(PIN_CHOICE_START)');
+    expect(reset).toBeGreaterThan(-1);
+    expect(reset).toBeLessThan(handler.indexOf('refusalEndsPairing(refusal)'));
+    expect(reset).toBeLessThan(handler.indexOf('setProblem(refusal)'));
+  });
+
+  /**
+   * The latch opens again only on failure. On success the code is spent and the
+   * matched PIN is still in state until the shell's swap renders; reopening the
+   * latch there would let the submit effect send it a second time.
+   */
+  it('re-opens the submit latch on failure only', () => {
+    const code = codeOf(src);
+    expect(code).not.toContain('} finally {');
+    expect(code.match(/submitting\.current = false/g)).toHaveLength(1);
+    expect(catchBlock()).toContain('submitting.current = false');
+  });
+
+  it('never stores what it sends', () => {
+    const code = codeOf(src);
+    expect(code).not.toMatch(/AsyncStorage|writeDeviceBinding|localStorage/);
   });
 });
 

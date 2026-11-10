@@ -27,21 +27,24 @@
  * means, and it is why `pinDeviceId` is a column on the staff row rather than
  * something the client sends freely.
  *
- * So: `EnrolScreen` runs once and is never seen again, and the designed PIN
- * screen is untouched.
+ * So: setup runs once and is never seen again, and the designed PIN screen is
+ * untouched.
  *
- * REPORTED, NOT DECIDED HERE: real enrolment is a provisioning flow — a manager
- * signs in on the dashboard, generates a pairing code, the phone redeems it and
- * receives its device binding. That needs an endpoint that does not exist, and
- * inventing one is a lane-A decision. Until it does, enrolment is typed in
- * once on the device, which is fine for a pilot on hardware the salon owns and
- * is NOT fine for general release. See the report.
+ * THE PROVISIONING FLOW THIS FILE ONCE REPORTED AS MISSING NOW EXISTS
+ * (DECISIONS.md § "Staff phone pairing, phone sign-in, and a truthful receipt
+ * line — Aftab, 2026-11-10"). A manager issues a single-use pairing code from
+ * the staff card; the phone redeems it with `POST /staff/pair`, the staff
+ * member chooses her PIN on the phone, and the SERVER issues the device id.
+ * The binding written here is then `{ salonId, deviceId, handle: staff.handle }`
+ * off that response (src/screens/SetupFlow.tsx). The typed form (EnrolScreen)
+ * survives only as "Set up manually" for the seeded pilot.
  *
  * The PIN itself is never stored here. Only the access token is, and it is
  * scoped to `scanner` (non-negotiable #6).
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { enrolDefaults } from './enrolDefaults';
 
 const KEY = 'avo.scanner.device.v1';
 
@@ -51,8 +54,9 @@ export interface DeviceBinding {
   handle: string;
   /**
    * The device id the PIN is bound to. It must match `staff_user.pin_device_id`
-   * on the server, so it is not generated randomly here — it is entered at
-   * enrolment to match what the salon provisioned.
+   * on the server, so it is never generated here: a paired phone takes the one
+   * `POST /staff/pair` issued, and the manual form types the one the seed
+   * provisioned.
    */
   deviceId: string;
 }
@@ -88,15 +92,14 @@ export async function clearDeviceBinding(): Promise<void> {
 }
 
 /**
- * The seeded pilot device, offered as the enrolment default.
+ * The manual form's pre-fill: the seeded pilot device on a DEVELOPMENT build,
+ * empty fields on a release one.
  *
  * api/src/db/seed.ts — SALON_ID 'SAL-AMARA', SCANNER_DEVICE 'DEV-SCANNER-01'.
  * These are development fixtures, not credentials: the PIN is the credential
- * and it is not here. Prefilling them is what makes the pilot phone usable
- * without a provisioning flow that does not exist yet.
+ * and it is not here. Since the pairing ruling (DECISIONS.md § Staff phone
+ * pairing, Aftab 2026-11-10) a phone is set up by redeeming a pairing code, and
+ * the typed form survives only as "Set up manually" for the seeded pilot — so
+ * the pilot's ids are offered under `__DEV__` only. See `./enrolDefaults`.
  */
-export const ENROL_DEFAULTS: DeviceBinding = {
-  salonId: 'SAL-AMARA',
-  handle: '',
-  deviceId: 'DEV-SCANNER-01',
-};
+export const ENROL_DEFAULTS: DeviceBinding = enrolDefaults(__DEV__);

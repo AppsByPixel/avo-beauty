@@ -34,6 +34,17 @@ interface SessionValue {
   /** Convenience for the tiles. Never a substitute for the server's answer. */
   can: (perm: keyof StaffUser['perms']) => boolean;
   signInWithPin: (credentials: PinCredentials) => Promise<void>;
+  /**
+   * The pairing door's equivalent of `signInWithPin`'s last line.
+   *
+   * `POST /staff/pair` (api/staff.ts#pairPhone) mints a scanner session itself —
+   * the staff member has just chosen her PIN, and asking for it a third time
+   * would be theatre. The setup flow writes the device binding first and then
+   * hands the session here, in the same tick as the shell learns the binding,
+   * so the shell goes straight from setup to the scanner without drawing the
+   * PIN screen in between (DECISIONS.md § Staff phone pairing, Aftab 2026-11-10).
+   */
+  adoptPairedSession: (session: StaffSession) => void;
   signOut: () => void;
   refreshPerms: () => Promise<void>;
   /**
@@ -63,6 +74,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // Errors propagate: PinScreen distinguishes a refusal from a lockout from
     // an offline device, and swallowing them here would flatten all three.
     const next = await signIn(credentials);
+    setSession(next);
+  }, []);
+
+  const adoptPairedSession = useCallback((next: StaffSession) => {
     setSession(next);
   }, []);
 
@@ -116,11 +131,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       staff: session?.staff ?? null,
       can: (perm) => session?.staff.perms[perm] === true,
       signInWithPin,
+      adoptPairedSession,
       signOut,
       refreshPerms,
       reportFailure,
     }),
-    [session, signInWithPin, signOut, refreshPerms, reportFailure],
+    [session, signInWithPin, adoptPairedSession, signOut, refreshPerms, reportFailure],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
