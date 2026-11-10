@@ -1188,6 +1188,18 @@ export const StaffUserSchema = z.object({
   salonId: IdSchema,
   name: z.string().min(1),
   handle: z.string().min(1),
+  /**
+   * The staff member's own mobile number. A sign-in name alongside `handle`,
+   * on the scanner and the dashboard (Aftab, 2026-11-10 — DECISIONS.md § Staff
+   * phone pairing). Unique per salon among active staff; null until a manager
+   * enters it.
+   *
+   * `.optional()` ON PURPOSE, for now: `.nullable()` alone means "required on
+   * the wire", and every client that parses a staff body would reject one from
+   * a serialiser that does not emit the key yet. Tighten to `.nullable()` once
+   * `serialiseStaff` emits it on every path.
+   */
+  phone: PhoneSchema.nullable().optional(),
   role: z.enum(['owner', 'manager', 'frontdesk', 'artist', 'scanner']),
   branchAccess: z.union([z.literal('all'), z.array(IdSchema)]),
   /** Whether a PIN exists. The PIN itself is hashed and never leaves the server. */
@@ -1202,6 +1214,87 @@ export const StaffUserSchema = z.object({
   active: z.boolean(),
   deactivatedAt: DateTimeSchema.nullable(),
   perms: StaffPermsSchema,
+});
+
+// --------------------------------------------------------- staff pairing ---
+//
+// Pairing a phone to one staff member (Aftab, 2026-11-10; DECISIONS.md § Staff
+// phone pairing). A manager with `perms.team` issues a single-use code from
+// Accounts; the phone redeems it once; the staff member chooses their own PIN
+// ON THE PHONE; the server issues the device id. Non-negotiable #6 holds: the
+// PIN is never typed into the dashboard, never sits in a QR, and is stored
+// only as a hash bound to the server-issued device.
+//
+// Two ways to redeem the same code, because a camera does not always cooperate:
+//   1. scan the QR, which encodes `${STAFF_PAIRING_URL}?t=<token>`;
+//   2. type the staff member's mobile number and the six-digit `code`.
+// A mobile number alone is never enough: it is not a secret.
+
+/** How long an issued pairing code lives. Single-use within that window. */
+export const STAFF_PAIRING_TTL_MINUTES = 10;
+
+/** The QR payload's prefix. The scanner registers the `avostaff` scheme. */
+export const STAFF_PAIRING_URL = 'avostaff://pair';
+
+/** Four digits, chosen by the staff member on the phone. */
+export const StaffPinSchema = z.string().regex(/^\d{4}$/, 'A PIN is four digits.');
+
+/** The six digits typed with a mobile number when the QR cannot be scanned. */
+export const StaffPairingDigitsSchema = z.string().regex(/^\d{6}$/);
+
+/**
+ * `POST /v1/staff/{staffId}/pairing-code` — body. Needs `perms.team`.
+ *
+ * `branchId` also enrols the paired phone as a till at that branch, which is
+ * what `POST /salons/{id}/devices` does today, so it needs `perms.dashboard` as
+ * well and is checked against the caller's own salon. Omitted, the phone is
+ * paired but not enrolled, exactly like a till nobody has enrolled.
+ */
+export const StaffPairingCodeRequestSchema = z.object({
+  branchId: IdSchema.optional(),
+});
+
+/**
+ * `POST /v1/staff/{staffId}/pairing-code` — response. Shown once, on the
+ * manager's screen; the server keeps only hashes. Issuing a new code for the
+ * same staff member voids any earlier unused one.
+ */
+export const StaffPairingCodeSchema = z.object({
+  staffId: IdSchema,
+  /** High-entropy, single-use. The QR encodes `${STAFF_PAIRING_URL}?t=${token}`. */
+  token: z.string().min(32),
+  /** For typing with the staff member's mobile number. */
+  code: StaffPairingDigitsSchema,
+  expiresAt: DateTimeSchema,
+  /** The branch the phone will be enrolled at, if one was asked for. */
+  branchId: IdSchema.nullable(),
+});
+
+/**
+ * `POST /v1/staff/pair` — unauthenticated, rate limited, single-use.
+ *
+ * Every refusal (unknown token, wrong digits, unknown phone, expired, used,
+ * deactivated staff) returns the same status and body, so the endpoint cannot
+ * be used to learn which staff numbers exist.
+ */
+export const StaffPairRequestSchema = z.union([
+  z.object({ token: z.string().min(32), pin: StaffPinSchema }),
+  z.object({ phone: PhoneSchema, code: StaffPairingDigitsSchema, pin: StaffPinSchema }),
+]);
+
+/**
+ * `POST /v1/staff/pair` — response. The phone is signed in straight away with
+ * a scanner-scope session, and keeps `salonId`, `deviceId` and `staff.handle`
+ * as its binding for the PIN sign-in on every later launch.
+ */
+export const StaffPairResponseSchema = z.object({
+  salonId: IdSchema,
+  /** Server-issued. The PIN only works from this device id. */
+  deviceId: z.string().min(1),
+  accessToken: z.string().min(1),
+  refreshToken: z.string().min(1),
+  expiresAt: DateTimeSchema,
+  staff: StaffUserSchema,
 });
 
 // ------------------------------------------------------------ promotions ---

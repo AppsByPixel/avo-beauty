@@ -2313,3 +2313,66 @@ Accessibility calls:
   there.
 - The wallet is one build per salon (`EXPO_PUBLIC_AVO_SALON`), so a phone demo of Forest needs its
   own build.
+
+---
+
+### Staff phone pairing, phone sign-in, and a truthful receipt line — Aftab, 2026-11-10
+
+**Asked and answered in chat, 2026-11-10.** Aftab tried the staff scanner, hit the undesigned
+"Set up this device" form (salon ID, staff handle, device ID — `EnrolScreen.tsx`), and asked for
+"scan the QR, the second option would be to enter phone number, because the number is going to
+be the username". Three rulings:
+
+1. **Build proper pairing, and use the staff member's phone number as a sign-in name too.**
+   Undesigned, so this is new product he approved, not a gap closed. Not needed for the Sunday
+   15 Nov home-service demo, which runs on the seeded demo salon as it is; **nothing from this
+   ships to the hosted demo before that demo.**
+2. **The Sunday demo uses the existing demo salon unchanged** — no new workspace.
+3. **"WhatsApp receipt sent" becomes truthful.** No WhatsApp sender exists (`RECEIPT_DRIVER` is
+   `logging | email`), so the scanner was telling staff and customers something false.
+
+**Why it was needed, beyond the form.** Nothing in the product sets a staff PIN or binds one to
+a phone — only `db/seed.ts` writes `pin_hash`. Every staff account created in the dashboard, and
+every owner of an onboarded salon, could never sign into the scanner. Pairing is the missing door.
+
+**The contract (trunk, `packages/types` § staff pairing):**
+
+- `POST /v1/staff/{staffId}/pairing-code` — `perms.team`; with `branchId`, also `perms.dashboard`
+  (it enrols a till, as `POST /salons/{id}/devices` does), checked against the caller's salon.
+  Returns `{ staffId, token, code, expiresAt, branchId }` once. Server stores hashes only: the
+  token sha256 (high entropy), the six digits through `hashSecret` (argon2id — six digits are
+  brute-forceable from a leaked sha256). TTL `STAFF_PAIRING_TTL_MINUTES` (10). A new code voids
+  the staff member's earlier unused ones. Refused for a deactivated staff member, and for a
+  target the caller's authority could not edit under the existing `PATCH /staff/:id` rules.
+- `POST /v1/staff/pair` — unauthenticated. `{ token, pin }` or `{ phone, code, pin }`. In one
+  transaction: claim the code (`used_at IS NULL` guard, so two racing redeems cannot both win),
+  issue a server device id, set `pin_hash` + `pin_device_id`, clear PIN failures and lock,
+  revoke the staff member's live scanner sessions, enrol the till if the code named a branch,
+  write audit rows. Returns a scanner session plus `{ salonId, deviceId, staff }`.
+  Every refusal is one status and one body. Five wrong digits against one code burn it; a
+  per-IP and per-phone budget sits in front, on the existing sign-in-limit pattern.
+- `staff_user.phone` — nullable E.164 (`parseE164`, the `member_phone_is_e164` CHECK pattern),
+  unique on `(salon_id, phone)` among **active** staff. Set by `POST /staff` and
+  `PATCH /staff/:id`; emitted by `serialiseStaff` on every path (then trunk tightens
+  `StaffUserSchema.phone` from `.nullable().optional()` to `.nullable()`). **Reverses the recorded
+  choice at `api/src/db/schema/salon.ts:79-82`** — by Aftab's ruling.
+- `POST /staff/session` takes `phone` in place of `handle`; `/auth/web/session` accepts a mobile
+  number in `username`. A Kuwait 8-digit local number is read as `+965`. An unknown phone is
+  answered exactly as a wrong PIN / wrong password — same status, body and hashing time.
+
+**Surfaces.** Scanner (lane B): the setup screen becomes "scan the pairing QR" first, "enter
+your mobile number and the six digits" second, then choose a PIN twice; the old typed form stays
+only as a muted "Set up manually" path for the seeded pilot, with its pre-filled defaults kept
+under `__DEV__` only. Dashboard (lane C): a "Pair a phone" action on the staff card showing the
+QR, the six digits large, and the expiry counting down; a mobile-number field on New team account
+and on the staff card. The PIN screen itself is unchanged: one person per phone.
+
+**Receipt copy (lane B).** The result line reads **"Receipt in the customer's AVO app"** and the
+lookup note reads **"Manual lookups are logged with your name. Every charge taken this way shows
+in the customer's AVO app."** — both true today, since the wallet bell is built from
+`receipt_job` whatever the driver. Revert to the design's WhatsApp wording when a WhatsApp sender
+ships.
+
+**Out of this slice, noted:** a manager PIN-unlock (the lockout copy promises one; none exists);
+proof the customer is present on a no-token charge (product call); the Tills copy that points at a
+device id "on the scanner's sign-in screen".
