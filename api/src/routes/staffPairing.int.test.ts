@@ -38,6 +38,7 @@ const suite = INT_URL ? describe : describe.skip;
 const SALON = 'SAL-AMARA';
 const OTHER_SALON = 'SAL-LUMIERE';
 const SALMIYA = 'BR-SAL';
+const KUWAIT_CITY = 'BR-KWC';
 const FOREIGN_BRANCH = 'BR-LUM-HAW';
 /** Seeded manager: every permission. Issues the codes. */
 const MANAGER = 'ST-001';
@@ -57,7 +58,20 @@ const LEAVER = `PR-ST-C-${RUN}`;
 const WEBBY = `PR-ST-D-${RUN}`;
 const TEAM_NO_DASH = `PR-ST-E-${RUN}`;
 const FOREIGN_STAFF = `PR-ST-F-${RUN}`;
+/** Re-pairs twice: her first `PH-` till must be unenrolled by the second pair. */
+const REPAIRED = `PR-ST-G-${RUN}`;
+/** Holds her PIN on a TYPED till the counter shares; a re-pair must leave it enrolled. */
+const TILL_USER = `PR-ST-H-${RUN}`;
 const OLD_DEVICE = `PR-DEV-OLD-${RUN}`;
+/** A typed till id, the `DEV-SCANNER-01` shape — never server-issued. */
+const SHARED_TILL = `DEV-PR-TILL-${RUN}`;
+/**
+ * Every device id the re-pair specs create, deleted by id in `afterAll` — so the
+ * cleanup does not depend on the behaviour under test. A route that FAILED to
+ * revoke would otherwise leave a live till behind under a staff id that no
+ * longer points at it.
+ */
+const REPAIR_DEVICES: string[] = [SHARED_TILL];
 const PAIRED_PHONE_LOCAL = localNumber();
 const PAIRED_PHONE = `+965${PAIRED_PHONE_LOCAL}`;
 const SECOND_PHONE = `+965${localNumber()}`;
@@ -135,6 +149,12 @@ suite('staff phone pairing', () => {
     await db.execute(sql`
       INSERT INTO staff_user (id, salon_id, name, handle, role, perm_team, perm_dashboard)
       VALUES (${FOREIGN_STAFF}, ${OTHER_SALON}, 'PR Lumiere', ${`pr-f-${RUN}`}, 'manager', true, true)`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner)
+      VALUES (${REPAIRED}, ${SALON}, 'PR Repaired', ${`pr-j-${RUN}`}, 'artist', true)`);
+    await db.execute(sql`
+      INSERT INTO staff_user (id, salon_id, name, handle, role, perm_scanner, pin_hash, pin_device_id)
+      VALUES (${TILL_USER}, ${SALON}, 'PR Till', ${`pr-k-${RUN}`}, 'artist', true, ${pinHash}, ${SHARED_TILL})`);
 
     manager = await dashboardSession(MANAGER);
     frontdesk = await dashboardSession(FRONTDESK);
@@ -154,10 +174,16 @@ suite('staff phone pairing', () => {
 
   afterAll(async () => {
     if (db) {
-      const ids = [PAIRED, SECOND, LEAVER, WEBBY, TEAM_NO_DASH, FOREIGN_STAFF];
+      const ids = [PAIRED, SECOND, LEAVER, WEBBY, TEAM_NO_DASH, FOREIGN_STAFF, REPAIRED, TILL_USER];
       for (const id of ids) {
         await db.execute(sql`DELETE FROM device_enrolment WHERE device_id IN
                                (SELECT pin_device_id FROM staff_user WHERE id = ${id})`);
+        // A re-pair leaves her EARLIER phone's row behind as revoked history,
+        // naming her as the revoker — and that FK would keep her row alive.
+        await db.execute(sql`DELETE FROM device_enrolment WHERE revoked_by_staff_id = ${id}`);
+      }
+      for (const deviceId of REPAIR_DEVICES) {
+        await db.execute(sql`DELETE FROM device_enrolment WHERE salon_id = ${SALON} AND device_id = ${deviceId}`);
       }
       for (const id of ids) {
         await db.execute(sql`DELETE FROM session WHERE staff_id = ${id}`);
@@ -388,6 +414,135 @@ suite('staff phone pairing', () => {
       // Paired without a branch: no till enrolled.
       const rows = await exec(sql`SELECT 1 FROM device_enrolment WHERE device_id = ${body.deviceId}`);
       expect(rows.length).toBe(0);
+    });
+
+    /**
+     * Trunk's ruling, phase 2: a re-pair unenrols her PREVIOUS phone in the same
+     * transaction as the claim — but only a `PH-` id the server issued, never a
+     * typed or seeded till (the counter's shared tablet).
+     */
+    describe('re-pairing unenrols the phone she left, and only a phone the server issued', () => {
+      /** Its own address: these pairs must not spend the file's shared budget. */
+      const REPAIR_IP = `10.${octet()}.${octet()}.${octet()}`;
+      const pairAs = async (staffId: string, branchId: string | null, pin: string) => {
+        const code = await issueCode(staffId, branchId ? { branchId } : {});
+        const res = await post('/staff/pair', { token: code.token, pin }, undefined, REPAIR_IP);
+        expect(res.statusCode, res.body).toBe(200);
+        const body = StaffPairResponseSchema.parse(res.json());
+        REPAIR_DEVICES.push(body.deviceId);
+        return body;
+      };
+      const enrolmentsOf = (deviceId: string) =>
+        exec(sql`
+          SELECT branch_id, label, revoked_at, revoked_by_staff_id, enrolled_by_staff_id
+            FROM device_enrolment
+           WHERE salon_id = ${SALON} AND device_id = ${deviceId}
+           ORDER BY created_at`);
+
+      it('pairing twice with a branch revokes the first PH- enrolment, as her, and enrols the second', async () => {
+        const first = await pairAs(REPAIRED, SALMIYA, '1357');
+        expect(first.deviceId.startsWith('PH-')).toBe(true);
+        const [live] = await enrolmentsOf(first.deviceId);
+        expect(live).toMatchObject({ branch_id: SALMIYA, revoked_at: null, enrolled_by_staff_id: MANAGER });
+
+        const second = await pairAs(REPAIRED, KUWAIT_CITY, '2468');
+        expect(second.deviceId).not.toBe(first.deviceId);
+
+        // The first phone's row: revoked, not deleted — the history stays.
+        const firstRows = await enrolmentsOf(first.deviceId);
+        expect(firstRows.length).toBe(1);
+        expect(firstRows[0]!.revoked_at).not.toBeNull();
+        expect(firstRows[0]!.revoked_by_staff_id, 'the revoker is her: she moved the PIN').toBe(REPAIRED);
+
+        // The second phone is the live till, at the branch on the second code.
+        const secondRows = await enrolmentsOf(second.deviceId);
+        expect(secondRows).toEqual([
+          expect.objectContaining({ branch_id: KUWAIT_CITY, revoked_at: null, revoked_by_staff_id: null }),
+        ]);
+
+        // Exactly one live till carries her name.
+        const [liveCount] = await exec(sql`
+          SELECT count(*)::int AS n FROM device_enrolment
+           WHERE salon_id = ${SALON} AND device_id IN (${first.deviceId}, ${second.deviceId})
+             AND revoked_at IS NULL`);
+        expect(liveCount!.n).toBe(1);
+
+        // The audit row is the one DELETE /salons/:id/devices writes, with her as the actor.
+        const audits = await exec(sql`
+          SELECT kind::text AS kind, actor_kind::text AS actor_kind, actor_id, source::text AS source,
+                 subject_type, detail, metadata->>'via' AS via,
+                 metadata->>'replacedByDeviceId' AS replaced_by
+            FROM audit_log
+           WHERE subject_id = ${first.deviceId} AND action = 'device_revoked'`);
+        expect(audits).toEqual([
+          expect.objectContaining({
+            kind: 'rules',
+            actor_kind: 'staff',
+            actor_id: REPAIRED,
+            source: 'scanner',
+            subject_type: 'device',
+            via: 'pairing',
+            replaced_by: second.deviceId,
+          }),
+        ]);
+        expect(String(audits[0]!.detail)).toContain(first.deviceId);
+
+        // The old phone's PIN binding is gone with it; the new one signs in.
+        const fromFirst = await post('/staff/session', {
+          salonId: SALON, deviceId: first.deviceId, handle: `pr-j-${RUN}`, pin: '2468',
+        }, undefined, REPAIR_IP);
+        expect(fromFirst.statusCode).toBe(401);
+        const fromSecond = await post('/staff/session', {
+          salonId: SALON, deviceId: second.deviceId, handle: `pr-j-${RUN}`, pin: '2468',
+        }, undefined, REPAIR_IP);
+        expect(fromSecond.statusCode, fromSecond.body).toBe(200);
+      });
+
+      it('a re-pair WITHOUT a branch still unenrols the PH- phone she left, and enrols nothing', async () => {
+        const [row] = await exec(sql`SELECT pin_device_id FROM staff_user WHERE id = ${REPAIRED}`);
+        const leaving = String(row!.pin_device_id);
+        expect(leaving.startsWith('PH-')).toBe(true);
+        expect((await enrolmentsOf(leaving))[0]!.revoked_at, 'precondition: her current phone is a live till').toBeNull();
+
+        const third = await pairAs(REPAIRED, null, '1470');
+        const left = await enrolmentsOf(leaving);
+        expect(left.length).toBe(1);
+        expect(left[0]!.revoked_at).not.toBeNull();
+        expect(left[0]!.revoked_by_staff_id).toBe(REPAIRED);
+        expect((await enrolmentsOf(third.deviceId)).length).toBe(0);
+      });
+
+      it('a typed DEV- till survives her re-pair: still enrolled, still where it was', async () => {
+        // Enrolled the way the counter's tablet is: a manager types the id in Tills.
+        const enrol = await post(
+          `/salons/${SALON}/devices`,
+          { deviceId: SHARED_TILL, branchId: SALMIYA, label: 'PR counter tablet' },
+          manager,
+        );
+        expect(enrol.statusCode, enrol.body).toBe(201);
+
+        const paired = await pairAs(TILL_USER, KUWAIT_CITY, '8642');
+        expect(paired.deviceId).not.toBe(SHARED_TILL);
+
+        // Her PIN moved to the new phone…
+        const [staff] = await exec(sql`SELECT pin_device_id FROM staff_user WHERE id = ${TILL_USER}`);
+        expect(staff!.pin_device_id).toBe(paired.deviceId);
+
+        // …and the shared till did not move at all.
+        const shared = await enrolmentsOf(SHARED_TILL);
+        expect(shared).toEqual([
+          expect.objectContaining({ branch_id: SALMIYA, revoked_at: null, revoked_by_staff_id: null }),
+        ]);
+        const [revokes] = await exec(sql`
+          SELECT count(*)::int AS n FROM audit_log
+           WHERE subject_id = ${SHARED_TILL} AND action = 'device_revoked'`);
+        expect(revokes!.n).toBe(0);
+
+        // And her new phone is the till at the branch on her code.
+        expect(await enrolmentsOf(paired.deviceId)).toEqual([
+          expect.objectContaining({ branch_id: KUWAIT_CITY, revoked_at: null }),
+        ]);
+      });
     });
 
     it('answers every refusal with one status and one body', async () => {

@@ -19,7 +19,9 @@ import {
 import { ApiError } from '../http/errors';
 import { E164, normaliseStaffPhone, parseStaffPhone } from '../http/fields';
 import {
+  PAIRED_DEVICE_ID_PREFIX,
   hashPairingToken,
+  isServerIssuedDeviceId,
   mintPairedDeviceId,
   mintPairingDigits,
   mintPairingToken,
@@ -113,6 +115,14 @@ describe('the secrets a pairing code hands out', () => {
     const b = mintPairedDeviceId();
     expect(a).not.toBe(b);
     expect(a).toMatch(/^PH-[A-Za-z0-9_-]{22}$/);
+  });
+
+  it('tells a minted phone id from a typed or seeded till, which a re-pair must never unenrol', () => {
+    expect(isServerIssuedDeviceId(mintPairedDeviceId())).toBe(true);
+    expect(mintPairedDeviceId().startsWith(PAIRED_DEVICE_ID_PREFIX)).toBe(true);
+    for (const typed of ['DEV-SCANNER-01', 'ph-lowercase', 'COUNTER-PH-1', '', null, undefined]) {
+      expect(isServerIssuedDeviceId(typed), String(typed)).toBe(false);
+    }
   });
 
   it('round-trips the issue response through the shared schema', () => {
