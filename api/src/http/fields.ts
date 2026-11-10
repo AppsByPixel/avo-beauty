@@ -41,6 +41,50 @@ export function parseE164(value: unknown): string {
 }
 
 /**
+ * A KUWAIT MOBILE TYPED WITHOUT ITS COUNTRY CODE — eight digits, read as +965.
+ *
+ * Aftab, 2026-11-10 (DECISIONS.md § Staff phone pairing): a staff member's
+ * mobile number is a sign-in name on the scanner and the dashboard, and the
+ * people typing it are in Kuwait typing their own number the way they say it.
+ * Refusing `99124408` for want of a `+965` would be a validation error about
+ * nothing. Only EXACTLY eight digits is read this way — `96599124408` without a
+ * plus is not guessed at, because "which country did you mean" is not a question
+ * a parser should answer silently.
+ *
+ * NOT applied to `member.phone` (`parseE164` above is unchanged): the wallet's
+ * signup and sign-in have their own client-side prefixing and their own tests,
+ * and widening that door is a different decision from this one.
+ */
+const KUWAIT_LOCAL_MOBILE = /^\d{8}$/;
+
+/**
+ * The phone, normalised to E.164, or `null` if the value is not one. NEVER
+ * THROWS — for the sign-in doors, where "not a phone number" must fall through
+ * to the ordinary uniform refusal rather than answer a distinguishable 400.
+ */
+export function normaliseStaffPhone(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim().replace(/[\s-]/g, '') : '';
+  const candidate = KUWAIT_LOCAL_MOBILE.test(raw) ? `+965${raw}` : raw;
+  return E164.test(candidate) ? candidate : null;
+}
+
+/**
+ * `staff_user.phone` on the way IN — `POST /staff` and `PATCH /staff/{id}`. The
+ * same E.164 `staff_user_phone_is_e164` enforces, so a value accepted here cannot
+ * become a constraint 500; an eight-digit number is read as Kuwait's.
+ */
+export function parseStaffPhone(value: unknown): string {
+  const phone = normaliseStaffPhone(value);
+  if (!phone) {
+    throw badRequest(
+      'invalid_phone',
+      'Enter the number with its country code, like +96599123456.',
+    );
+  }
+  return phone;
+}
+
+/**
  * AN EMAIL, OR NULL TO CLEAR IT — the third field with two doors onto it.
  *
  * This is `routes/members.ts`'s own function, unchanged, moved here when
