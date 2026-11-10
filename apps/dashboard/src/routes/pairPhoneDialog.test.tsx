@@ -199,6 +199,22 @@ async function openFor(name: string) {
   return screen.findByRole('dialog', { name: 'Pair a phone' });
 }
 
+/**
+ * NO INVENTED SENTENCE GUESSES A PRONOUN. Every word in this dialog is invented
+ * (no design file draws it), and nobody's pronouns are recorded — so trunk's rule
+ * for invented copy applies: name the account, as the Scan & charge warning does.
+ * Design-sourced copy is verbatim by rule and is not this test's business; none
+ * of it appears in this dialog.
+ */
+const PRONOUN = /\b(she|her|hers|he|him|his|they|them)\b/i;
+
+/** The instructions under the digits, exactly — one sentence per route. */
+const instructionsFor = (name: string, phone: string | null) =>
+  `Open the AVO Staff app on ${name}'s phone and scan this code. ${name} then chooses a PIN on the phone — you never see it. ` +
+  (phone === null
+    ? `To pair without the camera, add a mobile number to ${name}'s account first.`
+    : `No camera? ${name} can enter this account's mobile number, ${phone}, and the six digits instead.`);
+
 /* ================================================================ helpers == */
 
 describe('the pure parts', () => {
@@ -275,8 +291,11 @@ describe('Pair a phone — the code', () => {
     const qr = within(dialog).getByRole('img', { name: 'Pairing QR code for Hessa Al-Mutairi' });
     expect(qr.querySelector('path')?.getAttribute('d')).toBe(qrPath(pairingPayload(TOKEN)).d);
 
-    // Her number is on the account, so the no-camera route names it.
-    expect(within(dialog).getByText(/enter her mobile number, \+965 9911 2233, and the six digits/)).toBeTruthy();
+    // The account has a number, so the no-camera route gives it — and the
+    // sentence names the account rather than guessing a pronoun.
+    const steps = within(dialog).getByText(instructionsFor('Hessa Al-Mutairi', '+965 9911 2233'));
+    expect(steps.textContent).toBe(instructionsFor('Hessa Al-Mutairi', '+965 9911 2233'));
+    expect(steps.textContent).not.toMatch(PRONOUN);
   });
 
   it('says the typed route needs a number when the account has none', async () => {
@@ -284,7 +303,9 @@ describe('Pair a phone — the code', () => {
     mount();
     const dialog = await openFor('Dana Yousef');
     await within(dialog).findByText('123 456');
-    expect(within(dialog).getByText(/add her mobile number to her account first/)).toBeTruthy();
+    const steps = within(dialog).getByText(instructionsFor('Dana Yousef', null));
+    expect(steps.textContent).toBe(instructionsFor('Dana Yousef', null));
+    expect(steps.textContent).not.toMatch(PRONOUN);
   });
 
   it('counts down, then replaces the QR and digits with an expired notice and a New code button', async () => {
@@ -314,6 +335,7 @@ describe('Pair a phone — the code', () => {
     expect(within(dialog).queryByRole('img', { name: /Pairing QR code/ })).toBeNull();
     expect(within(dialog).queryByText(/Expires in/)).toBeNull();
     expect(within(dialog).getByText('This code has expired.')).toBeTruthy();
+    expect(within(dialog).getByText("Get a new code to pair Hessa Al-Mutairi's phone.")).toBeTruthy();
     expect(within(dialog).getByRole('button', { name: 'New code' })).toBeTruthy();
     // Nothing of the dead code is left in the dialog.
     expect(dialog.innerHTML).not.toContain('123456');
@@ -570,6 +592,11 @@ describe('which branch the code names', () => {
     const dialog = await openFor('Noura Al-Sabah');
     const select = within(dialog).getByLabelText('Till branch') as HTMLSelectElement;
     expect(select.value).toBe('');
+    expect(
+      within(dialog).getByText(
+        "Noura Al-Sabah's phone is also set up as a till at this branch, so the charges taken on it count there.",
+      ),
+    ).toBeTruthy();
     const show = within(dialog).getByRole('button', { name: 'Show code' }) as HTMLButtonElement;
     expect(show.disabled).toBe(true);
     await act(async () => new Promise((r) => setTimeout(r, 20)));
@@ -602,6 +629,42 @@ describe('which branch the code names', () => {
     await within(dialog).findByText('123 456');
     expect(within(dialog).queryByLabelText('Till branch')).toBeNull();
     expect(pairingCalls()[0]![2]).toMatchObject({ body: {} });
+  });
+});
+
+/* ============================================== the copy names the account == */
+
+describe('the invented copy names the account — never a pronoun nobody recorded', () => {
+  it('choose, requesting, shown and expired each read without she, her, he, him or his', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'], now: NOW });
+    branches = TWO_BRANCHES;
+    let release: (value: unknown) => void = () => undefined;
+    pairingAnswers.push(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(codeBody({ staffId: 'ST-003', branchId: 'BR-KWT' }));
+        }),
+    );
+    mount();
+    // Dana: no mobile number, one branch of two — so the select, the
+    // no-number route and the expiry all render, one after another.
+    const dialog = await openFor('Dana Yousef');
+
+    expect(within(dialog).getByLabelText('Till branch')).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(PRONOUN);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show code' }));
+    expect(within(dialog).getByText('Getting a code…')).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(PRONOUN);
+
+    await act(async () => release(undefined));
+    await within(dialog).findByText('123 456');
+    expect(within(dialog).getByText(instructionsFor('Dana Yousef', null))).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(PRONOUN);
+
+    act(() => vi.advanceTimersByTime(10 * 60_000));
+    expect(within(dialog).getByText('This code has expired.')).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(PRONOUN);
   });
 });
 
