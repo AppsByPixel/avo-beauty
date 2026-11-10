@@ -3749,12 +3749,27 @@ a:hover {
 
 /* ---- the card's mobile number ---- */
 
+/*
+ * THE NUMBER IS ONE WORD; THE BUTTON BESIDE IT MAY MOVE. `.account__ident` is
+ * `flex: 1; min-width: 120px`, so on a card whose head carries more pills — a new
+ * account's "No PIN" and "Invite pending" — it shrinks to ~129px at 1280 wide,
+ * and "+965 9988 7766" broke as "+965 9988" over "7766": a different-looking
+ * number, on exactly the card a manager is about to pair (measured live,
+ * 2026-11-10). So the number never breaks inside, and when it and "Change" do
+ * not fit on one line, "Change" wraps under it instead.
+ */
 .account__phone {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  column-gap: 8px;
+  row-gap: 1px;
   font-size: 12.5px;
   color: var(--avo-text-muted);
+}
+
+.account__phone-number {
+  white-space: nowrap;
 }
 
 .account__phone--none {

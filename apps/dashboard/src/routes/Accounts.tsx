@@ -574,7 +574,7 @@ function AccountCard({
           <div className="account__name">{account.name}</div>
           <div className="account__handle">@{account.handle}</div>
           <div className="account__phone">
-            <span className={phone ? undefined : 'account__phone--none'}>
+            <span className={phone ? 'account__phone-number' : 'account__phone-number account__phone--none'}>
               {phone ? formatStaffPhone(phone) : 'No mobile number'}
             </span>
             {leaver || editingPhone ? null : (

@@ -14,7 +14,9 @@
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authedRequest = vi.fn();
 vi.mock('../auth/authedRequest.js', () => ({
@@ -335,5 +337,46 @@ describe('the card — showing and editing the number', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save number' }));
     expect(screen.getByRole('alert').textContent).toContain(STAFF_PHONE_FORMAT_HINT);
     expect(writes()).toHaveLength(0);
+  });
+});
+
+/* ===================================================== the number's line == */
+
+/**
+ * A NUMBER IS NEVER BROKEN ACROSS TWO LINES. Measured live on 2026-11-10 at
+ * 1280 wide: a new account's head carries "No PIN" and "Invite pending", which
+ * squeezed `.account__ident` to 129px, and "+965 9988 7766" rendered as
+ * "+965 9988" over "7766" (30px tall where the other cards' line was 15px).
+ * jsdom has no layout, so what is pinned is the cascade that prevents it, read
+ * off the real card: the number (or "No mobile number") does not wrap inside,
+ * and the row it sits in DOES wrap, so "Change" / "Add" moves under it instead
+ * of pushing it to break.
+ */
+describe('the card — the number stays on one line', () => {
+  const sheets: HTMLStyleElement[] = [];
+  beforeAll(() => {
+    for (const relative of ['../../../../packages/ui/src/ui.css', '../app.css']) {
+      const style = document.createElement('style');
+      style.textContent = readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+      document.head.appendChild(style);
+      sheets.push(style);
+    }
+  });
+  afterAll(() => {
+    for (const style of sheets) style.remove();
+  });
+
+  it('a number and "No mobile number" are each one unbreakable unit; the row wraps around them', async () => {
+    mount();
+    const hessa = (await screen.findByText('Hessa Al-Mutairi')).closest('.account') as HTMLElement;
+    const number = within(hessa).getByText('+965 9911 2233');
+    const dana = screen.getByText('Dana Yousef').closest('.account') as HTMLElement;
+    const none = within(dana).getByText('No mobile number');
+    for (const text of [number, none]) {
+      expect(getComputedStyle(text).whiteSpace).toBe('nowrap');
+      const row = text.parentElement as HTMLElement;
+      expect(row.classList.contains('account__phone')).toBe(true);
+      expect(getComputedStyle(row).flexWrap).toBe('wrap');
+    }
   });
 });
