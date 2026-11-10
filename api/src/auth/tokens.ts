@@ -19,7 +19,7 @@
  * signed in — api-contract.md § Profile edit rule 4.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import { env } from '../env';
 
@@ -176,4 +176,53 @@ export function hashPasswordResetToken(raw: string): string {
 /** sha256 of a canonical request body — the "same key, different body" check. */
 export function hashRequestBody(body: unknown): string {
   return createHash('sha256').update(JSON.stringify(body ?? null)).digest('hex');
+}
+
+// ------------------------------------------------------------ staff pairing --
+// Aftab, 2026-11-10 (DECISIONS.md § Staff phone pairing); migration 0073.
+
+/**
+ * The QR's token. 32 bytes of CSPRNG, like the refresh token and the reset
+ * token, because it is the same kind of secret: an opaque single-use bearer
+ * value that grants a credential to whoever holds it first.
+ *
+ * base64url, so it sits in `${STAFF_PAIRING_URL}?t=${token}` with no escaping.
+ * The `pair_` prefix is for a human reading a log line, as `rst_` is; it makes
+ * the value 48 characters, comfortably over the contract's 32.
+ *
+ * Returned ONCE, by `POST /staff/{id}/pairing-code`, to the manager who must
+ * show it as a QR — the one place a credential in transit is the point. Stored
+ * as a sha256 and nowhere else.
+ */
+export function mintPairingToken(): string {
+  return `pair_${randomBytes(32).toString('base64url')}`;
+}
+
+/** sha256 of a pairing token. Same reasoning as the refresh token. */
+export function hashPairingToken(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * The six digits typed with a mobile number when the camera will not cooperate.
+ * `randomInt` is the CSPRNG and is uniform over the range — no modulo bias.
+ * Leading zeros are kept: "004213" is a valid code, and the contract is six
+ * digits, not a number. Hashed with argon2id by the caller, never sha256.
+ */
+export function mintPairingDigits(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
+}
+
+/**
+ * The device id a paired phone is bound to. SERVER-ISSUED, which is the change
+ * pairing makes to the PIN's device scope: until now the device id was a string
+ * the client typed into "Set up this device", so two phones could claim one.
+ *
+ * Not a secret — the phone sends it in the clear on every PIN sign-in, and the
+ * PIN plus the per-device limiter and the lockout are what protect it — but 128
+ * bits all the same, so one salon's id cannot be guessed into another's
+ * `pin_attempt` bucket.
+ */
+export function mintPairedDeviceId(): string {
+  return `PH-${randomBytes(16).toString('base64url')}`;
 }

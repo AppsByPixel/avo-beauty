@@ -52,7 +52,19 @@ export interface IssuedSession {
   expiresAt: Date;
 }
 
-export async function issueSession(db: Db, input: IssueSessionInput): Promise<IssuedSession> {
+/**
+ * The pool, or an open transaction. `issueSession` and `revokeSessionsOfScope`
+ * take either, because `POST /staff/pair` mints its session INSIDE the
+ * transaction that claims the pairing code: a session minted outside it could
+ * outlive a rollback of the claim, which would be a signed-in phone holding no
+ * PIN. The same union `services/audit.ts § Executor` names.
+ */
+export type SessionExecutor = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
+
+export async function issueSession(
+  db: SessionExecutor,
+  input: IssueSessionInput,
+): Promise<IssuedSession> {
   const refreshToken = mintRefreshToken();
   const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86_400_000);
 
@@ -240,6 +252,30 @@ export async function revokeAllSessions(
     .where(and(owner, isNull(session.revokedAt)))
     .returning({ id: session.id });
 
+  return rows.length;
+}
+
+/**
+ * Every live session for a principal ON ONE SURFACE.
+ *
+ * `POST /staff/pair` re-binds a staff member's PIN to a new phone, and the
+ * phones she was signed in on must drop with the old binding — but her web
+ * session on the back-office laptop has nothing to do with which phone holds
+ * her PIN, and signing her out of the dashboard because she paired a phone
+ * would be a surprise with no security reason behind it. So this revokes
+ * `scope = 'scanner'` (or whichever is named) and leaves the rest.
+ */
+export async function revokeSessionsOfScope(
+  db: SessionExecutor,
+  principal: { kind: PrincipalKind; id: string },
+  scope: SessionScope,
+  reason: string,
+): Promise<number> {
+  const rows = await db
+    .update(session)
+    .set({ revokedAt: new Date(), revokedReason: reason })
+    .where(and(ownerPredicate(principal), eq(session.scope, scope), isNull(session.revokedAt)))
+    .returning({ id: session.id });
   return rows.length;
 }
 

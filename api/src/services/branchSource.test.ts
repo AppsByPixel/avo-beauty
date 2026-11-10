@@ -91,6 +91,14 @@ describe('a branch is never read from a request body', () => {
    *   platform.ts   which branch a boost or happy hour APPLIES TO
    *   devices.ts    which branch a till STANDS IN
    *   artists.ts    which branch an ARTIST WORKS AT (migration 0044)
+   *   staffPairing.ts  which branch a PAIRED PHONE will stand in as a till —
+   *                 `POST /staff/{id}/pairing-code { branchId }`, the contract
+   *                 trunk wrote for Aftab's 2026-11-10 ruling (DECISIONS.md §
+   *                 Staff phone pairing). It is `devices.ts`'s enrolment, deferred
+   *                 to the redeem: same `perms.dashboard` gate, same open-branch-
+   *                 of-this-salon check (and a composite FK on the stored row),
+   *                 and the till's branch is then a `device_enrolment` row the
+   *                 server holds, read by the principal like any other.
    *
    * Each verifies the id against the caller's own salon, and none of them
    * reaches `resolveBranch` — which is the assertion that actually matters and
@@ -101,7 +109,7 @@ describe('a branch is never read from a request body', () => {
    * Two of these three predate that sentence, so it was false when written; it
    * now states the rule this file enforces instead.
    */
-  it('only the four configuration endpoints read a branchId from a body', () => {
+  it('only the five configuration endpoints read a branchId from a body', () => {
     const readers = ROUTES.filter((f) => {
       const c = code(f);
       return c.includes('body.branchId') || c.includes("body['branchId']");
@@ -111,6 +119,7 @@ describe('a branch is never read from a request body', () => {
       'routes/campaigns.ts',
       'routes/devices.ts',
       'routes/platform.ts',
+      'routes/staffPairing.ts',
     ]);
   });
 
