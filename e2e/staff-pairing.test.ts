@@ -66,12 +66,13 @@ import {
   StaffPairingCodeSchema,
   StaffUserSchema,
 } from '../packages/types/dist/index.js';
-import { precondition } from './support/known-bug.js';
+import { knownBug, precondition } from './support/known-bug.js';
 import { assertRaced, timed, valuesOf, withRowLockHeld } from './support/race.js';
 import {
   A_STAFF_FULL,
   B_MEMBER,
   STAFF_PASSWORD,
+  apiLogTail,
   bootTrustingLoopbackProxy,
   mintWalletTokenFor,
   psql,
@@ -1400,4 +1401,353 @@ describe('the budget in front of POST /staff/pair', () => {
     ).toBeGreaterThan(0);
     expect(last!.body.error).toBe('too_many_attempts');
   }, 120_000);
+});
+
+// ===========================================================================
+// PHASE 2 — READ AGAINST LANE A'S CODE, NOT WRITTEN BLIND
+// ===========================================================================
+/**
+ * Everything above this line was written before `api/src/routes/staffPairing.ts` existed in
+ * this worktree. What follows was written AFTER reading it (lane A, 952e052, merged at
+ * da69351): each spec pins a property the code claims in a comment, or a consequence of how
+ * it is built, that none of the 46 above could see from the contract alone.
+ *
+ *   - `services/pairLimit.ts` keys the per-phone bucket on the E.164 the handler then looks
+ *     up, and `routes/auth.ts` keys the web door's bucket the same way. Both budget specs
+ *     above send ONE spelling, so a bucket keyed on the raw string passed them — and a raw
+ *     key multiplies the budget by the number of ways to type one number.
+ *   - the phone door "verifies against a FIXED number of code hashes" (`staffPairing.ts`
+ *     § ENUMERATION). The timing spec above covers `POST /staff/session` only.
+ *   - "counted under a row lock, so a burst cannot overshoot" — tested above only in
+ *     sequence, which a lost-update strike counter also passes.
+ *   - the plain-text scan above pairs by TOKEN. The phone door writes its own audit row and
+ *     its own budget rows, and the budget claims "a phone never sits in the clear".
+ *   - `liveCode()` refuses a code whose branch closed after it was issued.
+ *
+ * NOT ADDED, because lane A's own `staffPairing.int.test.ts` already pins them against a real
+ * database: a `pin` in the issue body (`:243`) and a handle that reads as a number (`:552`).
+ *   - LOCK ORDER. The issue door locks `staff_user` and then writes `staff_pairing_code`;
+ *     the redeem locks `staff_pairing_code` and then writes `staff_user`. Opposite orders on
+ *     the same two rows.
+ */
+describe('phase 2 — what lane A built that the contract did not say', () => {
+  /** Six digits that are none of `codes`. */
+  const noneOf = (codes: string[]): string => {
+    let d = 0;
+    while (codes.includes(String(d).padStart(6, '0'))) d++;
+    return String(d).padStart(6, '0');
+  };
+
+  /** One number, typed four ways a person in Kuwait actually types it. */
+  const spellingsOf = (p: { local: string; e164: string }): string[] => [
+    p.e164,
+    p.local,
+    `+965 ${p.local.slice(0, 4)} ${p.local.slice(4)}`,
+    `${p.local.slice(0, 4)}-${p.local.slice(4)}`,
+  ];
+
+  /** Poll a condition read from Postgres. A plain Error on timeout — a broken arrangement, not a defect. */
+  async function waitFor(cond: () => boolean, what: string, timeoutMs = 15_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (cond()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`precondition failed: ${what} within ${timeoutMs}ms`);
+  }
+
+  it('the per-phone budget is one bucket whatever the spelling — rotating +965…, eight digits, spaces and dashes buys no extra attempts', async () => {
+    /**
+     * `pairLimit.ts § pairIdentityKey`: "NORMALISATION IS THE CALLER'S and must match the
+     * lookup ... `99124408` and `+96599124408` are one bucket because they are one number."
+     * The control is the SAME measurement with one spelling, on a second number, so this
+     * spec pins the property rather than the threshold (an engineering default, per that
+     * file). Each number holds a live code; the fifth wrong guess burns it, and the budget —
+     * which sits in front of the lookup — keeps counting regardless.
+     */
+    const until429 = async (spellings: string[], label: string): Promise<number> => {
+      for (let i = 1; i <= 40; i++) {
+        const phone = spellings[(i - 1) % spellings.length]!;
+        const res = await pair({ phone, code: '000000', pin: PAIR_PIN });
+        if (res.status === 429) {
+          expect(res.body.error, `${label}: the 429's code`).toBe('too_many_attempts');
+          return i;
+        }
+        expectRefused(res, `${label}: attempt #${i} as "${phone}"`);
+      }
+      return 0;
+    };
+
+    const armed = async () => {
+      const t = newTarget();
+      const p = nextPhone();
+      await setPhone(t.id, p.local);
+      const code = await issueOk(t.id);
+      precondition(code.code !== '000000', 'the issued code is 000000 (one in a million) — rerun');
+      return p;
+    };
+
+    const one = await until429([(await armed()).e164], 'one spelling');
+    expect(one, 'one spelling never reached a 429 — the per-phone spec above should be red too').toBeGreaterThan(0);
+
+    const p = await armed();
+    const rotating = await until429(spellingsOf(p), 'four spellings');
+    expect(
+      rotating > 0 && rotating <= one,
+      `one spelling reached 429 on attempt ${one}; four spellings of one number took ${rotating || 'more than 40'}. ` +
+        'The per-phone bucket is keyed on the string as typed, so every way to type the number is ' +
+        'a fresh budget for walking its six digits.',
+    ).toBe(true);
+  }, 120_000);
+
+  it('the web door keys a mobile username on its E.164 too — rotating spellings of one number buys no extra password guesses', async () => {
+    /**
+     * `routes/auth.ts` § web sign-in: "A NUMBER IS KEYED ON ITS E.164 ... `99124408` and
+     * `+96599124408` are one account, so they are one bucket". Same shape as the spec above,
+     * on `POST /auth/web/session`, whose budget is `signInLimit.ts`'s per-identity one.
+     */
+    const until429 = async (usernames: string[], label: string): Promise<number> => {
+      for (let i = 1; i <= 40; i++) {
+        const username = usernames[(i - 1) % usernames.length]!;
+        const res = await webSession(username, 'not-the-password');
+        if (res.status === 429) return i;
+        expect(res.status, `${label}: attempt #${i} as "${username}": ${res.raw}`).toBe(401);
+      }
+      return 0;
+    };
+    const armed = async () => {
+      const t = newTarget({ password: true });
+      const p = nextPhone();
+      await setPhone(t.id, p.local);
+      return p;
+    };
+
+    const one = await until429([(await armed()).local], 'one spelling');
+    expect(one, 'one spelling of a mobile username never reached a 429 on the web door').toBeGreaterThan(0);
+
+    const rotating = await until429(spellingsOf(await armed()), 'four spellings');
+    expect(
+      rotating > 0 && rotating <= one,
+      `one spelling reached 429 on attempt ${one}; four spellings took ${rotating || 'more than 40'} — ` +
+        'the web budget is keyed on the username as typed, not on the number it names.',
+    ).toBe(true);
+  }, 120_000);
+
+  it('the phone door does not answer an unknown number faster than one holding live codes — a fixed count of verifies (coarse: median, interleaved)', async () => {
+    /**
+     * `staffPairing.ts` § ENUMERATION: the phone path "verifies against a FIXED number of code
+     * hashes (real ones for the live codes found, `burnVerifyTime` for the rest), so the wall
+     * time does not say whether the number belongs to anybody".
+     *
+     * WHY 0.7 AND NOT THE THIRD THE SESSION-DOOR SPEC USES. The chosen PIN is hashed on EVERY
+     * request here, so the regression this guards — one verify per code FOUND — does not turn
+     * a hash into none; it turns one argon2 into 1 + n. With the number held at both salons
+     * (two live codes) that is 1 against 3, a ratio near 0.4–0.6 once the request's own round
+     * trips are added; a fixed loop is 4 against 4, near 1. 0.7 sits between them.
+     *
+     * Four guesses per number: a fifth would burn both codes and change the path being timed,
+     * and the per-phone budget is ten.
+     */
+    const known: Array<{ e164: string; codes: string[] }> = [];
+    for (let n = 0; n < 2; n++) {
+      const here = newTarget();
+      const there = newTarget({ salon: SALON_2 });
+      const phone = nextPhone();
+      await setPhone(here.id, phone.local);
+      await setPhone(there.id, phone.local, mgr2);
+      const a = await issueOk(here.id);
+      const b = await issueOk(there.id, {}, mgr2);
+      known.push({ e164: phone.e164, codes: [a.code, b.code] });
+    }
+
+    const ms = { unknown: [] as number[], known: [] as number[] };
+    for (let i = 0; i < 8; i++) {
+      const order: Array<'unknown' | 'known'> = i % 2 ? ['unknown', 'known'] : ['known', 'unknown'];
+      for (const kind of order) {
+        const k = known[i % 2]!;
+        const body =
+          kind === 'known'
+            ? { phone: k.e164, code: noneOf(k.codes), pin: PAIR_PIN }
+            : { phone: nextPhone().e164, code: '000000', pin: PAIR_PIN };
+        const start = performance.now();
+        const res = await pair(body);
+        ms[kind].push(performance.now() - start);
+        expectRefused(res, `${kind} number, sample ${i}`);
+      }
+    }
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+    expect(
+      median(ms.unknown),
+      `unknown ${ms.unknown.map((x) => x.toFixed(0)).join(',')}ms vs a number with two live codes ` +
+        `${ms.known.map((x) => x.toFixed(0)).join(',')}ms — the phone door pays per code FOUND, so its ` +
+        'wall time says whether a number belongs to a staff member with a code outstanding',
+    ).toBeGreaterThan(median(ms.known) * 0.7);
+  }, 120_000);
+
+  it('a burst of seven concurrent wrong guesses loses no strike — the code is burned, and its right digits and its QR both fail', async () => {
+    /**
+     * `staffPairing.ts` § PAIRING_MAX_WRONG_DIGITS: "Counted under a row lock (see the redeem),
+     * so a burst cannot overshoot." The sequential five-strike spec above passes a strike
+     * counter that reads the count in JavaScript and writes it back; seven at once does not —
+     * they all read 0, all write 1, and the code survives the burst with its right digits live.
+     * Seven, plus the right digits after, is eight against a per-phone budget of ten.
+     */
+    const t = newTarget();
+    const phone = nextPhone();
+    await setPhone(t.id, phone.local);
+    const code = await issueOk(t.id);
+
+    const fired = await Promise.all(
+      Array.from({ length: 7 }, (_, k) =>
+        timed(() => pair({ phone: phone.e164, code: wrongDigits(code.code, k + 1), pin: PAIR_PIN })),
+      ),
+    );
+    assertRaced(fired, 'seven concurrent wrong guesses at one code');
+    fired.forEach((f, k) => expectRefused(f.value, `concurrent wrong guess #${k + 1}`));
+
+    expectRefused(
+      await pair({ phone: phone.e164, code: code.code, pin: PAIR_PIN }),
+      'the RIGHT digits after a burst of seven wrong ones — a strike was lost in the burst',
+    );
+    expectRefused(await pair({ token: code.token, pin: PAIR_PIN }), "the burst-burned code's QR token");
+    expect(staffCol(t.id, 'pin_hash'), 'a burst-burned code set a PIN').toBe('');
+  }, 60_000);
+
+  it('by the phone door too: the token and the digits are nowhere in plain text — and the budget rows hold no number', async () => {
+    /**
+     * The scan above pairs by TOKEN, so the phone door's own writes — its strike, its
+     * 'Phone paired' audit row with `via: 'phone'`, its `sign_in_attempt` budget rows — were
+     * never read. `pairLimit.ts`: "HMAC-keyed buckets so the counter never holds a phone
+     * number in the clear".
+     */
+    const t = newTarget();
+    const phone = nextPhone();
+    await setPhone(t.id, phone.local);
+    const since = scalar('select now()::text');
+    const code = await issueOk(t.id, { branchId: BRANCH_2 });
+
+    expectRefused(
+      await pair({ phone: phone.local, code: wrongDigits(code.code), pin: PAIR_PIN }),
+      'one wrong guess first, so a strike is written',
+    );
+    const ok = await pairOk({ phone: spellingsOf(phone)[2]!, code: code.code, pin: PAIR_PIN });
+    expect(ok.staff.id).toBe(t.id);
+    precondition(
+      rowsNaming('sign_in_attempt', 'pair', `t.created_at >= '${since}'`) >= 2,
+      'no pair-surface budget rows since the code was issued, so the budget half of this scan is vacuous',
+    );
+
+    const digits = `'(^|[^0-9])${code.code}([^0-9]|$)'`;
+    const tables: Array<[string, string]> = [
+      ['staff_pairing_code', 'true'],
+      ['audit_log', `t.created_at >= '${since}'`],
+      ['staff_user', `t.id = '${t.id}'`],
+      ['session', `t.staff_id = '${t.id}'`],
+      ['device_enrolment', `t.salon_id = '${SALON}'`],
+      ['sign_in_attempt', `t.created_at >= '${since}'`],
+    ];
+    for (const [table, where] of tables) {
+      expect(
+        Number(scalar(`select count(*) from ${table} t where ${where} and strpos(to_jsonb(t)::text, '${code.token}') > 0`)),
+        `the pairing TOKEN is stored in plain text in ${table}`,
+      ).toBe(0);
+      expect(
+        Number(scalar(`select count(*) from ${table} t where ${where} and to_jsonb(t)::text ~ ${digits}`)),
+        `the six DIGITS ${code.code}, typed at the phone door, appear as a value in ${table}`,
+      ).toBe(0);
+    }
+    expect(
+      Number(
+        scalar(
+          `select count(*) from sign_in_attempt t where t.created_at >= '${since}' ` +
+            `and strpos(to_jsonb(t)::text, '${phone.local}') > 0`,
+        ),
+      ),
+      'a pairing budget row holds her mobile number in the clear — the bucket is not HMAC-keyed',
+    ).toBe(0);
+  }, 60_000);
+
+  it('a code naming a branch that has closed since is refused, and enrols nothing — and a closed branch cannot be named at issue', async () => {
+    /**
+     * `staffPairing.ts § liveCode`: "A branch closed since the code was issued makes the code
+     * dead rather than pairing the phone somewhere that refuses every charge". Its own branch,
+     * sorting after BRANCH_1 and BRANCH_2 and closed straight away, so no other spec's
+     * "first open branch" moves.
+     */
+    const closing = `BR-QA-PAIR-${RUN}-9-CLOSING`;
+    psql(`INSERT INTO branch (id, salon_id, name) VALUES ('${closing}', '${SALON}', 'QA pairing closing branch');`);
+    const t = newTarget();
+    const code = await issueOk(t.id, { branchId: closing });
+    psql(`UPDATE branch SET closed_at = now() WHERE id = '${closing}';`);
+
+    expectRefused(await pair({ token: code.token, pin: PAIR_PIN }), 'a code whose branch has since closed');
+    expect(staffCol(t.id, 'pin_hash'), 'a code for a closed branch set a PIN').toBe('');
+    expect(rowsNaming('device_enrolment', closing), 'a phone was enrolled as a till at a closed branch').toBe(0);
+
+    const again = await issue(t.id, { branchId: closing });
+    expect(again.status, `issuing at a closed branch: ${again.raw}`).toBe(404);
+    expect(again.body.error).toBe('unknown_branch');
+  });
+
+  knownBug(
+    'a manager re-issuing while the phone redeems the earlier code: both answer inside the contract, never a 500',
+    async () => {
+      /**
+       * THE TWO ORDERS, read off `staffPairing.ts`:
+       *
+       *   issue   :247  SELECT staff_user … FOR UPDATE   then :254 UPDATE staff_pairing_code (void)
+       *   redeem  :386  SELECT staff_pairing_code … FOR UPDATE, :469 claim
+       *                                                  then :486 UPDATE staff_user (bind the PIN)
+       *
+       * Opposite orders on the same two rows, so a re-issue that reaches her staff_user row
+       * first while a redeem holds the code is a cycle: the re-issue waits for the code, the
+       * redeem waits for her row, and Postgres aborts one of them (`40P01`) into a 500. In the
+       * product that is a manager pressing "new code" on the Pair a phone dialog at the moment
+       * the phone redeems the old one.
+       *
+       * ARRANGED, not hoped for — `withRowLockHeld` on her staff_user row, the re-issue let in
+       * FIRST (it queues on the row), then the redeem (it takes the code, claims it, and queues
+       * on the row behind the re-issue). The receipt is two waiters on the chain.
+       *
+       * EITHER OUTCOME IS LEGAL; A 500 IS NOT. The redeem may win (the old code pairs, and the
+       * re-issue then voids nothing and mints a live code) or lose (the re-issue voids the old
+       * code first, and the redeem gets the uniform refusal). In both, the NEW code then pairs.
+       */
+      const t = newTarget();
+      const first = await issueOk(t.id);
+
+      const waitingForHerRow = () =>
+        Number(
+          scalar(
+            `select count(*) from pg_stat_activity where datname = current_database() ` +
+              `and wait_event_type = 'Lock' and query ilike '%from "staff_user"%for update%'`,
+          ),
+        ) >= 1;
+
+      const [reissued, redeemed] = await withRowLockHeld({ table: 'staff_user', id: t.id }, 2, async () => {
+        const reissue = issue(t.id);
+        await waitFor(waitingForHerRow, 'the re-issue never queued on her staff_user row');
+        const redeem = pair({ token: first.token, pin: PAIR_PIN });
+        return Promise.all([reissue, redeem]);
+      });
+
+      const errors = [
+        ['the re-issue', reissued],
+        ['the redeem', redeemed],
+      ].filter(([, r]) => (r as TenancyResponse<any>).status >= 500) as Array<[string, TenancyResponse<any>]>;
+      expect(
+        errors.map(([who, r]) => `${who}: ${r.status} ${r.raw}`),
+        'a re-issue and a redeem of the earlier code, interleaved, and one of them is a server error. ' +
+          'The two handlers lock staff_user and staff_pairing_code in opposite orders.\n' +
+          `--- the API's own log ---\n${apiLogTail(30)}`,
+      ).toEqual([]);
+
+      expect(succeeded(reissued.status), `the re-issue: ${reissued.status} ${reissued.raw}`).toBe(true);
+      if (!succeeded(redeemed.status)) expectRefused(redeemed, 'the redeem that lost to the re-issue');
+      const fresh = parsed(StaffPairingCodeSchema, reissued.body, 'the re-issued code');
+      const ok = await pairOk({ token: fresh.token, pin: PAIR_PIN });
+      expect(ok.staff.id).toBe(t.id);
+    },
+    90_000,
+  );
 });
