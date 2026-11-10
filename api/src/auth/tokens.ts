@@ -213,6 +213,9 @@ export function mintPairingDigits(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
+/** The prefix `mintPairedDeviceId` puts on every id it issues. */
+export const PAIRED_DEVICE_ID_PREFIX = 'PH-';
+
 /**
  * The device id a paired phone is bound to. SERVER-ISSUED, which is the change
  * pairing makes to the PIN's device scope: until now the device id was a string
@@ -224,5 +227,20 @@ export function mintPairingDigits(): string {
  * `pin_attempt` bucket.
  */
 export function mintPairedDeviceId(): string {
-  return `PH-${randomBytes(16).toString('base64url')}`;
+  return `${PAIRED_DEVICE_ID_PREFIX}${randomBytes(16).toString('base64url')}`;
+}
+
+/**
+ * True for a device id THIS SERVER minted for a paired phone.
+ *
+ * Read against `staff_user.pin_device_id` only, where it is a fact rather than a
+ * guess: that column is written by `POST /staff/pair` (this mint) and by
+ * `db/seed.ts` (`DEV-SCANNER-01`), and by nothing a client can reach. So a `PH-`
+ * there is a phone one person was paired onto; anything else is a till somebody
+ * typed, which may be the counter's shared tablet. NOT a test to apply to a
+ * `device_enrolment.device_id` or a request body — `POST /salons/:id/devices`
+ * takes whatever string a manager types, `PH-` included.
+ */
+export function isServerIssuedDeviceId(deviceId: string | null | undefined): deviceId is string {
+  return typeof deviceId === 'string' && deviceId.startsWith(PAIRED_DEVICE_ID_PREFIX);
 }

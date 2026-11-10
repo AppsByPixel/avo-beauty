@@ -65,6 +65,7 @@ import { requireDashboardPerm, requirePerm } from '../auth/principal';
 import { issueSession, revokeSessionsOfScope } from '../auth/sessions';
 import {
   hashPairingToken,
+  isServerIssuedDeviceId,
   mintPairedDeviceId,
   mintPairingDigits,
   mintPairingToken,
@@ -481,6 +482,20 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
       if (claimed.length === 0) return null;
 
       // ------------------------------------------------- bind the PIN -------
+      /**
+       * THE PHONE SHE IS LEAVING, read under her row lock. The UPDATE below
+       * returns only the new values, and a plain read here could see a binding a
+       * concurrent redeem is about to replace — then the wrong phone would be
+       * unenrolled and the one actually replaced left live. The lock is the one
+       * the UPDATE takes next anyway, in the same order (code row, then staff
+       * row), so it adds no new way to deadlock.
+       */
+      const [prior] = await tx
+        .select({ pinDeviceId: staffUser.pinDeviceId })
+        .from(staffUser)
+        .where(and(eq(staffUser.id, code.staffId), eq(staffUser.salonId, code.salonId)))
+        .for('update');
+
       const deviceId = mintPairedDeviceId();
       const now = new Date();
       const [staff] = await tx
@@ -518,6 +533,72 @@ export async function registerStaffPairingRoutes(app: FastifyInstance): Promise<
         'scanner',
         'phone_paired',
       );
+
+      // ---------------------------------------- unenrol the phone she left --
+      /**
+       * Trunk's ruling, 2026-11-10 (phase 2): A RE-PAIR UNENROLS HER PREVIOUS
+       * PHONE — BUT ONLY A PHONE THIS SERVER ISSUED.
+       *
+       * Her old PIN binding is gone (above), so a till enrolled under her old
+       * `PH-` id is a till nobody can sign into any more: one person per phone,
+       * and that person has moved. Left live it sits in Tills as "<her>'s phone"
+       * at a branch, looking like hardware the salon still runs.
+       *
+       * A TYPED OR SEEDED ID IS NEVER TOUCHED (`DEV-SCANNER-01`, anything a
+       * manager entered in "Set up manually" or in Tills). Those may be the
+       * counter's shared tablet, which other staff still sign into with their
+       * own PINs; her re-pairing says nothing about it. `isServerIssuedDeviceId`
+       * says why the prefix is a fact on this column and not a guess.
+       *
+       * REVOKED EXACTLY AS `DELETE /salons/:id/devices/:deviceId` REVOKES:
+       * `revoked_at` + `revoked_by_staff_id` on the live row (an UPDATE — the
+       * superseded row stays as history), `revoked_at IS NULL` in the WHERE so
+       * the row count decides, and the same `rules` / `device_revoked` audit row,
+       * so the audit filters treat it like a revoke from Tills.
+       *
+       * AS HER, the "Phone paired" row's reasoning below — and the only actor the
+       * row can carry: `device_enrolment_revocation_is_whole` requires
+       * `revoked_by_staff_id` whenever `revoked_at` is set, so "the system" is not
+       * representable without a migration, and this slice adds none. She is the
+       * one who moved the PIN; the issuer is in the metadata.
+       *
+       * Whether or not the NEW code names a branch: the old till is dead either way.
+       */
+      const priorDeviceId = prior?.pinDeviceId ?? null;
+      if (isServerIssuedDeviceId(priorDeviceId)) {
+        const unenrolled = await tx
+          .update(deviceEnrolment)
+          .set({ revokedAt: now, revokedByStaffId: staff.id, updatedAt: now })
+          .where(
+            and(
+              eq(deviceEnrolment.salonId, staff.salonId),
+              eq(deviceEnrolment.deviceId, priorDeviceId),
+              isNull(deviceEnrolment.revokedAt),
+            ),
+          )
+          .returning({ id: deviceEnrolment.id, label: deviceEnrolment.label });
+
+        for (const row of unenrolled) {
+          await writeAudit(tx, { kind: 'staff', id: staff.id, name: staff.name, role: staff.role }, {
+            salonId: staff.salonId,
+            kind: 'rules',
+            action: 'device_revoked',
+            detail: `${row.label} (${priorDeviceId})`,
+            source: 'scanner',
+            subjectType: 'device',
+            subjectId: priorDeviceId,
+            metadata: {
+              via: 'pairing',
+              reason: 'staff_repaired',
+              pairingCodeId: code.id,
+              pairedStaffId: staff.id,
+              issuedBy: code.createdBy,
+              replacedByDeviceId: deviceId,
+            },
+            ...clientMeta(req),
+          });
+        }
+      }
 
       // -------------------------------------------------- enrol the till --
       let enrolledAt: { branchId: string; branchName: string } | null = null;
