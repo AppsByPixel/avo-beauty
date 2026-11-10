@@ -7,14 +7,14 @@
  * properties of the phone rather than of the sign-in. This binds them once.
  *
  * IT IS DELIBERATELY PLAIN. There is no design for it, so inventing a styled
- * screen would be inventing product. It uses the app's tokens and nothing else,
- * and it is reachable only from the muted link at the bottom of the PIN screen.
+ * screen would be inventing product. It uses the app's tokens and nothing else.
  *
- * ESCALATED, NOT SOLVED HERE: a real deployment pairs a device through a
- * provisioning flow — a manager generates a code in the dashboard, the phone
- * redeems it, the server records the binding. That endpoint does not exist and
- * creating it is lane A's call. Typing the binding in is adequate for a pilot
- * on salon-owned hardware and is NOT adequate for general release.
+ * SINCE THE PAIRING RULING (DECISIONS.md § "Staff phone pairing, phone sign-in,
+ * and a truthful receipt line — Aftab, 2026-11-10") a phone is set up by
+ * redeeming a pairing code (SetupScreen → ChoosePinScreen), and this form is
+ * reachable only from the muted "Set up manually" link on the setup screen, for
+ * the seeded pilot. Its pre-filled defaults apply under `__DEV__` only
+ * (state/enrolDefaults.ts). The `onBack` link is the way out of a mistaken tap.
  */
 
 import { useState } from 'react';
@@ -22,14 +22,17 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { copy } from '../copy/en';
 import { ENROL_DEFAULTS, writeDeviceBinding, type DeviceBinding } from '../state/device';
 import { color, display, radius, ui } from '../theme';
-import { PrimaryButton } from '../components/Buttons';
+import { LinkButton, PrimaryButton } from '../components/Buttons';
 
 export function EnrolScreen({
   initial,
   onDone,
+  onBack,
 }: {
   initial: DeviceBinding | null;
   onDone: (binding: DeviceBinding) => void;
+  /** Back to the setup screen's two ways in. */
+  onBack: () => void;
 }) {
   const start = initial ?? ENROL_DEFAULTS;
   const [salonId, setSalonId] = useState(start.salonId);
@@ -57,6 +60,9 @@ export function EnrolScreen({
 
   return (
     <ScrollView contentContainerStyle={styles.screen} keyboardShouldPersistTaps="handled">
+      <View style={styles.header}>
+        <LinkButton label={copy.setupBack} onPress={onBack} muted testID="enrol-back" />
+      </View>
       <Text style={display(24)}>{copy.enrolTitle}</Text>
       <Text style={[ui(12.5), styles.body]}>{copy.enrolBody}</Text>
 
@@ -117,13 +123,15 @@ function Field({
 }
 
 const styles = StyleSheet.create({
+  // 54 where it was 74: the back link now sits above the title.
   screen: {
     flexGrow: 1,
     backgroundColor: color.surface,
-    paddingTop: 74,
+    paddingTop: 54,
     paddingHorizontal: 26,
     paddingBottom: 40,
   },
+  header: { flexDirection: 'row', alignItems: 'center', minHeight: 20, marginBottom: 20 },
   body: { color: color.textMuted, marginTop: 6, lineHeight: 19 },
   field: { marginTop: 20 },
   label: { color: color.textMutedLabel, letterSpacing: 0.9, marginBottom: 7 },

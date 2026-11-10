@@ -6,8 +6,9 @@
  * ===========================================================================
  * `src/config/brand.ts` used to say the brand colour was "STILL OWED", pending
  * "the onboarding pipeline that generates these builds". But a scanner build is
- * NOT per-salon and cannot be: `EnrolScreen` types the salon id in on the device
- * (`state/device.ts`), so one generic build is bound to a salon at provisioning
+ * NOT per-salon and cannot be: the salon id is bound on the device at setup —
+ * by redeeming a pairing code since 2026-11-10, or typed in on the manual form
+ * (`state/device.ts`) — so one generic build is bound to a salon at provisioning
  * time. There is nothing for a per-salon build to key off. The scanner's brand
  * therefore has to be data on the device, exactly like its salon id — which is
  * also what ADR-0001 § White-label model wants ("every fix must be
