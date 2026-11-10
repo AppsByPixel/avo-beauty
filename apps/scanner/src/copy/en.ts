@@ -513,6 +513,16 @@ export const copy = {
    */
   setupManual: 'Set up manually',
   /**
+   * INVENTED (no design source). The muted link under the PIN pad on a phone
+   * that is already paired — the way back into setup to re-pair it. It is the
+   * TITLE OF THE SCREEN IT OPENS, on purpose: until the phase-2 live run it read
+   * "Set up this device", which is `enrolTitle`, the retired typed form's name,
+   * while it opened "Set up this phone". DECISIONS.md § "Staff phone pairing,
+   * phone sign-in, and a truthful receipt line — Aftab, 2026-11-10".
+   * src/screens/setupLinkCopy.test.ts holds the two together.
+   */
+  setupFromSignIn: 'Set up this phone',
+  /**
    * INVENTED (no design source). Shown only when the phone already has a
    * binding and was sent here from the PIN screen's link, so a mistaken tap is
    * not a dead end that needs a manager.
@@ -567,7 +577,6 @@ export const copy = {
   enrolHandle: 'Staff handle',
   enrolDevice: 'Device ID',
   enrolSave: 'Save and continue',
-  enrolChange: 'Set up this device',
 
   // ------------------------------------------------------- my bookings ----
   /**

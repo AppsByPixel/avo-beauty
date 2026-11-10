@@ -256,12 +256,15 @@ export function PinScreen({
       <Text style={[ui(11.5), styles.footnote]}>{copy.pinFootnote}</Text>
 
       {/*
-        Re-enrolment. Not on the design, and deliberately understated: it is how
-        a phone moved between salons or staff is re-bound, and it clears the
-        binding rather than editing it in place. See state/device.ts.
+        Re-pairing. Not on the design, and deliberately understated: it is how
+        a phone moved between salons or staff is re-bound. It opens the pairing
+        setup ("Set up this phone") and carries that screen's title, not the
+        retired typed form's (src/screens/setupLinkCopy.test.ts). The binding is
+        replaced only when setup finishes — a code redeemed, or the manual form
+        saved — so backing out leaves this phone as it was. See App.tsx.
       */}
       <View style={styles.reconfigure}>
-        <LinkButton label={copy.enrolChange} onPress={onReconfigure} muted testID="pin-enrol" />
+        <LinkButton label={copy.setupFromSignIn} onPress={onReconfigure} muted testID="pin-enrol" />
       </View>
     </View>
   );

@@ -94,7 +94,7 @@ function Shell() {
         the brief: "opened with avostaff://pair?t=… and has no binding, go
         straight to Choose a PIN". A bound phone opened by a pairing link shows
         its PIN screen as always: a link must not silently re-bind a till that
-        belongs to someone. She can still choose "Set up this device" there and
+        belongs to someone. She can still choose "Set up this phone" there and
         scan the code in the app. Read here rather than in the setup screen
         because `getInitialURL()` answers the same URL for the life of the
         process, and a screen that mounted later would replay it.
