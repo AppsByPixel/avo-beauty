@@ -939,10 +939,18 @@ function PhoneEditor({ account, onDone }: { account: StaffUser; onDone: () => vo
       />
       {fieldError ? <InlineError id={errorId} message={fieldError} /> : null}
       {update.isError && fieldError === null ? (
-        <WriteError error={update.error} reassurance="Her mobile number is unchanged." />
+        <WriteError
+          error={update.error}
+          reassurance={`${account.name}'s mobile number is unchanged.`}
+        />
       ) : null}
+      {/*
+        Invented copy, so it names the account rather than guessing a pronoun —
+        nobody's is recorded (the Scan & charge notice in PairPhoneDialog.tsx is
+        the rule's model).
+      */}
       <p className="account__phone-note">
-        She can sign in with this number instead of her username. Leave it empty to remove it.
+        {`${account.name} can sign in with this number instead of the username. Leave it empty to remove it.`}
       </p>
       <div className="account__confirm-actions">
         <Button variant="secondary" disabled={update.isPending} onClick={save}>
@@ -1116,7 +1124,7 @@ function NewAccountForm({ branches, busy, error, onCancel, onCreate }: NewAccoun
           />
           {shownPhoneError ? <InlineError id={phoneErrorId} message={shownPhoneError} /> : null}
           <p className="new-account__hint">
-            Optional. She can sign in with it instead of her username.
+            Optional. This account can sign in with it instead of the username.
           </p>
         </div>
       </div>

@@ -128,6 +128,12 @@ function mount() {
 
 const writes = () => authedRequest.mock.calls.filter(([, , o]) => (o as { method?: string } | undefined)?.method);
 
+/**
+ * The field's notes are INVENTED copy (no design draws a mobile number), and
+ * nobody's pronouns are recorded — so they name the account instead of guessing.
+ */
+const PRONOUN = /\b(she|her|hers|he|him|his|they|them)\b/i;
+
 /* ============================================================ reading it == */
 
 describe('reading the number', () => {
@@ -229,6 +235,12 @@ describe('New team account — Mobile number', () => {
     expect(field.getAttribute('aria-invalid')).toBeNull();
   });
 
+  it('its hint names the account rather than guessing a pronoun', async () => {
+    await openNewAccount();
+    const hint = screen.getByText('Optional. This account can sign in with it instead of the username.');
+    expect(hint.textContent).not.toMatch(PRONOUN);
+  });
+
   it('any other refusal still uses the banner', async () => {
     write = () => {
       throw new ApiError('That username is already taken in this salon.', {
@@ -328,6 +340,31 @@ describe('the card — showing and editing the number', () => {
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByLabelText('Mobile number')).toBe(field);
     expect(screen.queryByText('That account is unchanged.')).toBeNull();
+  });
+
+  it('the editor’s note and its refusal name the account rather than guessing a pronoun', async () => {
+    write = () => {
+      throw new ApiError('That account has been removed from the team.', {
+        status: 409,
+        code: 'staff_deactivated',
+      });
+    };
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Change mobile number — Hessa Al-Mutairi' }));
+    const editor = screen.getByRole('group', { name: 'Mobile number — Hessa Al-Mutairi' });
+    expect(
+      within(editor).getByText(
+        'Hessa Al-Mutairi can sign in with this number instead of the username. Leave it empty to remove it.',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Mobile number'), { target: { value: '5500 1122' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save number' }));
+    const alert = await within(editor).findByRole('alert');
+    expect(alert.textContent).toBe(
+      "That account has been removed from the team. Hessa Al-Mutairi's mobile number is unchanged.",
+    );
+    expect(editor.textContent).not.toMatch(PRONOUN);
   });
 
   it('a malformed number is refused on the field without a request', async () => {

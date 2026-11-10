@@ -133,6 +133,20 @@ function scanChargeWarning(name: string): string {
   return `${name} can sign in on this phone but can't take payments yet: ${SCAN_AND_CHARGE} is off for this account. Turn it on from the card to let ${name} charge.`;
 }
 
+/**
+ * INVENTED — the instructions under the digits. They used to say "her phone" and
+ * "she then chooses her own PIN" about every account, which guessed a gender
+ * nobody recorded. Same rule as the warning above: the account is named instead.
+ * "Chooses a PIN … you never see it" still says whose PIN it is and who does not
+ * see it (non-negotiable #6). One sentence per route for typing the code in.
+ */
+function pairingInstructions(name: string, phone: string | null | undefined): string {
+  const typed = phone
+    ? `No camera? ${name} can enter this account's mobile number, ${formatStaffPhone(phone)}, and the six digits instead.`
+    : `To pair without the camera, add a mobile number to ${name}'s account first.`;
+  return `Open the AVO Staff app on ${name}'s phone and scan this code. ${name} then chooses a PIN on the phone — you never see it. ${typed}`;
+}
+
 type Phase =
   | { kind: 'choose' }
   | { kind: 'requesting' }
@@ -373,8 +387,7 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
                 onChange={(event) => setBranchId(event.target.value)}
               />
               <p className="pair__note">
-                Her phone is also set up as a till at this branch, so the charges she takes on it
-                count there.
+                {`${account.name}'s phone is also set up as a till at this branch, so the charges taken on it count there.`}
               </p>
               <div className="pair__actions">
                 <Button disabled={branchId === ''} onClick={() => request(branchId)}>
@@ -430,7 +443,7 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
           {phase.kind === 'expired' || (shown !== null && live === null) ? (
             <div className="pair__expired" role="status">
               <p className="pair__expired-title">This code has expired.</p>
-              <p className="pair__note">Get a new code to pair her phone.</p>
+              <p className="pair__note">{`Get a new code to pair ${account.name}'s phone.`}</p>
             </div>
           ) : null}
 
@@ -446,13 +459,7 @@ export function PairPhoneDialog({ account, branches, canEnrolTill, onClose }: Pa
           ) : null}
 
           {live !== null ? (
-            <p className="pair__note">
-              Open the AVO Staff app on her phone and scan this code. She then chooses her own PIN on
-              the phone — you never see it.{' '}
-              {account.phone
-                ? `No camera? She can enter her mobile number, ${formatStaffPhone(account.phone)}, and the six digits instead.`
-                : 'To pair without the camera, add her mobile number to her account first.'}
-            </p>
+            <p className="pair__note">{pairingInstructions(account.name, account.phone)}</p>
           ) : null}
 
           {phase.kind === 'choose' ? null : (
